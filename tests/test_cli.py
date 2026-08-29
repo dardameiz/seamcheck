@@ -1,4 +1,5 @@
 import json
+import tempfile
 from io import StringIO
 from pathlib import Path
 
@@ -43,11 +44,16 @@ class DumpConnectivityMapTests(SimpleTestCase):
     def test_check_says_so_plainly_when_no_baseline_snapshot_exists(self):
         # Fabricating a diff against a snapshot that was never taken would report the
         # entire graph as "new" on the first run.
+        # A temp root has no stored snapshots, so this asserts the contract rather
+        # than whatever the developer's working tree happens to contain.
         out = StringIO()
-        with self.assertRaises(SystemExit):
-            call_command("dump_connectivity_map", "--check", stdout=out, stderr=StringIO())
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaises(SystemExit):
+            call_command(
+                "dump_connectivity_map", "--check", "--repo-root", tmp,
+                stdout=out, stderr=StringIO(),
+            )
 
-        self.assertIn("No snapshot stored", out.getvalue())
+        self.assertIn("No baseline", out.getvalue())
 
     def test_check_exits_nonzero_when_a_finding_blocks(self):
         # The fixture graph contains a fetch to a URL that does not exist, so --check

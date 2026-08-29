@@ -93,11 +93,11 @@ def diff_against(graph: Graph, ref: str, repo_root: str = ".") -> tuple[DiffResu
     try:
         sha = current_git_sha(repo_root) if ref == "HEAD" else _rev_parse(ref, repo_root)
     except Exception as error:  # noqa: BLE001 - surfaced to the user, never swallowed
-        return None, f"Could not resolve `{ref}`: {error}"
+        return None, f"No baseline: could not resolve `{ref}` ({error})."
 
     baseline = load_snapshot(sha, repo_root)
     if baseline is None:
-        return None, f"No snapshot stored for {sha[:12]} yet - nothing to diff against."
+        return None, f"No baseline snapshot stored for {sha[:12]} yet - nothing to diff against."
     return diff_graphs(baseline, graph, load_triage(repo_root)), ""
 
 

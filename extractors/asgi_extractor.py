@@ -54,9 +54,14 @@ def extract_asgi_routes(asgi_file: str) -> list[Symbol]:
             continue
         for literal in _compared_literals(node.test):
             path = literal.value
-            if path in seen:
+            # A route is usually written as both '/x/' and '/x'. They are one endpoint,
+            # and the matcher normalises slashes away - emitting both leaves a twin no
+            # fetch target can ever match, permanently uncertain.
+            key = path.strip("/")
+            if key in seen:
                 continue
-            seen.add(path)
+            seen.add(key)
+            path = f"/{key}/"
             symbols.append(
                 Symbol(
                     id=f"url:{path.lstrip('/')}",

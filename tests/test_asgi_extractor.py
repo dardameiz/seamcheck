@@ -17,7 +17,7 @@ class AsgiExtractorTests(SimpleTestCase):
         # Labels drop the leading slash to match the Django url-symbol convention;
         # keeping it would guarantee the matcher never resolves them.
         self.assertIn("submit_push/", self.labels)
-        self.assertIn("submit_push", self.labels)
+        self.assertNotIn("submit_push", self.labels)  # slash variants collapse
 
     def test_finds_routes_compared_with_equality(self):
         self.assertIn("health/", self.labels)
@@ -31,3 +31,15 @@ class AsgiExtractorTests(SimpleTestCase):
             self.assertEqual(symbol.kind, "url")
             self.assertTrue(symbol.line and symbol.line > 0)
             self.assertIn("asgi", symbol.note.lower())
+
+
+class RouteDeduplicationTests(SimpleTestCase):
+    def test_slash_variants_of_one_route_collapse_to_one_symbol(self):
+        # ("/submit_push/", "/submit_push") is one endpoint written two ways. Emitting
+        # both leaves a twin the matcher can never resolve.
+        symbols = extract_asgi_routes(FIXTURE)
+
+        labels = [s.label for s in symbols]
+        self.assertEqual(len(labels), len(set(labels)))
+        self.assertIn("submit_push/", labels)
+        self.assertNotIn("submit_push", labels)
