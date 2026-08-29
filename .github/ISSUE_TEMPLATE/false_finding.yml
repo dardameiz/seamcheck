@@ -1,0 +1,33 @@
+name: False finding
+description: Signal Map reported something as unused, unresolved or multi-writer and it is not
+labels: ["false-positive"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A false `unused` is the most serious bug this project can have. Thank you for reporting it.
+  - type: input
+    id: symbol
+    attributes:
+      label: Symbol id
+      description: From `dump_connectivity_map --explain <symbol-id>`, or the reported id.
+    validations:
+      required: true
+  - type: textarea
+    id: explain
+    attributes:
+      label: Output of --explain
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: truth
+    attributes:
+      label: What actually uses it
+      description: The file and line that reaches this symbol, and by what mechanism.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Signal Map version

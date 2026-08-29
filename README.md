@@ -1,0 +1,133 @@
+# Signal Map
+
+Find the code your project no longer connects to — and the connections it only *thinks*
+it has.
+
+Signal Map builds a connectivity graph of a Django + vanilla-JS project by parsing it:
+which URLs exist, which views they route to, which `fetch()` calls resolve to them, which
+DOM elements the templates declare and the JavaScript writes, and which CSS rules and
+design tokens anything still references. It reports what is connected, what resolves to
+nothing, what nothing references — and, crucially, what it **cannot tell**.
+
+## Why the fourth answer matters
+
+Most dead-code tools have three verdicts: used, unused, and a crash. Signal Map has four,
+and the fourth is the one that makes it safe to act on:
+
+| Status | Means |
+|---|---|
+| `connected` | Something reaches this, and here is the evidence |
+| `unused` | Both sides of the contract are observable, and nothing uses it |
+| `unresolved` | Something reaches for this and it does not exist |
+| `uncertain` | The scan has no evidence either way — **not** a claim that it is dead |
+
+A page URL reached by `<a href>` or browser navigation looks identical to a dead one if
+you only parse `fetch()` calls. Signal Map says `uncertain` and names the missing evidence
+source instead of guessing. On a real 700-URL project that distinction is the difference
+between a usable report and 668 false "delete me" findings.
+
+## What it finds
+
+- **Multi-writer DOM elements** — more than one module writing the same element. Whichever
+  runs last wins, which is how a display bug survives being "fixed" in one of them.
+- **`fetch()` calls that resolve to no route**, including routes short-circuited in
+  `asgi.py` before Django's resolver ever runs.
+- **Response fields a view sends that no consumer reads**, and fields read that no view sends.
+- **CSS rules and custom-property tokens nothing references.**
+- **Scan Coverage** — which files the scan actually reasoned about, so "no findings" can be
+  distinguished from "never looked".
+
+## Install
+
+```bash
+pip install signal-map[models,mcp]
+```
+
+Add it to `INSTALLED_APPS` and point `SIGNAL_MAP_CONFIG` at your project:
+
+```python
+INSTALLED_APPS = [..., "django_extensions", "signal_map"]
+
+SIGNAL_MAP_CONFIG = {
+    "urlconf_module": "myproject.urls",
+    "asgi_module": "myproject.asgi",
+    "first_party_prefixes": ["myapp", "myproject"],
+    "templates_root": "myapp/templates",
+    "js_source_root": "myapp/static/js",
+    "js_vite_manifest": "myapp/static/dist/.vite/manifest.json",
+    "css_source_root": "myapp/static/css",
+    "tailwind_build_output": "myapp/static/css/tailwind-output.css",
+    "management_commands_dirs": ["myapp/management/commands"],
+    "celery_app_module": "myproject.celery",
+    "app_configs": ["myapp.apps.MyAppConfig"],
+}
+```
+
+Every project-specific path lives in that dict. There are no hardcoded project names
+anywhere in the extractors.
+
+### Node dependency, stated plainly
+
+JavaScript and CSS extraction shell out to Node, using `acorn` and `postcss`. The `node`
+extra bundles a Node runtime for machines that lack one, but **the two npm parsers still
+have to be installed** (`npm install --save-dev acorn postcss`). Without Node, the Python
+side — URLs, views, models, signals, admin actions, template tags, reachability, Scan
+Coverage — still works; the JS/CSS extractors return nothing rather than failing.
+
+## Use
+
+```bash
+python manage.py dump_connectivity_map                    # scan, write the map, print a summary
+python manage.py dump_connectivity_map --json             # the graph, as JSON
+python manage.py dump_connectivity_map --check            # diff vs the last snapshot; exit 1 on findings
+python manage.py dump_connectivity_map --since main       # diff against another commit's snapshot
+python manage.py dump_connectivity_map --explain <symbol-id>
+python manage.py dump_connectivity_map --triage <symbol-id> --status approved --reason "..."
+```
+
+`--check` is CI-ready: it exits 1 only on `unresolved`/`unused` findings that are untriaged
+or explicitly confirmed. It never fails a build over `uncertain`.
+
+### Triage
+
+A finding you have looked at and accepted goes in `signal_map/triage.json`, committed:
+
+```bash
+python manage.py dump_connectivity_map --triage "css_token_def:token:--legacy" \
+  --status approved --reason "kept for the vendored theme"
+```
+
+The mark is keyed to a **content fingerprint of the evidence**, not to a symbol id. If the
+snippet, the status, or (for a multi-writer element) the set of writers changes, the
+approval expires and the finding comes back with a note saying why. You cannot silence a
+finding and have it stay silent through a real change.
+
+### MCP
+
+```bash
+python -m signal_map.mcp_server
+```
+
+Exposes `signal_map_check`, `signal_map_explain` and `signal_map_triage` so an agent can
+check its own work before claiming a task is done.
+
+## Limitations
+
+Stated, not hidden:
+
+- Not a CSS selector engine — combinator selectors (`.a .b`) match on segment presence.
+- Selectors and fetch targets built at runtime are `uncertain`, never guessed.
+- Field matching pairs one view function against a whole consuming module, so a field can
+  be proven read but not proven unread.
+- WebSocket payloads are out of scope.
+- Reachability follows imports and dotted-string module references (`include("app.urls")`),
+  but not modules loaded by a mechanism neither of those covers.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Commits follow
+[Conventional Commits](https://www.conventionalcommits.org/).
+
+## License
+
+MIT — see [LICENSE](LICENSE).

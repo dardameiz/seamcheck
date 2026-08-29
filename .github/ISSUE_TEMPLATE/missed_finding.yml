@@ -1,0 +1,20 @@
+name: Missed finding
+description: Something is genuinely dead or broken and Signal Map did not report it
+labels: ["false-negative"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What should have been reported
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why the scan missed it, if you know
+      description: e.g. the file was `unscoped`, or the reference form is not one an extractor recognises.
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproducer
+      description: The smallest fixture that shows it.

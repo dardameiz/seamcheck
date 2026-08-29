@@ -49,10 +49,11 @@ def _carrier_name(node: dict) -> str | None:
     node_type = node.get("type")
     if node_type in ("FunctionDeclaration", "FunctionExpression", "ClassDeclaration"):
         return (node.get("id") or {}).get("name")
-    if node_type in ("MethodDefinition", "PropertyDefinition", "Property"):
-        if (node.get("value") or {}).get("type") in _FUNCTION_TYPES or node_type != "Property":
-            key = node.get("key") or {}
-            return key.get("name") or key.get("value")
+    if node_type in ("MethodDefinition", "PropertyDefinition", "Property") and (
+        (node.get("value") or {}).get("type") in _FUNCTION_TYPES or node_type != "Property"
+    ):
+        key = node.get("key") or {}
+        return key.get("name") or key.get("value")
     if node_type == "VariableDeclarator" and (node.get("init") or {}).get("type") in _FUNCTION_TYPES:
         return (node.get("id") or {}).get("name")
     return None

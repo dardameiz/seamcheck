@@ -6,21 +6,21 @@ import ast
 import dataclasses
 import pathlib
 
-from signal_map.classifier import classify
-from signal_map.extractors.asgi_extractor import extract_asgi_routes
 from signal_map.attribution import attribute_by_feature
+from signal_map.classifier import classify
 from signal_map.dom_matcher import (
     detect_multi_writers,
     match_css_selectors,
     match_css_tokens,
     match_dom_selectors,
 )
+from signal_map.extractors.asgi_extractor import extract_asgi_routes
 from signal_map.extractors.css_extractor import extract_css
 from signal_map.extractors.django_extractor import extract_django_urls_views
 from signal_map.extractors.dom_js_extractor import extract_dom_selectors
-from signal_map.extractors.template_scanner import scan_templates
 from signal_map.extractors.entry_points_extractor import extract_entry_points
 from signal_map.extractors.js_extractor import discover_js_files, extract_js
+from signal_map.extractors.template_scanner import scan_templates
 from signal_map.field_matcher import match_json_response_fields
 from signal_map.graph import Edge, Graph, Status, Symbol
 from signal_map.matcher import match_js_to_django

@@ -1,0 +1,55 @@
+# Paths here are relative to the repo root this file sits at AFTER extraction
+# (see PACKAGING.md). Inside the pointlessbutton repo this file is metadata only:
+# nothing builds it, and the host project's own pyproject.toml is untouched.
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "signal-map"
+version = "0.1.0"
+description = "Find the code your project no longer connects to - and the connections it only thinks it has."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+authors = [{ name = "dardameiz" }]
+keywords = ["django", "static-analysis", "dead-code", "connectivity", "mcp"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Framework :: Django",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Software Development :: Quality Assurance",
+]
+dependencies = ["django>=5.0"]
+
+[project.optional-dependencies]
+# Model extraction shells out to django-extensions' graph_models --json.
+models = ["django-extensions>=4.0"]
+# Exposes the scan to an agent over MCP.
+mcp = ["mcp>=1.0"]
+# Bundles a Node runtime so `pip install` alone is enough on a machine without one
+# (the pyright precedent). The npm parsers still have to be present - see README.
+node = ["nodejs-wheel-binaries>=20"]
+
+[project.urls]
+Source = "https://github.com/dardameiz/signal-map"
+Issues = "https://github.com/dardameiz/signal-map/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["signal_map"]
+# Fixtures, tests and the host project's own triage file are not part of what an
+# installing user needs; they stay in the sdist for contributors.
+exclude = ["signal_map/tests", "signal_map/triage.json"]
+
+[tool.hatch.build.targets.sdist]
+include = ["signal_map", "README.md", "LICENSE"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120  # matches the host project this is developed inside
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "C4"]
