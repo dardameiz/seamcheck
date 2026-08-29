@@ -12,7 +12,7 @@ from django.conf import settings
 from signal_map.diff import DiffResult, diff_graphs
 from signal_map.graph import Graph, Status
 from signal_map.pipeline import run_scan
-from signal_map.roots import discover_js_roots
+from signal_map.roots import discover_css_files, discover_js_roots, tailwind_classes
 from signal_map.snapshot import current_git_sha, load_snapshot, save_snapshot
 from signal_map.triage import (
     TriageEntry,
@@ -58,6 +58,20 @@ def scan(repo_root: str = ".") -> Graph:
     asgi_file = (
         os.path.join(repo_root, asgi_module.replace(".", os.sep) + ".py") if asgi_module else None
     )
+    templates_root = config.get("templates_root")
+    template_files = (
+        [str(p) for p in pathlib.Path(repo_root, templates_root).rglob("*.html")]
+        if templates_root and os.path.isdir(os.path.join(repo_root, templates_root))
+        else []
+    )
+    css_root = config.get("css_source_root")
+    css_files = (
+        discover_css_files(os.path.join(repo_root, css_root))
+        if css_root and os.path.isdir(os.path.join(repo_root, css_root))
+        else []
+    )
+    build_output = config.get("tailwind_build_output")
+
     return run_scan(
         urlconf_module=config["urlconf_module"],
         js_entry_files=js_entry_files,
@@ -65,6 +79,11 @@ def scan(repo_root: str = ".") -> Graph:
         entry_point_files=_entry_point_files(config, repo_root),
         asgi_file=asgi_file if asgi_file and os.path.isfile(asgi_file) else None,
         first_party_prefixes=config.get("first_party_prefixes"),
+        template_files=template_files,
+        css_files=css_files,
+        tailwind_build_classes=(
+            tailwind_classes(os.path.join(repo_root, build_output)) if build_output else set()
+        ),
     )
 
 

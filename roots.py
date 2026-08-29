@@ -34,3 +34,36 @@ def discover_js_roots(vite_config: str, templates_root: str, static_root: str) -
         if candidate.is_file():
             roots.append(str(candidate))
     return [root for root in dict.fromkeys(roots) if pathlib.Path(root).is_file()]
+
+
+def discover_css_files(css_source_root: str) -> list[str]:
+    """Every stylesheet under the CSS root, plus whatever they @import.
+
+    The @import walk mirrors the Python and JS reachability walks: a file list, not an
+    allow-list, so a stylesheet pulled in only by an @import chain is still scanned.
+    """
+    from signal_map.extractors.css_extractor import css_imports
+
+    found = [str(path) for path in pathlib.Path(css_source_root).rglob("*.css")]
+    seen = set(found)
+    queue = list(found)
+    while queue:
+        imports = css_imports(queue)
+        queue = []
+        for source, targets in imports.items():
+            for target in targets:
+                resolved = (pathlib.Path(source).parent / target).resolve()
+                if resolved.is_file() and str(resolved) not in seen:
+                    seen.add(str(resolved))
+                    queue.append(str(resolved))
+    return sorted(seen)
+
+
+def tailwind_classes(build_output: str) -> set[str]:
+    """Class names a utility-CSS build generated, so they are not read as dead references."""
+    path = pathlib.Path(build_output)
+    if not path.is_file():
+        return set()
+    from signal_map.extractors.css_extractor import extract_css
+
+    return {symbol.label for symbol in extract_css([str(path)]) if symbol.sub == "class"}

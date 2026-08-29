@@ -111,6 +111,32 @@ def _http_call_target(node: dict) -> tuple[bool, dict | None]:
     return False, None
 
 
+def discover_js_files(entry_files: list[str], project_root: str) -> list[str]:
+    """Every module reachable from the entries by static import.
+
+    Shared so the DOM extractor sees the same file set: handing it only the entry
+    points hides every write made by an imported module.
+    """
+    visited: set[str] = set()
+    to_visit = [os.path.join(project_root, name) for name in entry_files]
+    while to_visit:
+        batch = [
+            path
+            for path in dict.fromkeys(to_visit)
+            if path not in visited and path.endswith(_JS_EXTENSIONS) and os.path.isfile(path)
+        ]
+        to_visit = []
+        if not batch:
+            break
+        visited.update(batch)
+        for path, ast in _parse_files(batch).items():
+            for import_path in _imported_paths(ast):
+                resolved = _resolve_import(path, import_path)
+                if resolved and resolved not in visited:
+                    to_visit.append(resolved)
+    return sorted(visited)
+
+
 def extract_js(entry_files: list[str], project_root: str) -> tuple[list[Symbol], list[Edge]]:
     symbols: list[Symbol] = []
     edges: list[Edge] = []

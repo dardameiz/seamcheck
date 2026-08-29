@@ -55,3 +55,15 @@ class JsExtractorTests(SimpleTestCase):
         for edge in self.edges:
             self.assertIn(edge.from_id, call_ids)
             self.assertIn(edge.to_id, target_ids)
+
+
+class JsFileDiscoveryTests(SimpleTestCase):
+    def test_discovery_returns_the_transitive_module_set(self):
+        # The DOM extractor takes a flat file list; handing it only entry points hides
+        # every DOM write made by an imported module.
+        from signal_map.extractors.js_extractor import discover_js_files
+
+        files = discover_js_files(["fixture_entry.js"], FIXTURES_DIR)
+
+        self.assertTrue(any(f.endswith("fixture_entry.js") for f in files))
+        self.assertTrue(any(f.endswith("fixture_module.js") for f in files))

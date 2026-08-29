@@ -11,11 +11,29 @@ from signal_map.graph import Edge, Status, Symbol
 # and is passed through untouched rather than re-guessed.
 _OWNED_KINDS = frozenset({"view", "url", "js_call", "fetch_target"})
 
+# DOM and CSS kinds carry their verdict on the edges the matchers produced, so the
+# symbol has to read it back or every one of them reports "uncertain" forever.
+# CONNECTED wins: an element JS writes but CSS never styles is still in use.
+_EDGE_STATUS_KINDS = frozenset(
+    {"dom_attr", "dom_selector", "css_selector", "css_token_def", "css_token_use"}
+)
+
 _NO_CALLER_EVIDENCE_NOTE = (
     "No fetch() call resolves here. Not claimed unused: page URLs are reached by browser "
     "navigation, {% url %} tags and <a href>, and Core Pipeline has no extractor for those "
     "yet (DOM Wiring plan). Absence of evidence is not evidence of absence."
 )
+
+
+def _from_edges(symbol: Symbol, incoming: dict, outgoing: dict) -> Symbol:
+    touching = incoming.get(symbol.id, []) + outgoing.get(symbol.id, [])
+    if not touching:
+        return symbol
+    statuses = {edge.status for edge in touching}
+    for status in (Status.CONNECTED, Status.UNRESOLVED, Status.UNUSED):
+        if status in statuses:
+            return replace(symbol, status=status)
+    return symbol
 
 
 def classify(symbols: list[Symbol], edges: list[Edge]) -> list[Symbol]:
@@ -48,6 +66,9 @@ def classify(symbols: list[Symbol], edges: list[Edge]) -> list[Symbol]:
 
     result: list[Symbol] = []
     for symbol in symbols:
+        if symbol.kind in _EDGE_STATUS_KINDS:
+            result.append(_from_edges(symbol, incoming, outgoing))
+            continue
         if symbol.status == Status.UNCERTAIN or symbol.kind not in _OWNED_KINDS:
             result.append(symbol)
             continue

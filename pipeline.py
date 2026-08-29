@@ -3,13 +3,24 @@
 from __future__ import annotations
 
 import ast
+import dataclasses
 import pathlib
 
 from signal_map.classifier import classify
 from signal_map.extractors.asgi_extractor import extract_asgi_routes
+from signal_map.attribution import attribute_by_feature
+from signal_map.dom_matcher import (
+    detect_multi_writers,
+    match_css_selectors,
+    match_css_tokens,
+    match_dom_selectors,
+)
+from signal_map.extractors.css_extractor import extract_css
 from signal_map.extractors.django_extractor import extract_django_urls_views
+from signal_map.extractors.dom_js_extractor import extract_dom_selectors
+from signal_map.extractors.template_scanner import scan_templates
 from signal_map.extractors.entry_points_extractor import extract_entry_points
-from signal_map.extractors.js_extractor import extract_js
+from signal_map.extractors.js_extractor import discover_js_files, extract_js
 from signal_map.field_matcher import match_json_response_fields
 from signal_map.graph import Edge, Graph, Status, Symbol
 from signal_map.matcher import match_js_to_django
@@ -88,6 +99,9 @@ def run_scan(
     entry_point_files: set[str] | None = None,
     asgi_file: str | None = None,
     first_party_prefixes: list[str] | None = None,
+    template_files: list[str] | None = None,
+    css_files: list[str] | None = None,
+    tailwind_build_classes: set[str] | None = None,
 ) -> Graph:
     django_symbols, routing_edges = extract_django_urls_views(urlconf_module, first_party_prefixes)
     if asgi_file:
@@ -101,4 +115,37 @@ def run_scan(
     symbols += _field_symbols(symbols, routing_edges, match_edges)
     edges = routing_edges + js_edges + match_edges
 
-    return Graph(symbols=classify(symbols, edges), edges=edges)
+    dom_attrs = scan_templates(template_files or [])
+    dom_selectors = extract_dom_selectors(
+        discover_js_files(js_entry_files, js_project_root) if template_files else []
+    )
+    css_symbols = extract_css(css_files or [])
+
+    if dom_attrs or dom_selectors or css_symbols:
+        selectors = [s for s in css_symbols if s.kind == "css_selector"]
+        symbols += dom_attrs + dom_selectors + css_symbols
+        symbols += detect_multi_writers(dom_selectors)
+        edges += match_dom_selectors(dom_attrs, dom_selectors)
+        edges += match_css_selectors(
+            dom_selectors, dom_attrs, selectors, tailwind_build_classes or set()
+        )
+        edges += match_css_tokens(
+            [s for s in css_symbols if s.kind == "css_token_def"],
+            [s for s in css_symbols if s.kind == "css_token_use"],
+        )
+
+    graph = Graph(symbols=classify(symbols, edges), edges=edges)
+    return _with_feature_labels(graph, dom_attrs)
+
+
+def _with_feature_labels(graph: Graph, dom_roots: list[Symbol]) -> Graph:
+    if not dom_roots:
+        return graph
+    labels = attribute_by_feature(graph, [r for r in dom_roots if r.sub == "id"])
+    symbols = [
+        dataclasses.replace(symbol, sub=f"{symbol.sub} [{labels[symbol.id][0]}]")
+        if symbol.id in labels and labels[symbol.id]
+        else symbol
+        for symbol in graph.symbols
+    ]
+    return Graph(symbols=symbols, edges=graph.edges, schema_version=graph.schema_version)
