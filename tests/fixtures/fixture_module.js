@@ -19,3 +19,7 @@ export class Reporter {
     navigator.sendBeacon('/api/log/', '{}');
   }
 }
+
+export function loadNested() {
+  fetch('/sub/nested/');
+}
