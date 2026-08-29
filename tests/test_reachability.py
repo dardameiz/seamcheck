@@ -36,3 +36,14 @@ class RelativeImportReachabilityTests(SimpleTestCase):
         reached = discover_reachable_modules([root], str(REPO_ROOT), ["signal_map"])
 
         self.assertIn(str(FIXTURES_DIR / "fixture_reachability_b.py"), reached)
+
+
+class StringReferenceReachabilityTests(SimpleTestCase):
+    def test_follows_a_module_named_only_by_a_string(self):
+        # include("app.urls") is how Django mounts a URLconf; there is no import
+        # statement, so an import-only walk never reaches the app's whole API surface.
+        root = str(FIXTURES_DIR / "fixture_string_reference.py")
+
+        reached = discover_reachable_modules([root], str(REPO_ROOT), ["signal_map"])
+
+        self.assertIn(str(FIXTURES_DIR / "fixture_reachability_b.py"), reached)

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import ast
 import os
+import re
 
 
 def _current_package(file_path: str, repo_root: str) -> list[str]:
@@ -38,7 +39,24 @@ def _parse_imports(file_path: str, repo_root: str) -> list[str]:
             # candidate this walk resolves ~1% of a Django codebase's first-party imports.
             modules.append(prefix)
             modules.extend(f"{prefix}.{alias.name}" for alias in node.names)
+    modules.extend(_dotted_string_references(tree))
     return modules
+
+
+# Django wires modules together with strings as often as with imports: include(
+# "app.urls"), INSTALLED_APPS, ROOT_URLCONF, autodiscover_tasks. An import-only walk
+# misses every one, and this repo's whole API URLconf hangs off a single include().
+_DOTTED_MODULE_RE = re.compile(r"^[a-z_][\w]*(\.[a-z_][\w]*)+$")
+
+
+def _dotted_string_references(tree: ast.Module) -> list[str]:
+    return [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and _DOTTED_MODULE_RE.match(node.value)
+    ]
 
 
 def _is_first_party(dotted_module: str, first_party_prefixes: list[str]) -> bool:
