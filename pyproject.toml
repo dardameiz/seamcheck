@@ -15,11 +15,12 @@ license = "MIT"
 requires-python = ">=3.12"
 authors = [{ name = "dardameiz" }]
 keywords = ["django", "static-analysis", "dead-code", "connectivity", "mcp"]
+# No "License :: OSI Approved ::" classifier: PEP 639 replaced it with the
+# License-Expression field above, and PyPI rejects a distribution carrying both.
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Framework :: Django",
   "Intended Audience :: Developers",
-  "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3.12",
   "Topic :: Software Development :: Quality Assurance",
 ]
