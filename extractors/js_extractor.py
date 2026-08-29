@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import tempfile
 
 from signal_map.graph import Edge, Status, Symbol
 
@@ -175,3 +176,14 @@ def extract_js(entry_files: list[str], project_root: str) -> tuple[list[Symbol],
                     )
 
     return symbols, edges
+
+
+def parse_js_source(source: str) -> dict:
+    """Parse a JS snippet held in memory, through the same acorn path as files."""
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as handle:
+        handle.write(source)
+        temporary_path = handle.name
+    try:
+        return _parse_files([temporary_path]).get(temporary_path, {})
+    finally:
+        os.unlink(temporary_path)
