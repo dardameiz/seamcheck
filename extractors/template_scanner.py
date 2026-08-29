@@ -1,0 +1,71 @@
+"""Every id / class / data-* attribute a template puts into the DOM.
+
+A regex over raw template text, deliberately: Django's own Lexer tokenises {% %} and
+{{ }} tags and treats HTML as opaque literal text, so it has no notion of an attribute
+and would need an HTML parser bolted on anyway. Template-inheritance traversal belongs to
+the caller, which passes every file in the chain.
+"""
+
+from __future__ import annotations
+
+import pathlib
+import re
+
+from signal_map.graph import Status, Symbol
+
+_ATTRIBUTE_RE = re.compile(r"""\b(id|class|data-[\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')""")
+# A value that is entirely a template expression has no literal name to match on.
+_TEMPLATE_EXPRESSION_RE = re.compile(r"\{[{%].*?[%}]\}")
+
+
+def _tokens(attribute: str, value: str) -> list[str]:
+    cleaned = _TEMPLATE_EXPRESSION_RE.sub(" ", value)
+    if attribute == "class":
+        return cleaned.split()
+    cleaned = cleaned.strip()
+    return [cleaned] if cleaned else []
+
+
+def _line_of(text: str, offset: int) -> int:
+    return text.count("\n", 0, offset) + 1
+
+
+def scan_templates(template_files: list[str]) -> list[Symbol]:
+    symbols: list[Symbol] = []
+    for file_path in template_files:
+        text = pathlib.Path(file_path).read_text(encoding="utf-8", errors="replace")
+        for match in _ATTRIBUTE_RE.finditer(text):
+            attribute = match.group(1)
+            value = match.group(2) if match.group(2) is not None else match.group(3)
+            kind = "data" if attribute.startswith("data-") else attribute
+            label_prefix = attribute[len("data-"):] if kind == "data" else ""
+            line = _line_of(text, match.start())
+
+            for token in _tokens("class" if kind == "class" else kind, value):
+                label = label_prefix if kind == "data" else token
+                if not label:
+                    continue
+                symbols.append(
+                    Symbol(
+                        id=f"dom_attr:{kind}:{label}:{file_path}:{line}",
+                        kind="dom_attr",
+                        label=label,
+                        sub=kind,
+                        file=file_path,
+                        line=line,
+                        status=Status.UNCERTAIN,
+                        snippet=f'{attribute}="{value}"',
+                        chain=[pathlib.Path(file_path).name, label],
+                        note="",
+                    )
+                )
+            if kind == "data" and not _tokens("data", value):
+                symbols.append(
+                    Symbol(
+                        id=f"dom_attr:data:{label_prefix}:{file_path}:{line}",
+                        kind="dom_attr", label=label_prefix, sub="data", file=file_path,
+                        line=line, status=Status.UNCERTAIN, snippet=f'{attribute}="{value}"',
+                        chain=[pathlib.Path(file_path).name, label_prefix], note="",
+                    )
+                )
+    return symbols
