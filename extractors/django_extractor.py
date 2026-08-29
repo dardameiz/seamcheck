@@ -26,20 +26,46 @@ def _walk_patterns(patterns, prefix: str = "") -> Iterator[tuple[str, object]]:
             yield from _walk_patterns(entry.url_patterns, entry_prefix)
 
 
+def _unwrap(view_func):
+    """The real view behind any decorators.
+
+    functools.wraps copies __module__ and __name__ onto the wrapper, so a decorated
+    admin view claims to live in the app that decorated it while its code is in
+    django/utils/decorators.py. Both the ownership test and the file:line evidence
+    have to look through that.
+    """
+    return inspect.unwrap(view_func)
+
+
 def _source_location(view_func) -> tuple[str, int | None]:
+    view_func = _unwrap(view_func)
     try:
         return inspect.getsourcefile(view_func) or "", inspect.getsourcelines(view_func)[1]
     except (OSError, TypeError):
         return "", None
 
 
-def extract_django_urls_views(urlconf_module: str) -> tuple[list[Symbol], list[Edge]]:
+def _is_first_party(view_func, prefixes: list[str]) -> bool:
+    root = (getattr(_unwrap(view_func), "__module__", "") or "").split(".")[0]
+    return root in prefixes
+
+
+def extract_django_urls_views(
+    urlconf_module: str, first_party_prefixes: list[str] | None = None
+) -> tuple[list[Symbol], list[Edge]]:
+    """Walk the URLconf tree.
+
+    With `first_party_prefixes`, third-party routes (Django admin, allauth) are skipped:
+    they are 88% of this project's URL table and would drown the code the map is about.
+    """
     module = importlib.import_module(urlconf_module)
     symbols: list[Symbol] = []
     edges: list[Edge] = []
     seen_view_ids: set[str] = set()
 
     for pattern_str, view_func in _walk_patterns(module.urlpatterns):
+        if first_party_prefixes and not _is_first_party(view_func, first_party_prefixes):
+            continue
         view_name = getattr(view_func, "__name__", view_func.__class__.__name__)
         url_id = f"url:{pattern_str}"
         view_id = f"view:{view_func.__module__}.{view_name}"

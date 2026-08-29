@@ -65,3 +65,22 @@ class DjangoExtractorTests(SimpleTestCase):
             if symbol.kind == "view":
                 self.assertTrue(symbol.file.endswith("fixture_views.py"), symbol)
                 self.assertIsNotNone(symbol.line, symbol)
+
+
+class FirstPartyFilterTests(SimpleTestCase):
+    def test_without_prefixes_every_route_is_emitted(self):
+        symbols, _ = extract_django_urls_views(URLCONF)
+
+        self.assertTrue(any(s.kind == "view" for s in symbols))
+
+    def test_prefixes_exclude_routes_owned_by_other_packages(self):
+        # Django's own admin is 88% of this project's URL table; without the filter the
+        # map is mostly third-party routes the reader cannot act on.
+        symbols, _ = extract_django_urls_views(URLCONF, first_party_prefixes=["nothing_matches"])
+
+        self.assertEqual(symbols, [])
+
+    def test_prefixes_keep_matching_routes(self):
+        symbols, _ = extract_django_urls_views(URLCONF, first_party_prefixes=["signal_map"])
+
+        self.assertIn("get_thing", {s.label for s in symbols if s.kind == "view"})
