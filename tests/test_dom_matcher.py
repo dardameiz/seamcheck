@@ -1,6 +1,11 @@
 from django.test import SimpleTestCase
 
-from signal_map.dom_matcher import detect_multi_writers, match_dom_selectors
+from signal_map.dom_matcher import (
+    detect_multi_writers,
+    match_css_selectors,
+    match_css_tokens,
+    match_dom_selectors,
+)
 from signal_map.graph import Status, Symbol
 from signal_map.triage import fingerprint_for_symbol
 
@@ -101,3 +106,65 @@ class MultiWriterFingerprintTests(SimpleTestCase):
             fingerprint_for_symbol(self._flagged(["a.js", "b.js"])),
             fingerprint_for_symbol(self._flagged(["b.js", "a.js"])),
         )
+
+
+def _css(label, sub="class"):
+    return Symbol(
+        id=f"css_selector:{sub}:{label}", kind="css_selector", label=label, sub=sub,
+        file="a.css", line=1, status=Status.UNCERTAIN, snippet=f".{label}", chain=[label], note="",
+    )
+
+
+def _token(label, kind="css_token_def"):
+    return Symbol(
+        id=f"{kind}:token:{label}", kind=kind, label=label, sub="token", file="a.css", line=1,
+        status=Status.UNCERTAIN, snippet=label, chain=[label], note="",
+    )
+
+
+class CssSelectorMatchTests(SimpleTestCase):
+    def test_a_used_class_with_a_css_rule_is_connected(self):
+        edges = match_css_selectors([], [_attr("fp-btn", sub="class")], [_css("fp-btn")], set())
+
+        self.assertEqual([e.status for e in edges], [Status.CONNECTED])
+
+    def test_a_css_rule_nothing_uses_is_unused(self):
+        edges = match_css_selectors([], [], [_css("orphan-rule")], set())
+
+        self.assertEqual([e.status for e in edges], [Status.UNUSED])
+
+    def test_a_used_class_with_no_rule_anywhere_is_unresolved(self):
+        edges = match_css_selectors([], [_attr("ghost", sub="class")], [], set())
+
+        self.assertEqual([e.status for e in edges], [Status.UNRESOLVED])
+
+    def test_a_tailwind_generated_class_is_not_reported_unresolved(self):
+        # Without the compiled-utility set, every Tailwind class in every template reads
+        # as a broken reference.
+        edges = match_css_selectors(
+            [], [_attr("bg-slate-900", sub="class")], [], {"bg-slate-900"}
+        )
+
+        self.assertEqual([e.status for e in edges], [Status.CONNECTED])
+
+    def test_tailwind_rescue_never_applies_to_an_id(self):
+        edges = match_css_selectors([], [_attr("bg-slate-900", sub="id")], [], {"bg-slate-900"})
+
+        self.assertEqual([e.status for e in edges], [Status.UNRESOLVED])
+
+
+class CssTokenMatchTests(SimpleTestCase):
+    def test_a_defined_and_consumed_token_is_connected(self):
+        edges = match_css_tokens([_token("--x")], [_token("--x", "css_token_use")])
+
+        self.assertEqual([e.status for e in edges], [Status.CONNECTED])
+
+    def test_a_token_defined_but_never_consumed_is_unused(self):
+        edges = match_css_tokens([_token("--dead")], [])
+
+        self.assertEqual([e.status for e in edges], [Status.UNUSED])
+
+    def test_a_token_consumed_but_never_defined_is_unresolved(self):
+        edges = match_css_tokens([], [_token("--ghost", "css_token_use")])
+
+        self.assertEqual([e.status for e in edges], [Status.UNRESOLVED])

@@ -45,3 +45,17 @@ class TemplateScannerTests(SimpleTestCase):
         for symbol in self.symbols:
             self.assertTrue(symbol.file)
             self.assertTrue(symbol.line and symbol.line > 0)
+
+
+class ScriptNoiseTests(SimpleTestCase):
+    def test_a_js_template_literal_is_not_a_class_name(self):
+        # Templates carry <script> blocks; class="${statusClass}" is JS, not markup.
+        import tempfile
+
+        with tempfile.NamedTemporaryFile("w", suffix=".html", delete=False) as handle:
+            handle.write('<div class="real-class ${statusClass} other"></div>')
+            path = handle.name
+
+        labels = {s.label for s in scan_templates([path]) if s.sub == "class"}
+
+        self.assertEqual(labels, {"real-class", "other"})

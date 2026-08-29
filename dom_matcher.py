@@ -70,3 +70,56 @@ def detect_multi_writers(dom_selectors: list[Symbol]) -> list[Symbol]:
             )
         )
     return flagged
+
+
+def match_css_selectors(
+    dom_selectors: list[Symbol],
+    dom_attrs: list[Symbol],
+    css_selectors: list[Symbol],
+    tailwind_build_classes: set[str],
+) -> list[Edge]:
+    """Three-way: what the DOM uses, what CSS defines, and what Tailwind generates.
+
+    A class with no hand-written rule is not dead if the utility CSS build emits it -
+    without that set, every Tailwind utility in every template reads as unresolved.
+    """
+    css_by_key = {(symbol.sub, symbol.label): symbol for symbol in css_selectors}
+    used_keys: set[tuple[str, str]] = set()
+
+    edges: list[Edge] = []
+    for symbol in list(dom_attrs) + list(dom_selectors):
+        if symbol.label == "<dynamic>" or _base_sub(symbol) not in ("id", "class"):
+            continue
+        key = (_base_sub(symbol), symbol.label)
+        used_keys.add(key)
+        defined = css_by_key.get(key)
+        if defined is not None:
+            edges.append(Edge(from_id=symbol.id, to_id=defined.id, status=Status.CONNECTED))
+        elif key[0] == "class" and symbol.label in tailwind_build_classes:
+            edges.append(Edge(from_id=symbol.id, to_id=symbol.id, status=Status.CONNECTED))
+        else:
+            edges.append(Edge(from_id=symbol.id, to_id=symbol.id, status=Status.UNRESOLVED))
+
+    for key, symbol in css_by_key.items():
+        if key not in used_keys:
+            edges.append(Edge(from_id=symbol.id, to_id=symbol.id, status=Status.UNUSED))
+    return edges
+
+
+def match_css_tokens(token_defs: list[Symbol], token_uses: list[Symbol]) -> list[Edge]:
+    defined = {symbol.label: symbol for symbol in token_defs}
+    used = {symbol.label: symbol for symbol in token_uses}
+
+    edges = [
+        Edge(from_id=used[name].id, to_id=defined[name].id, status=Status.CONNECTED)
+        for name in sorted(defined.keys() & used.keys())
+    ]
+    edges += [
+        Edge(from_id=defined[name].id, to_id=defined[name].id, status=Status.UNUSED)
+        for name in sorted(defined.keys() - used.keys())
+    ]
+    edges += [
+        Edge(from_id=used[name].id, to_id=used[name].id, status=Status.UNRESOLVED)
+        for name in sorted(used.keys() - defined.keys())
+    ]
+    return edges

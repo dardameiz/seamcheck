@@ -1,0 +1,18 @@
+@import './fixture_dom_imported.css';
+
+:root {
+  --used-token: 13px;
+  --dead-token: #000;
+}
+
+.fp-btn {
+  font-size: var(--used-token);
+}
+
+#purchase-btn {
+  color: red;
+}
+
+.no-such-class-anywhere {
+  display: none;
+}

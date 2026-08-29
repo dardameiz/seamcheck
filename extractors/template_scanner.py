@@ -15,13 +15,16 @@ from signal_map.graph import Status, Symbol
 
 _ATTRIBUTE_RE = re.compile(r"""\b(id|class|data-[\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')""")
 # A value that is entirely a template expression has no literal name to match on.
-_TEMPLATE_EXPRESSION_RE = re.compile(r"\{[{%].*?[%}]\}")
+_TEMPLATE_EXPRESSION_RE = re.compile(r"\{[{%].*?[%}]\}|\$\{[^}]*\}")
+# A class token is written by a human or a utility framework. Anything carrying JS
+# punctuation came from a script block, not from markup.
+_NOT_A_CLASS_RE = re.compile(r"""[${}()'"^,;]|^\W+$""")
 
 
 def _tokens(attribute: str, value: str) -> list[str]:
     cleaned = _TEMPLATE_EXPRESSION_RE.sub(" ", value)
     if attribute == "class":
-        return cleaned.split()
+        return [token for token in cleaned.split() if not _NOT_A_CLASS_RE.search(token)]
     cleaned = cleaned.strip()
     return [cleaned] if cleaned else []
 
