@@ -53,6 +53,10 @@ def render(report: Report) -> str:
             lines += _group_block(group)
         lines.append("")
 
-    counts = "  ".join(f"{name} {value}" for name, value in sorted(report.counts.items()))
+    # report.py builds counts as {status.value: 0 for status in Status}, so dict order is
+    # already Status declaration order (connected, unused, unresolved, uncertain). That
+    # ordering choice belongs to the model - re-sorting it here would just be a different
+    # renderer bug from the one this file exists to avoid.
+    counts = "  ".join(f"{name} {value}" for name, value in report.counts.items())
     lines += [counts, _UNCERTAIN_GLOSS]
     return "\n".join(lines)

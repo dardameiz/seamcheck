@@ -37,7 +37,10 @@ class TerminalRenderTests(SimpleTestCase):
         out = terminal.render(_report(groups=[group]))
 
         self.assertIn("Unused design tokens", out)
-        self.assertIn("12", out)
+        # Bare "12" also matches the header's git_sha[:12] ("abc123def456" contains "12"),
+        # so it would pass even if the count were dropped or hard-coded. Anchor on the
+        # parenthesized form so this actually pins the group's rendered symbol count.
+        self.assertIn("(12", out)
 
     def test_a_group_is_capped_at_five_with_a_more_marker(self):
         group = ReportGroup("url", Status.UNRESOLVED, "URLs",
@@ -79,3 +82,13 @@ class TerminalRenderTests(SimpleTestCase):
 
         self.assertIn("x", out)
         self.assertIn("re-triage", out)
+
+    def test_the_counts_line_keeps_the_reports_order_not_alphabetical(self):
+        # report.py emits counts in Status declaration order (connected, unused,
+        # unresolved, uncertain) - not alphabetical. Pin that order here so the renderer
+        # can never quietly re-sort it out from under the other two surfaces.
+        counts = {status.value: i for i, status in enumerate(Status, start=1)}
+
+        out = terminal.render(_report(counts=counts))
+
+        self.assertIn("connected 1  unused 2  unresolved 3  uncertain 4", out)
