@@ -40,6 +40,10 @@ def fingerprint_for_symbol(symbol: Symbol) -> str:
     Keyed to evidence, never to a symbol id or line number: if the snippet or the status
     changes, the mark someone made no longer describes what is on screen and must expire.
     """
+    if symbol.kind == "multi_writer_element":
+        # The finding IS the set of writers, so the disposition must expire when that
+        # set changes -- a third writer appearing is a new problem, not the old one.
+        return f"multi_writer_element:{symbol.label}:{'|'.join(sorted(symbol.chain))}"
     return f"{symbol.kind}:{symbol.snippet}:{symbol.status.value}"
 
 

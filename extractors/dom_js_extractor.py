@@ -55,8 +55,46 @@ def _selector_calls(node) -> list[dict]:
     ]
 
 
+def _base_object_name(node: dict) -> str | None:
+    """The variable a member chain hangs off: `el.style.color` -> 'el', `this.box.x` -> 'this.box'."""
+    current = node
+    while isinstance(current, dict) and current.get("type") == "MemberExpression":
+        obj = current.get("object") or {}
+        if obj.get("type") == "Identifier":
+            return obj["name"]
+        if obj.get("type") == "MemberExpression" and (obj.get("object") or {}).get("type") == "ThisExpression":
+            return f"this.{(obj.get('property') or {}).get('name')}"
+        current = obj
+    return None
+
+
+def _selector_bindings(ast_root: dict) -> dict[str, dict]:
+    """Variables (and `this.x` properties) holding the result of a selector call.
+
+    Real code almost never writes in the same statement it queries in: it binds the
+    element once and mutates it later. Matching only same-statement writes found 70 of
+    them across this project's 2,300 selectors.
+    """
+    bindings: dict[str, dict] = {}
+    for node, _ in _walk(ast_root):
+        node_type = node.get("type")
+        if node_type == "VariableDeclarator":
+            name = (node.get("id") or {}).get("name")
+            calls = _selector_calls(node.get("init") or {})
+            if name and calls:
+                bindings[name] = calls[0]
+        elif node_type == "AssignmentExpression":
+            target = node.get("left") or {}
+            if (target.get("object") or {}).get("type") == "ThisExpression":
+                calls = _selector_calls(node.get("right") or {})
+                if calls:
+                    bindings[f"this.{(target.get('property') or {}).get('name')}"] = calls[0]
+    return bindings
+
+
 def _writing_call_ids(ast_root: dict) -> set[int]:
-    """Selector calls whose element is mutated in the same statement."""
+    """Selector calls whose element is mutated, directly or through a binding."""
+    bindings = _selector_bindings(ast_root)
     writing: set[int] = set()
     for node, _ in _walk(ast_root):
         node_type = node.get("type")
@@ -66,10 +104,17 @@ def _writing_call_ids(ast_root: dict) -> set[int]:
             final = (target.get("property") or {}).get("name")
             if final in _WRITE_PROPERTIES or names & _WRITE_NAMESPACES:
                 writing.update(id(call) for call in _selector_calls(target))
+                bound = bindings.get(_base_object_name(target) or "")
+                if bound is not None:
+                    writing.add(id(bound))
         elif node_type == "CallExpression":
             callee = node.get("callee") or {}
             if (callee.get("property") or {}).get("name") in _WRITE_METHODS:
-                writing.update(id(call) for call in _selector_calls(callee.get("object") or {}))
+                receiver = callee.get("object") or {}
+                writing.update(id(call) for call in _selector_calls(receiver))
+                bound = bindings.get(_base_object_name(receiver) or "")
+                if bound is not None:
+                    writing.add(id(bound))
     return writing
 
 

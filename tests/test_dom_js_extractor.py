@@ -52,3 +52,24 @@ class DomSelectorExtractionTests(SimpleTestCase):
     def test_every_symbol_names_its_enclosing_function(self):
         for symbol in self.symbols:
             self.assertGreaterEqual(len(symbol.chain), 2, symbol.id)
+
+
+class BoundElementWriteTests(SimpleTestCase):
+    def setUp(self):
+        self.symbols = extract_dom_selectors(FILES)
+
+    def test_a_write_through_a_local_binding_counts_as_a_write(self):
+        # const el = getElementById(...); el.textContent = v  -- the dominant real
+        # pattern. Same-statement-only matching found 70 writes in 2,300 selectors.
+        bound = [s for s in self.symbols if s.label == "bound-counter"]
+
+        self.assertTrue(bound)
+        self.assertTrue(any(s.sub.endswith(":write") for s in bound))
+
+    def test_a_write_through_a_this_property_counts_as_a_write(self):
+        writes = [
+            s for s in self.symbols
+            if s.label == "bound-counter" and s.sub.endswith(":write")
+        ]
+
+        self.assertGreaterEqual(len(writes), 2)
