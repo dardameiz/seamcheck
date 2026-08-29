@@ -95,3 +95,29 @@ class BlockingTests(SimpleTestCase):
 
         self.assertIn("[triage:approved]", annotated.symbols[0].note)
         self.assertEqual(stale.symbols[0].note, "")
+
+    def test_a_later_stale_entry_does_not_win_over_an_earlier_valid_one(self):
+        # A stale disposition silently winning would let it decide whether
+        # has_blocking_findings() -- api.check()["passed"], the CI gate -- passes.
+        # CONFIRMED always blocks, so if the stale entry wins here this goes red.
+        symbol = _symbol()
+        graph = Graph(symbols=[symbol], edges=[])
+        valid = _entry(symbol, status=TriageStatus.APPROVED)
+        stale = _entry(symbol, status=TriageStatus.CONFIRMED, fingerprint="stale")
+
+        self.assertFalse(has_blocking_findings(graph, [valid, stale]))
+
+        annotated = apply_triage(graph, [valid, stale])
+        self.assertIn("[triage:approved]", annotated.symbols[0].note)
+
+    def test_an_earlier_stale_entry_does_not_win_over_a_later_valid_one(self):
+        # Same assertion, reversed order -- list position must not decide the winner.
+        symbol = _symbol()
+        graph = Graph(symbols=[symbol], edges=[])
+        valid = _entry(symbol, status=TriageStatus.APPROVED)
+        stale = _entry(symbol, status=TriageStatus.CONFIRMED, fingerprint="stale")
+
+        self.assertFalse(has_blocking_findings(graph, [stale, valid]))
+
+        annotated = apply_triage(graph, [stale, valid])
+        self.assertIn("[triage:approved]", annotated.symbols[0].note)

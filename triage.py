@@ -69,29 +69,39 @@ def save_triage(entries: list[TriageEntry], repo_root: str) -> None:
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
-def valid_triage_ids(graph: Graph, entries: list[TriageEntry]) -> set[str]:
-    """Symbol ids whose stored triage fingerprint still matches the symbol as it is now.
+def valid_triage_entries(graph: Graph, entries: list[TriageEntry]) -> list[TriageEntry]:
+    """Entries whose stored fingerprint still matches the symbol as it is now, in order.
 
-    The one place the fingerprint-validity predicate lives. report.py and the two
-    functions below all call this instead of re-deriving it, so "still valid" can't
-    silently drift between callers -- the failure this project already hit once.
+    The one place the fingerprint-validity predicate lives -- valid_triage_ids() and
+    _valid_entries() below, plus report.py, all derive from this list instead of
+    re-deriving the predicate, so "still valid" can't silently drift between callers.
+    Filtering entry-by-entry (not id-by-id) matters: triage.json is a checked-in file a
+    human can hand-edit, so nothing here may assume at most one entry per symbol_id --
+    a set of "ids with SOME valid entry" would let a stale entry for an id ride along
+    just because another entry for that same id happened to validate.
     """
     by_id = {symbol.id: symbol for symbol in graph.symbols}
-    return {
-        entry.symbol_id
+    return [
+        entry
         for entry in entries
         if entry.symbol_id in by_id
         and fingerprint_for_symbol(by_id[entry.symbol_id]) == entry.fingerprint
-    }
+    ]
+
+
+def valid_triage_ids(graph: Graph, entries: list[TriageEntry]) -> set[str]:
+    """Symbol ids carrying a still-valid triage entry."""
+    return {entry.symbol_id for entry in valid_triage_entries(graph, entries)}
 
 
 def _valid_entries(graph: Graph, entries: list[TriageEntry]) -> dict[str, TriageEntry]:
-    """Entries whose stored fingerprint still matches the symbol as it is now."""
-    valid_ids = valid_triage_ids(graph, entries)
-    # api.py's triage() keeps at most one entry per symbol_id (it filters out any
-    # existing entry for that id before appending the new one), so there is never an
-    # ambiguous choice between two entries sharing an id here.
-    return {entry.symbol_id: entry for entry in entries if entry.symbol_id in valid_ids}
+    """Entries whose stored fingerprint still matches the symbol as it is now.
+
+    Built only from already-valid entries, so when more than one entry names the same
+    symbol_id, the later VALID one wins -- never a later entry that merely shares an id
+    with a valid one, which would let a stale disposition decide has_blocking_findings().
+    """
+    return {entry.symbol_id: entry for entry in valid_triage_entries(graph, entries)}
 
 
 def apply_triage(graph: Graph, entries: list[TriageEntry]) -> Graph:
