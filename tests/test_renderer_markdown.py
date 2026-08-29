@@ -63,3 +63,14 @@ class MarkdownRenderTests(SimpleTestCase):
 
     def test_an_empty_report_still_says_something_useful(self):
         self.assertIn("nothing new", markdown.render(_report()).lower())
+
+    def test_the_counts_line_keeps_the_reports_order_not_alphabetical(self):
+        # report.py emits counts in Status declaration order (connected, unused,
+        # unresolved, uncertain) - not alphabetical. Pin that order here so the renderer
+        # can never quietly re-sort it out from under the other two surfaces.
+        counts = {status.value: i for i, status in enumerate(Status, start=1)}
+
+        out = markdown.render(_report(counts=counts))
+
+        positions = [out.index(status.value) for status in Status]
+        self.assertEqual(positions, sorted(positions))
