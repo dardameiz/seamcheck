@@ -1,0 +1,156 @@
+{
+  "graphs": [
+    {
+      "name": "\"pointless\"",
+      "app_name": "pointless",
+      "cluster_app_name": "cluster_pointless",
+      "models": [
+        {
+          "app_name": "pointless_models",
+          "name": "SuperuserProxy",
+          "abstracts": [],
+          "fields": [],
+          "relations": [
+            {
+              "target_app": "django_contrib_auth_models",
+              "target": "User",
+              "type": "inheritance",
+              "name": "inheritance",
+              "label": "proxy\\ninheritance",
+              "arrows": "[arrowhead=empty, arrowtail=none, dir=both]",
+              "needs_node": true
+            }
+          ],
+          "label": "SuperuserProxy"
+        },
+        {
+          "app_name": "pointless_models",
+          "name": "Profile",
+          "abstracts": [],
+          "fields": [
+            {
+              "name": "id",
+              "label": "id",
+              "type": "BigAutoField",
+              "blank": true,
+              "abstract": false,
+              "relation": false,
+              "primary_key": true
+            },
+            {
+              "name": "user",
+              "label": "user",
+              "type": "OneToOneField (id)",
+              "blank": false,
+              "abstract": false,
+              "relation": true,
+              "primary_key": false
+            },
+            {
+              "name": "avatar",
+              "label": "avatar",
+              "type": "CharField",
+              "blank": false,
+              "abstract": false,
+              "relation": false,
+              "primary_key": false
+            },
+            {
+              "name": "bio",
+              "label": "bio",
+              "type": "CharField",
+              "blank": true,
+              "abstract": false,
+              "relation": false,
+              "primary_key": false
+            },
+            {
+              "name": "country",
+              "label": "country",
+              "type": "CountryField",
+              "blank": true,
+              "abstract": false,
+              "relation": false,
+              "primary_key": false
+            },
+            {
+              "name": "country_last_changed",
+              "label": "country_last_changed",
+              "type": "DateTimeField",
+              "blank": true,
+              "abstract": false,
+              "relation": false,
+              "primary_key": false
+            },
+            {
+              "name": "has_completed_setup",
+              "label": "has_completed_setup",
+              "type": "BooleanField",
+              "blank": false,
+              "abstract": false,
+              "relation": false,
+              "primary_key": false
+            },
+            {
+              "name": "last_username_change",
+              "label": "last_username_change",
+              "type": "DateTimeField",
+              "blank": true,
+              "abstract": false,
+              "relation": false,
+              "primary_key": false
+            },
+            {
+              "name": "pbits",
+              "label": "pbits",
+              "type": "PositiveIntegerField",
+              "blank": false,
+              "abstract": false,
+              "relation": false,
+              "primary_key": false
+            },
+            {
+              "name": "residency_country",
+              "label": "residency_country",
+              "type": "CountryField",
+              "blank": true,
+              "abstract": false,
+              "relation": false,
+              "primary_key": false
+            },
+            {
+              "name": "residency_country_last_changed",
+              "label": "residency_country_last_changed",
+              "type": "DateTimeField",
+              "blank": true,
+              "abstract": false,
+              "relation": false,
+              "primary_key": false
+            },
+            {
+              "name": "timezone",
+              "label": "timezone",
+              "type": "CharField",
+              "blank": false,
+              "abstract": false,
+              "relation": false,
+              "primary_key": false
+            }
+          ],
+          "relations": [
+            {
+              "target_app": "django_contrib_auth_models",
+              "target": "User",
+              "type": "OneToOneField",
+              "name": "user",
+              "label": "user (profile)",
+              "arrows": "[arrowhead=none, arrowtail=none, dir=both]",
+              "needs_node": true
+            }
+          ],
+          "label": "Profile"
+        }
+      ]
+    }
+  ]
+}
