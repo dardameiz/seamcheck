@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from signal_map.coverage import CoverageResult
 from signal_map.diff import DiffResult
 from signal_map.graph import Graph, Status, Symbol
-from signal_map.triage import TriageEntry, fingerprint_for_symbol
+from signal_map.triage import TriageEntry, valid_triage_ids
 
 # Only these two statuses are findings. CONNECTED needs no action, and UNCERTAIN is the
 # scan saying it has no evidence either way - presenting it as actionable would undo the
@@ -67,14 +67,15 @@ def _title_for(kind: str) -> str:
     return _GROUP_TITLES.get(kind, kind.replace("_", " ").capitalize())
 
 
-def _valid_triaged_ids(graph: Graph, entries: list[TriageEntry]) -> set[str]:
-    by_id = {symbol.id: symbol for symbol in graph.symbols}
-    return {
-        entry.symbol_id
-        for entry in entries
-        if entry.symbol_id in by_id
-        and fingerprint_for_symbol(by_id[entry.symbol_id]) == entry.fingerprint
-    }
+def _group_status(symbols: list[Symbol]) -> Status:
+    """The worst status present, not whichever symbol happens to sort first.
+
+    A group can mix UNRESOLVED and UNUSED symbols under one kind (json_field is the real
+    example: field_matcher.py emits both into the same bucket). Showing UNUSED on a group
+    header when an UNRESOLVED symbol is inside it hides the worse problem -- the same
+    class of mistake as calling something unused without evidence.
+    """
+    return Status.UNRESOLVED if any(s.status is Status.UNRESOLVED for s in symbols) else Status.UNUSED
 
 
 def build_report(
@@ -98,7 +99,7 @@ def build_report(
         invalidated = list(diff.triage_invalidated)
 
     already_reported = {symbol.id for symbol in new_findings}
-    triaged_ids = _valid_triaged_ids(graph, entries)
+    triaged_ids = valid_triage_ids(graph, entries)
 
     by_kind: dict[str, list[Symbol]] = {}
     counts: dict[str, int] = {status.value: 0 for status in Status}
@@ -107,16 +108,18 @@ def build_report(
         if symbol.status in _FINDING_STATUSES and symbol.id not in already_reported:
             by_kind.setdefault(symbol.kind, []).append(symbol)
 
-    groups = [
-        ReportGroup(
-            kind=kind,
-            status=symbols[0].status,
-            title=_title_for(kind),
-            symbols=sorted(symbols, key=_sort_key),
-            triaged=sum(1 for symbol in symbols if symbol.id in triaged_ids),
+    groups = []
+    for kind, symbols in by_kind.items():
+        sorted_symbols = sorted(symbols, key=_sort_key)
+        groups.append(
+            ReportGroup(
+                kind=kind,
+                status=_group_status(sorted_symbols),
+                title=_title_for(kind),
+                symbols=sorted_symbols,
+                triaged=sum(1 for symbol in sorted_symbols if symbol.id in triaged_ids),
+            )
         )
-        for kind, symbols in by_kind.items()
-    ]
     groups.sort(key=lambda group: (-len(group.symbols), group.kind))
 
     return Report(

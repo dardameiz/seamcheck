@@ -69,15 +69,29 @@ def save_triage(entries: list[TriageEntry], repo_root: str) -> None:
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
+def valid_triage_ids(graph: Graph, entries: list[TriageEntry]) -> set[str]:
+    """Symbol ids whose stored triage fingerprint still matches the symbol as it is now.
+
+    The one place the fingerprint-validity predicate lives. report.py and the two
+    functions below all call this instead of re-deriving it, so "still valid" can't
+    silently drift between callers -- the failure this project already hit once.
+    """
+    by_id = {symbol.id: symbol for symbol in graph.symbols}
+    return {
+        entry.symbol_id
+        for entry in entries
+        if entry.symbol_id in by_id
+        and fingerprint_for_symbol(by_id[entry.symbol_id]) == entry.fingerprint
+    }
+
+
 def _valid_entries(graph: Graph, entries: list[TriageEntry]) -> dict[str, TriageEntry]:
     """Entries whose stored fingerprint still matches the symbol as it is now."""
-    by_id = {symbol.id: symbol for symbol in graph.symbols}
-    valid = {}
-    for entry in entries:
-        symbol = by_id.get(entry.symbol_id)
-        if symbol and fingerprint_for_symbol(symbol) == entry.fingerprint:
-            valid[entry.symbol_id] = entry
-    return valid
+    valid_ids = valid_triage_ids(graph, entries)
+    # api.py's triage() keeps at most one entry per symbol_id (it filters out any
+    # existing entry for that id before appending the new one), so there is never an
+    # ambiguous choice between two entries sharing an id here.
+    return {entry.symbol_id: entry for entry in entries if entry.symbol_id in valid_ids}
 
 
 def apply_triage(graph: Graph, entries: list[TriageEntry]) -> Graph:

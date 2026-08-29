@@ -112,6 +112,22 @@ class ContentTests(SimpleTestCase):
 
         self.assertEqual(report.groups[0].triaged, 0)
 
+    def test_group_status_is_the_most_severe_present_regardless_of_insertion_order(self):
+        # json_field genuinely mixes statuses in one scan (field_matcher.py emits both
+        # CONNECTED/UNUSED and UNRESOLVED into the same kind) -- the header must never
+        # hide the worse finding behind whichever symbol happened to be appended first.
+        unused_first = _report([
+            _symbol("f1", kind="json_field", status=Status.UNUSED),
+            _symbol("f2", kind="json_field", status=Status.UNRESOLVED),
+        ])
+        unresolved_first = _report([
+            _symbol("f3", kind="json_field", status=Status.UNRESOLVED),
+            _symbol("f4", kind="json_field", status=Status.UNUSED),
+        ])
+
+        self.assertIs(unused_first.groups[0].status, Status.UNRESOLVED)
+        self.assertIs(unresolved_first.groups[0].status, Status.UNRESOLVED)
+
 
 class BaselineTests(SimpleTestCase):
     def test_no_diff_means_no_new_findings_and_the_message_is_kept(self):
