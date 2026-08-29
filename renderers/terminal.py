@@ -1,0 +1,58 @@
+"""Plain-text report. No ANSI escapes: this output lands in CI logs and pipes."""
+
+from __future__ import annotations
+
+from signal_map.report import Report, ReportGroup
+
+CAP = 5
+
+_UNCERTAIN_GLOSS = "uncertain = no evidence either way, not a claim that it is dead"
+
+
+def _where(symbol) -> str:
+    if not symbol.file:
+        return ""
+    return f"{symbol.file}:{symbol.line}" if symbol.line else symbol.file
+
+
+def _finding_lines(symbols, cap: int) -> list[str]:
+    lines = [f"    {symbol.label:<34} {_where(symbol)}".rstrip() for symbol in symbols[:cap]]
+    if len(symbols) > cap:
+        lines.append(f"    ... +{len(symbols) - cap} more")
+    return lines
+
+
+def _group_block(group: ReportGroup) -> list[str]:
+    triaged = f", {group.triaged} triaged" if group.triaged else ""
+    return [f"  {group.title} ({len(group.symbols)}{triaged})", *_finding_lines(group.symbols, CAP)]
+
+
+def render(report: Report) -> str:
+    lines: list[str] = [f"Signal Map — {report.git_sha[:12]} — {report.generated_at}", ""]
+
+    if report.baseline_sha is None:
+        lines += [report.baseline_message or "No baseline to compare against.", ""]
+    elif report.new_findings:
+        lines.append(f"NEW SINCE {report.baseline_sha[:12]} ({len(report.new_findings)})")
+        lines += _finding_lines(report.new_findings, len(report.new_findings))
+        lines.append("")
+    else:
+        lines += ["Nothing new since the baseline.", ""]
+
+    for item in report.triage_invalidated:
+        lines.append(f"  triage invalidated: {item['symbol_id']} — {item['note']}")
+    if report.triage_invalidated:
+        lines.append("")
+
+    if report.resolved:
+        lines += [f"Resolved since the baseline ({len(report.resolved)})", ""]
+
+    if report.groups:
+        lines.append("BACKLOG")
+        for group in report.groups:
+            lines += _group_block(group)
+        lines.append("")
+
+    counts = "  ".join(f"{name} {value}" for name, value in sorted(report.counts.items()))
+    lines += [counts, _UNCERTAIN_GLOSS]
+    return "\n".join(lines)
