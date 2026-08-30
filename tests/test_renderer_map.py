@@ -403,3 +403,46 @@ class ReadabilityTests(SimpleTestCase):
         # A fetch and the call that makes it share a line, and both were printed in full
         # under two different headings.
         self.assertIn("function deduper()", map_html.render(_map()))
+
+
+class FileTreeViewTests(SimpleTestCase):
+    def _files(self):
+        return [
+            {"path": "pointless/views/push_views.py",
+             "counts": {"connected": 12}, "declarations": 41, "known": 12},
+            {"path": "pointless/static/js/a.js",
+             "counts": {"unresolved": 1}, "declarations": 0, "known": 0},
+        ]
+
+    def test_the_tree_is_offered_beside_the_map(self):
+        out = map_html.render(_map(), files=self._files())
+
+        self.assertIn('title: "Files"', out)
+        self.assertIn("function treeHtml()", out)
+
+    def test_a_file_carries_how_much_of_it_the_graph_knows(self):
+        out = map_html.render(_map(), files=self._files())
+
+        self.assertIn('"declarations": 41', out)
+        self.assertIn('"known": 12', out)
+
+    def test_coverage_is_named_as_coverage_not_as_a_finding(self):
+        # A helper that makes no request and touches no element produces no symbol
+        # because there is nothing to model, not because it is dead.
+        out = map_html.render(_map(), files=self._files())
+
+        self.assertIn("that is coverage, not a finding", out)
+
+    def test_a_file_with_no_declarations_says_so_rather_than_showing_an_empty_bar(self):
+        self.assertIn("no declarations", map_html.render(_map(), files=self._files()))
+
+    def test_choosing_a_file_draws_only_that_file(self):
+        out = map_html.render(_map(), files=self._files())
+
+        self.assertIn("if (fileFilter) return new Set(p.nodes.filter(n => n.file === fileFilter)", out)
+
+    def test_a_filtered_tree_opens_itself(self):
+        # 52 folders collapsed by default meant a match sat inside a folder nobody opened.
+        out = map_html.render(_map(), files=self._files())
+
+        self.assertIn('depth < 2 || needle ? " open" : ""', out)

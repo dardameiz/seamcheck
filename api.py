@@ -264,7 +264,9 @@ def _page_files(repo_root: str) -> dict[str, set[str]]:
 
 
 def _render_map(repo_root: str, ref: str) -> str:
+    js_entry_files, _ = _js_roots(_config(), repo_root)
     from signal_map.console import build_console
+    from signal_map.filetree import build_file_tree
     from signal_map.history import commit_series
     from signal_map.mapdata import build_map
     from signal_map.pagenames import page_names
@@ -305,4 +307,9 @@ def _render_map(repo_root: str, ref: str) -> str:
                       for entry in commit_series(repo_root)
                   ]),
         console=console,
+        files=[
+            {"path": record.path, "counts": record.counts,
+             "declarations": record.declarations, "known": record.known}
+            for record in build_file_tree(graph, js_entry_files)
+        ],
     )

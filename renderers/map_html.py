@@ -205,6 +205,18 @@ svg.drag { cursor:grabbing; }
 .more { text-align:center; padding:10px; border:1px solid var(--line); border-radius:9px;
         cursor:pointer; font-size:13px; color:var(--sig); }
 .gloss { color:var(--muted); font-size:12px; margin-top:14px; }
+.tree { font-family:ui-monospace,Menlo,monospace; font-size:12.5px; }
+.tree summary { cursor:pointer; padding:3px 0; color:var(--muted); }
+.fl { display:flex; align-items:center; gap:8px; padding:3px 0; cursor:pointer;
+      border-radius:6px; }
+.fl:hover { background:var(--panel); }
+.fl .fn { flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis;
+          white-space:nowrap; }
+.cov { flex:none; width:52px; height:6px; border-radius:3px; background:var(--line);
+       overflow:hidden; }
+.cov i { display:block; height:100%; background:var(--sig); }
+.cov.none { width:auto; height:auto; background:none; color:var(--muted); font-size:11px; }
+.covn { flex:none; color:var(--muted); font-size:11px; font-variant-numeric:tabular-nums; }
 .blank { position:absolute; inset:0; display:flex; align-items:center; padding:0 22px;
          color:var(--muted); font-size:13px; }
 
@@ -245,7 +257,7 @@ let current = 0, focus = null, view = {x:0, y:0, k:1}, query = "";
 // The node a reader clicked, and whether the canvas should show only its chain. A page
 // draws 1,366 symbols; the one question a click asks is "what is this joined to", and
 // answering it by colour beats answering it by making the reader trace a line by eye.
-let lit = null, isolate = false;
+let lit = null, isolate = false, fileFilter = null;
 
 // A section is a lens on the same canvas, not a different page. The list of rows is the
 // CLI's answer; on screen the answer is the shape.
@@ -332,6 +344,7 @@ function changedIn(p) {
 function visible(p) {
   if (only) return changedIn(p);
   if (isolate && lit) return chainOf(p, lit);
+  if (fileFilter) return new Set(p.nodes.filter(n => n.file === fileFilter).map(n => n.id));
   // Everything this page touches, in one canvas. Showing only modules until a reader
   // drilled in hid the whole point: which symbols connect and which stand alone.
   if (!focus) {
@@ -418,8 +431,8 @@ function draw() {
   if (!p) return;
   pages.value = String(current);
   const here = p.where ? `${p.title} · ${p.where}` : p.title;
-  crumb.textContent = focus
-    ? `${here} › ${(byId.get(focus) || {}).label || ""}`
+  crumb.textContent = fileFilter ? `${here} › ${fileFilter}`
+    : focus ? `${here} › ${(byId.get(focus) || {}).label || ""}`
     : `${here} — pick a module`;
   document.getElementById("up").hidden = !focus;
   // A commit that touched only files the scan does not read has an empty changed set.
@@ -757,6 +770,7 @@ listToggle.onclick = () => { asList = !asList; switchTo(mode); };
 const OPENS_ON = "map";
 
 const VIEWS = [{key: "map", title: "Map — what reaches what", count: null},
+               {key: "files", title: "Files", count: FILES.length},
                {key: "overview", title: "Overview", count: null}].concat(
   D.sections.map(sec => ({key: sec.key, title: sec.title,
                           count: sec.unavailable ? null : (sec.total ?? sec.rows.length)})));
@@ -800,7 +814,67 @@ function overviewHtml() {
     claim that anything is dead.</p>`;
 }
 
+// A folder tree, the shape the repository actually has. The map is rooted at pages,
+// which is how a browser reaches code and not how anyone edits it: from the map you
+// cannot tell whether a file's other twenty functions were ever considered.
+let fileQuery = "";
+
+function treeHtml() {
+  const root = {dirs: new Map(), files: []};
+  const needle = fileQuery.toLowerCase();
+  const shown = FILES.filter(f => !needle || f.path.toLowerCase().includes(needle));
+  shown.forEach(f => {
+    const parts = f.path.split("/");
+    let node = root;
+    parts.slice(0, -1).forEach(part => {
+      if (!node.dirs.has(part)) node.dirs.set(part, {dirs: new Map(), files: []});
+      node = node.dirs.get(part);
+    });
+    node.files.push(f);
+  });
+  const bar = f => {
+    if (!f.declarations) return `<span class="cov none">no declarations</span>`;
+    const pct = Math.round(f.known / f.declarations * 100);
+    return `<span class="cov"><i style="width:${pct}%"></i></span>` +
+           `<span class="covn">${f.known}/${f.declarations}</span>`;
+  };
+  const flags = f => ["unresolved", "unused", "uncertain", "connected"]
+    .filter(k => f.counts[k])
+    .map(k => `<span class="badge ${k}">${k} ${f.counts[k]}</span>`).join("");
+  const walk = (node, name, depth) => {
+    const kids = [...node.dirs.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+    const inner = kids.map(([n, d]) => walk(d, n, depth + 1)).join("") +
+      node.files.sort((a, b) => a.path.localeCompare(b.path)).map(f =>
+        `<div class="fl" data-path="${esc(f.path)}" style="padding-left:${depth * 13 + 20}px">
+           <span class="fn">${esc(f.path.split("/").pop())}</span>
+           ${bar(f)}${flags(f)}</div>`).join("");
+    if (name === null) return inner;
+    return `<details${depth < 2 || needle ? " open" : ""}>
+      <summary style="padding-left:${depth * 13}px">${esc(name)}</summary>${inner}</details>`;
+  };
+  return `<h2>Files</h2><p class="blurb">Every file the scan read, in the shape the
+    repository has. The bar is how many of a file's own declarations appear in the graph
+    at all — that is coverage, not a finding: a helper that makes no request and touches
+    no element has nothing to model. Click a file to draw only its symbols.</p>
+    <div class="tools"><input id="fq" type="search"
+      placeholder="Filter ${shown.length} of ${FILES.length} files" value="${esc(fileQuery)}"></div>
+    <div class="tree">${walk(root, null, 0)}</div>`;
+}
+
 function renderPanel() {
+  if (mode === "files") {
+    panel.innerHTML = treeHtml();
+    panel.querySelectorAll(".fl").forEach(el => {
+      el.onclick = () => { fileFilter = el.dataset.path; viewer.value = "map"; switchTo("map"); };
+    });
+    const box = document.getElementById("fq");
+    box.oninput = e => {
+      fileQuery = e.target.value; renderPanel();
+      const again = document.getElementById("fq");
+      again.focus(); again.setSelectionRange(again.value.length, again.value.length);
+    };
+    return;
+  }
   if (mode === "overview") { panel.innerHTML = overviewHtml(); return; }
   const sec = D.sections.find(x => x.key === mode);
   if (!sec) return;
@@ -851,6 +925,7 @@ function switchTo(next) {
     el.setAttribute("aria-current", el.dataset.key === next));
   // A section with a lens draws on the canvas; one without (Overview, and the sections no
   // extractor feeds yet) has nothing to draw and falls back to its rows.
+  if (mode !== "map") { fileFilter = null; fileQuery = mode === "files" ? fileQuery : ""; }
   const drawable = SECTION_KINDS[mode] !== undefined && !asList;
   panel.hidden = drawable; svg.hidden = !drawable;
   document.getElementById("colourkey").hidden = !drawable;
@@ -942,7 +1017,7 @@ def _console_payload(console) -> str:
     return json.dumps(data).replace("</", "<\\/")
 
 
-def render(connectivity_map: ConnectivityMap, console=None) -> str:
+def render(connectivity_map: ConnectivityMap, console=None, files=None) -> str:
     mode = (
         f"diff vs {_esc(connectivity_map.baseline_sha[:12])}"
         if connectivity_map.baseline_sha
@@ -1005,6 +1080,7 @@ def render(connectivity_map: ConnectivityMap, console=None) -> str:
         "</main></div></div>",
         f"<script>const MAPDATA={_payload(connectivity_map)};</script>",
         f"<script>const CONSOLE={_console_payload(console)};</script>",
+        f"<script>const FILES={json.dumps(files or []).replace('</', '<\\/')};</script>",
         f"<script>{_SCRIPT}</script>",
         "</body></html>",
     ])

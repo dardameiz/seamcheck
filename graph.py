@@ -90,7 +90,15 @@ def relativise(graph: Graph, repo_root: str) -> Graph:
         prefix += os.sep
 
     def shorten(text: str | None) -> str | None:
-        return text.replace(prefix, "") if text and prefix in text else text
+        if not text:
+            return text
+        if prefix in text:
+            text = text.replace(prefix, "")
+        # `./pointless/x.js` and `pointless/x.js` are one file with two spellings. Five of
+        # this project's files carried both, which split their symbols into two sets: two
+        # rows in the file tree, two coverage numbers, and a per-file filter that found
+        # half of them.
+        return text.replace("./", "") if text.startswith("./") else text
 
     renamed: dict[str, str] = {}
     symbols = []
