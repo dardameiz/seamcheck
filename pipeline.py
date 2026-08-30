@@ -17,7 +17,7 @@ from signal_map.dom_matcher import (
 from signal_map.extractors.asgi_extractor import extract_asgi_routes
 from signal_map.extractors.css_extractor import extract_css
 from signal_map.extractors.django_extractor import extract_django_urls_views
-from signal_map.extractors.dom_js_extractor import extract_dom_selectors
+from signal_map.extractors.dom_js_extractor import extract_dom_selectors, extract_js_css_tokens
 from signal_map.extractors.entry_points_extractor import extract_entry_points
 from signal_map.extractors.js_extractor import discover_js_files, extract_js
 from signal_map.extractors.template_scanner import scan_templates
@@ -116,9 +116,8 @@ def run_scan(
     edges = routing_edges + js_edges + match_edges
 
     dom_attrs = scan_templates(template_files or [])
-    dom_selectors = extract_dom_selectors(
-        discover_js_files(js_entry_files, js_project_root) if template_files else []
-    )
+    js_files = discover_js_files(js_entry_files, js_project_root) if template_files else []
+    dom_selectors = extract_dom_selectors(js_files)
     css_symbols = extract_css(css_files or [])
 
     if dom_attrs or dom_selectors or css_symbols:
@@ -129,8 +128,12 @@ def run_scan(
         edges += match_css_selectors(
             dom_selectors, dom_attrs, selectors, tailwind_build_classes or set()
         )
+        # Tokens JavaScript sets at runtime are real definitions; without them half of
+        # this project's "undefined var()" findings were false.
+        js_tokens = extract_js_css_tokens(js_files)
+        symbols += js_tokens
         edges += match_css_tokens(
-            [s for s in css_symbols if s.kind == "css_token_def"],
+            [s for s in css_symbols if s.kind == "css_token_def"] + js_tokens,
             [s for s in css_symbols if s.kind == "css_token_use"],
         )
 

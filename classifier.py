@@ -18,6 +18,17 @@ _EDGE_STATUS_KINDS = frozenset(
     {"dom_attr", "dom_selector", "css_selector", "css_token_def", "css_token_use"}
 )
 
+# A CSS rule is matched against querySelector() calls and template class= attributes.
+# Nothing yet reads the four ways JavaScript applies a class, so 'nothing uses this'
+# is a claim the scan has not earned. Measured on this project: 5,318 selectors would
+# be reported unused while 3,205 class-application sites went unread.
+_UNPROVEN_UNUSED_KINDS = frozenset({"css_selector"})
+_UNPROVEN_UNUSED_NOTE = (
+    "No CSS-side or template-side reference found, but JavaScript that applies classes "
+    "via className, classList.add or setAttribute is not yet scanned - so this is not "
+    "evidence the rule is dead."
+)
+
 _NO_CALLER_EVIDENCE_NOTE = (
     "No fetch() call resolves here. Not claimed unused: page URLs are reached by browser "
     "navigation, {% url %} tags and <a href>, and Core Pipeline has no extractor for those "
@@ -31,8 +42,11 @@ def _from_edges(symbol: Symbol, incoming: dict, outgoing: dict) -> Symbol:
         return symbol
     statuses = {edge.status for edge in touching}
     for status in (Status.CONNECTED, Status.UNRESOLVED, Status.UNUSED):
-        if status in statuses:
-            return replace(symbol, status=status)
+        if status not in statuses:
+            continue
+        if status is Status.UNUSED and symbol.kind in _UNPROVEN_UNUSED_KINDS:
+            return replace(symbol, status=Status.UNCERTAIN, note=symbol.note or _UNPROVEN_UNUSED_NOTE)
+        return replace(symbol, status=status)
     return symbol
 
 
