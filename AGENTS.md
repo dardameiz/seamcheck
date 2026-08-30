@@ -34,11 +34,11 @@ python manage.py dump_connectivity_map                       # scan + human summ
 python manage.py dump_connectivity_map --check               # exit 1 on blocking findings
 python manage.py dump_connectivity_map --check --format markdown   # digest AND exit code
 python manage.py dump_connectivity_map --format markdown     # digest for a chat or PR
-python manage.py dump_connectivity_map --format map          # visual, page-rooted
+python manage.py dump_connectivity_map --format map          # the UI: the map plus the
+                                                             # review sections, one file
 python manage.py dump_connectivity_map --format map --since REF    # what changed
-python manage.py dump_connectivity_map --format console       # the 8-section review console
-python manage.py dump_connectivity_map --format console --serve    # open it from a phone on this wifi
-python manage.py dump_connectivity_map --format console --serve --tunnel   # ... or off it
+python manage.py dump_connectivity_map --format map --serve          # open it from a phone on this wifi
+python manage.py dump_connectivity_map --format map --serve --tunnel  # ... or off it
 python manage.py dump_connectivity_map --backfill 20   # scan the last 20 commits, so the
                                                        # map's commit picker has history
 python manage.py dump_connectivity_map --backfill 20 --backfill-ref development

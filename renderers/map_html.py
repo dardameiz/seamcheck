@@ -131,6 +131,39 @@ svg.drag { cursor:grabbing; }
 .sheet .x { position:absolute; top:8px; right:10px; width:30px; height:30px;
             border-radius:8px; border:1px solid var(--line); background:var(--bg);
             color:var(--ink); cursor:pointer; }
+.filters label.wide { flex:1 1 100%; }
+.panel { position:absolute; inset:0; overflow-y:auto; padding:14px 12px 40px;
+         background:var(--bg); }
+.panel h2 { font-size:17px; margin:0 0 4px; }
+.panel .blurb { color:var(--muted); font-size:12.5px; margin:0 0 12px; max-width:62ch; }
+.panel .tools { display:flex; gap:8px; margin-bottom:12px; }
+.panel .tools input { flex:1 1 auto; min-width:0; }
+.panel input, .panel select { padding:8px 9px; font-size:13px; border-radius:8px;
+                              border:1px solid var(--line); background:var(--panel);
+                              color:var(--ink); }
+.row { background:var(--panel); border:1px solid var(--line); border-radius:9px;
+       padding:9px 11px; margin-bottom:7px; }
+.row .t { font-size:13px; font-family:ui-monospace,Menlo,monospace; word-break:break-all; }
+.row .w { color:var(--muted); font-size:11.5px; word-break:break-all;
+          font-family:ui-monospace,Menlo,monospace; }
+.row .n { color:var(--muted); font-size:12px; margin-top:4px; }
+.badge, .pill { display:inline-block; font-size:10px; text-transform:uppercase;
+                letter-spacing:.05em; border:1px solid var(--line); border-radius:20px;
+                padding:1px 8px; margin-right:6px; }
+.badge.connected, .pill.connected { color:var(--ok); }
+.badge.unresolved, .pill.unresolved { color:var(--crit); }
+.badge.unused, .pill.unused { color:var(--warn); }
+.badge.uncertain, .pill.uncertain { color:var(--dim); }
+.cards { display:flex; gap:10px; flex-wrap:wrap; }
+.card { flex:1 1 210px; background:var(--panel); border:1px solid var(--line);
+        border-radius:11px; padding:12px 13px; }
+.card .k { font-size:10px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); }
+.card .v { font-size:24px; font-weight:700; margin:2px 0 7px; }
+.gap { color:var(--muted); font-size:12.5px; border:1px dashed var(--line);
+       border-radius:9px; padding:11px 12px; }
+.more { text-align:center; padding:10px; border:1px solid var(--line); border-radius:9px;
+        cursor:pointer; font-size:13px; color:var(--sig); }
+.gloss { color:var(--muted); font-size:12px; margin-top:14px; }
 .blank { position:absolute; inset:0; display:flex; align-items:center; padding:0 22px;
          color:var(--muted); font-size:13px; }
 
@@ -516,8 +549,111 @@ document.getElementById("lg").onclick = e => {
 };
 document.addEventListener("pointerdown", () => { legendBox.hidden = true; });
 
+// --- the review views, in the same shell -------------------------------------------
+// One surface, not two: a second document meant a second render, a second link and a
+// second mental model for the same scan. The map answers "what reaches what"; these
+// answer "how many, of what kind, where" - a switch, not a separate page.
+const D = CONSOLE, panel = document.getElementById("panel");
+const pgwrap = document.getElementById("pgwrap"), viewer = document.getElementById("vw");
+const ROWS_PER_PAGE = 60;
+let mode = "map", cq = "", cstatus = "", shown = ROWS_PER_PAGE;
+// Opened to review, the first question is "what state is this in", and the commit filter
+// defaults to the newest commit - which routinely changed nothing drawable, leaving a
+// bare canvas that reads as a broken page. The map is one switch away.
+const OPENS_ON = "overview";
+
+viewer.innerHTML = [`<option value="map">Map — what reaches what</option>`,
+  `<option value="overview">Overview</option>`].concat(
+  D.sections.map(sec => `<option value="${esc(sec.key)}">${esc(sec.title)}` +
+    `${sec.unavailable ? "" : ` — ${sec.total ?? sec.rows.length}`}</option>`)).join("");
+
+function pills(counts) {
+  return ["connected","unresolved","unused","uncertain"]
+    .map(k => `<span class="pill ${k}">${k} ${counts[k] || 0}</span>`).join("");
+}
+
+function overviewHtml() {
+  const total = c => Object.values(c).reduce((a, n) => a + n, 0);
+  return `<h2>Overview</h2><p class="blurb">Two totals, each broken into the four
+    statuses. Every number is what the scan is willing to claim about this commit.</p>
+    <div class="cards">
+      <div class="card"><div class="k">Backend symbols</div><div class="v">${total(D.backend)}</div>
+        ${pills(D.backend)}</div>
+      <div class="card"><div class="k">Frontend symbols</div><div class="v">${total(D.frontend)}</div>
+        ${pills(D.frontend)}</div></div>
+    <h2 style="font-size:14px;margin:18px 0 8px">Backlog by kind</h2>
+    ${D.groups.length ? D.groups.map(g =>
+      `<div class="row"><span class="badge uncertain">${g[1]}</span>
+       <div class="t">${esc(g[0])}</div></div>`).join("")
+      : `<div class="gap">Nothing the scan is willing to claim.</div>`}
+    <p class="gloss">uncertain means the scan found no evidence either way. It is not a
+    claim that anything is dead.</p>`;
+}
+
+function renderPanel() {
+  if (mode === "overview") { panel.innerHTML = overviewHtml(); return; }
+  const sec = D.sections.find(x => x.key === mode);
+  if (!sec) return;
+  if (sec.unavailable) {
+    panel.innerHTML = `<h2>${esc(sec.title)}</h2><p class="blurb">${esc(sec.blurb)}</p>
+      <div class="gap">${esc(sec.unavailable)}</div>`;
+    return;
+  }
+  const needle = cq.toLowerCase();
+  const rows = sec.rows.filter(r => (!cstatus || r.status === cstatus) &&
+    (!needle || (r.label + " " + r.file + " " + r.kind).toLowerCase().includes(needle)));
+  const page = rows.slice(0, shown);
+  panel.innerHTML = `<h2>${esc(sec.title)}</h2><p class="blurb">${esc(sec.blurb)}</p>
+    <div class="tools">
+      <input id="cq" type="search" placeholder="Filter ${rows.length} rows" value="${esc(cq)}">
+      <select id="cst"><option value="">any status</option>
+        ${["unresolved","unused","uncertain","connected"].map(v =>
+          `<option value="${v}"${v === cstatus ? " selected" : ""}>${v}</option>`).join("")}
+      </select></div>
+    ${page.map(r => `<div class="row"><span class="badge ${esc(r.status)}">${esc(r.status)}</span>
+       <div class="t">${esc(r.label)}</div>
+       <div class="w">${esc(r.kind)}${r.file ? " · " + esc(r.file) +
+         (r.line ? ":" + r.line : "") : ""}</div>
+       ${r.note ? `<div class="n">${esc(r.note)}</div>` : ""}</div>`).join("")
+      || `<div class="gap">No rows match.</div>`}
+    ${rows.length > page.length
+      ? `<div class="more" id="cmore">Show more — ${page.length} of ${rows.length}</div>` : ""}
+    ${sec.total > sec.rows.length ? `<div class="gloss">Showing the first
+      ${sec.rows.length} of ${sec.total}. The rest are in the CLI:
+      <code>--check --format markdown</code>.</div>` : ""}`;
+
+  const box = document.getElementById("cq");
+  box.oninput = e => {
+    cq = e.target.value; shown = ROWS_PER_PAGE; renderPanel();
+    const again = document.getElementById("cq");
+    again.focus(); again.setSelectionRange(again.value.length, again.value.length);
+  };
+  document.getElementById("cst").onchange = e => {
+    cstatus = e.target.value; shown = ROWS_PER_PAGE; renderPanel();
+  };
+  const more = document.getElementById("cmore");
+  if (more) more.onclick = () => { shown += ROWS_PER_PAGE * 4; renderPanel(); };
+}
+
+function switchTo(next) {
+  mode = next;
+  const isMap = mode === "map";
+  panel.hidden = isMap; svg.style.display = isMap ? "" : "none";
+  document.querySelector(".zoom").hidden = !isMap;
+  document.getElementById("lg").hidden = !isMap;
+  document.querySelector(".crumbrow").hidden = !isMap;
+  pgwrap.hidden = !isMap;
+  closeSheet();
+  cq = ""; cstatus = ""; shown = ROWS_PER_PAGE;
+  if (isMap) draw(); else renderPanel();
+}
+
+viewer.onchange = e => switchTo(e.target.value);
+
 document.getElementById("up").onclick = () => { focus = null; view = {x:0,y:0,k:1}; draw(); };
 draw();
+viewer.value = OPENS_ON;
+switchTo(OPENS_ON);
 """
 
 
@@ -556,7 +692,33 @@ def _payload(connectivity_map: ConnectivityMap) -> str:
     return json.dumps(data).replace("</", "<\\/")
 
 
-def render(connectivity_map: ConnectivityMap) -> str:
+def _console_payload(console) -> str:
+    """The review sections, or an empty shell so the page still renders without them."""
+    from dataclasses import asdict
+
+    if console is None:
+        return json.dumps({"backend": {}, "frontend": {}, "groups": [], "sections": []})
+    # Rows carry a snippet the panel never draws, and a section can hold 1,500 of them.
+    # Shipping all of it cost 1.6 MB on a page a phone opens over a tunnel; the reader
+    # filters to find a row, and is told when a section is longer than what was sent.
+    limit = 400
+
+    def _section(section):
+        out = asdict(section)
+        rows = out.pop("rows")
+        out["rows"] = [{k: v for k, v in row.items() if k != "snippet"} for row in rows[:limit]]
+        out["total"] = len(rows)
+        return out
+
+    data = {
+        "backend": console.backend, "frontend": console.frontend,
+        "groups": [[title, count, gloss] for title, count, gloss in console.groups],
+        "sections": [_section(section) for section in console.sections],
+    }
+    return json.dumps(data).replace("</", "<\\/")
+
+
+def render(connectivity_map: ConnectivityMap, console=None) -> str:
     mode = (
         f"diff vs {_esc(connectivity_map.baseline_sha[:12])}"
         if connectivity_map.baseline_sha
@@ -580,9 +742,11 @@ def render(connectivity_map: ConnectivityMap) -> str:
         f'<div class="brand"><b>Signal Map</b>'
         f'<span class="meta">HEAD {_esc(connectivity_map.git_sha[:12])} · {_esc(mode)}</span>'
         f"</div>",
+        '<div class="filters"><label class="wide"><span>View</span>'
+        '<select id="vw"></select></label></div>',
         '<div class="filters">'
         '<label><span>Commit</span><select id="cm"></select></label>'
-        '<label><span>Page</span><select id="pg"></select></label></div>',
+        '<label id="pgwrap"><span>Page</span><select id="pg"></select></label></div>',
         '<div class="crumbrow"><button id="up" type="button" hidden>\u2190</button>'
         '<span id="crumb"></span>'
         '<input id="q" type="search" placeholder="Filter"></div>',
@@ -590,6 +754,7 @@ def render(connectivity_map: ConnectivityMap) -> str:
         "</header>",
         '<main class="main">',
         '<svg id="cv"></svg>',
+        '<div class="panel" id="panel" hidden></div>',
         '<div class="zoom"><button id="zo" type="button" aria-label="Zoom out">\u2212</button>'
         '<button id="zi" type="button" aria-label="Zoom in">+</button>'
         '<button id="zf" type="button" aria-label="Fit to screen">\u2316</button></div>',
@@ -600,6 +765,7 @@ def render(connectivity_map: ConnectivityMap) -> str:
         '<div id="dbody"></div></aside>',
         "</main>",
         f"<script>const MAPDATA={_payload(connectivity_map)};</script>",
+        f"<script>const CONSOLE={_console_payload(console)};</script>",
         f"<script>{_SCRIPT}</script>",
         "</body></html>",
     ])

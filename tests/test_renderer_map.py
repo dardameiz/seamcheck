@@ -221,3 +221,56 @@ class CommitContextTests(SimpleTestCase):
 
         self.assertIn("What this commit changed", out)
         self.assertIn('id="gone"', out)
+
+
+class MergedReviewViewTests(SimpleTestCase):
+    """The console's sections live in the map's shell: one document, one link."""
+
+    def _console(self):
+        from signal_map.console import Console, Row, Section
+
+        return Console(
+            git_sha="abc123def456", generated_at="2026-08-30T00:00:00", baseline_sha=None,
+            backend={"connected": 2}, frontend={"unresolved": 1},
+            counts={"connected": 2}, groups=[("Unused design tokens", 3, "")],
+            sections=[Section("dom", "DOM Wiring", "blurb", rows=[
+                Row(id="dom_attr:x", label="<script>bad</script>", kind="dom_attr",
+                    status="unresolved", file="t.html", line=9, note="n", snippet="s")
+            ])],
+        )
+
+    def test_the_review_sections_are_offered_beside_the_map(self):
+        out = map_html.render(_map(), console=self._console())
+
+        self.assertIn('<select id="vw">', out)
+        self.assertIn("DOM Wiring", out)
+
+    def test_row_text_is_escaped_before_it_reaches_innerHTML(self):
+        out = map_html.render(_map(), console=self._console())
+
+        self.assertIn("${esc(r.label)}", out)
+        self.assertNotIn("<script>bad</script>", out)
+
+    def test_a_row_snippet_is_not_shipped_because_nothing_draws_it(self):
+        # A section can hold 1,500 rows; the unused field cost 1.6 MB on a page a phone
+        # opens over a tunnel.
+        out = map_html.render(_map(), console=self._console())
+
+        self.assertNotIn('"snippet": "s"', out)
+        self.assertNotIn('"snippet":"s"', out)
+
+    def test_a_section_longer_than_what_was_sent_says_so(self):
+        out = map_html.render(_map(), console=self._console())
+
+        self.assertIn("Showing the first", out)
+        self.assertIn('"total"', out)
+
+    def test_the_page_renders_without_a_console_at_all(self):
+        out = map_html.render(_map())
+
+        self.assertIn('"sections": []', out)
+
+    def test_it_opens_on_the_summary_not_on_a_canvas_a_commit_may_have_emptied(self):
+        out = map_html.render(_map(), console=self._console())
+
+        self.assertIn('const OPENS_ON = "overview"', out)

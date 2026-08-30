@@ -175,7 +175,9 @@ def report(
     if fmt == "map":
         return _render_map(repo_root, ref)
     if fmt == "console":
-        return _render_console(repo_root, ref)
+        # The review sections live inside the map now: one document, one link, one render
+        # of the same scan. Kept as an alias so an existing caller does not break.
+        return _render_map(repo_root, ref)
     if fmt not in renderers and fmt not in ("map", "console"):
         raise ValueError(f"Unknown format {fmt!r}. Use one of: {', '.join(sorted(renderers))}.")
 
@@ -262,10 +264,12 @@ def _page_files(repo_root: str) -> dict[str, set[str]]:
 
 
 def _render_map(repo_root: str, ref: str) -> str:
+    from signal_map.console import build_console
     from signal_map.history import commit_series
     from signal_map.mapdata import build_map
     from signal_map.pagenames import page_names
     from signal_map.renderers import map_html
+    from signal_map.report import build_report
 
     graph = scan(repo_root)
     baseline = None
@@ -280,6 +284,13 @@ def _render_map(repo_root: str, ref: str) -> str:
         sha = current_git_sha(repo_root)
     except Exception:  # noqa: BLE001
         sha = "unknown"
+    # One document: the map and the review sections describe the same scan, and a second
+    # render of the same graph bought a second link and nothing else.
+    diff, baseline_message_sha, message = diff_against(graph, ref, repo_root)
+    console = build_console(graph, build_report(
+        graph=graph, diff=diff, entries=load_triage(repo_root), git_sha=sha,
+        baseline_sha=baseline_message_sha, baseline_message=message,
+    ))
     return map_html.render(
         build_map(graph, _page_files(repo_root), git_sha=sha,
                   baseline=baseline, baseline_sha=baseline_sha if baseline else None,
@@ -292,23 +303,6 @@ def _render_map(repo_root: str, ref: str) -> str:
                        # needs the first screenful, not the whole set.
                        "changes": entry.changes[:300], "change_total": len(entry.changes)}
                       for entry in commit_series(repo_root)
-                  ])
+                  ]),
+        console=console,
     )
-
-
-def _render_console(repo_root: str, ref: str) -> str:
-    from signal_map.console import build_console
-    from signal_map.renderers import console_html
-    from signal_map.report import build_report
-
-    graph = scan(repo_root)
-    diff, baseline_sha, message = diff_against(graph, ref, repo_root)
-    try:
-        sha = current_git_sha(repo_root)
-    except Exception:  # noqa: BLE001
-        sha = "unknown"
-    report = build_report(
-        graph=graph, diff=diff, entries=load_triage(repo_root), git_sha=sha,
-        baseline_sha=baseline_sha, baseline_message=message,
-    )
-    return console_html.render(build_console(graph, report))
