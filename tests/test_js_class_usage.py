@@ -122,3 +122,14 @@ class AppliedClassIsNeverAFindingTests(SimpleTestCase):
         edges = match_css_selectors([], [attr], [], set())
 
         self.assertEqual([e.status for e in edges], [Status.UNRESOLVED])
+
+
+class AppliedClassNeedsNoTemplateElementTests(SimpleTestCase):
+    def test_an_applied_class_produces_no_dom_match_finding(self):
+        # JavaScript that creates the element also creates the class; requiring a
+        # template attribute to match would report every generated element as broken.
+        from signal_map.dom_matcher import match_dom_selectors
+
+        usages = _extract("el.className = 'made-by-js';")
+
+        self.assertEqual(match_dom_selectors([], usages), [])

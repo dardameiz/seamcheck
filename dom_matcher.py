@@ -30,7 +30,9 @@ def match_dom_selectors(dom_attrs: list[Symbol], dom_selectors: list[Symbol]) ->
 
     edges: list[Edge] = []
     for selector in dom_selectors:
-        if selector.label == "<dynamic>":
+        # A runtime-built selector names nothing checkable, and a class JavaScript
+        # applies needs no template attribute to match - the JS creates the element.
+        if selector.label == "<dynamic>" or selector.sub.startswith("class:apply"):
             continue
         matched = attrs_by_key.get((_base_sub(selector), selector.label))
         if matched:
