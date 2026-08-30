@@ -255,8 +255,8 @@ class MergedReviewViewTests(SimpleTestCase):
         self.assertNotIn("<script>bad</script>", out)
 
     def test_a_row_snippet_is_not_shipped_because_nothing_draws_it(self):
-        # A section can hold 1,500 rows; the unused field cost 1.6 MB on a page a phone
-        # opens over a tunnel.
+        # A section can hold well over a thousand rows, and a field nothing draws is a
+        # megabyte and a half on a page meant to open on a phone.
         out = map_html.render(_map(), console=self._console())
 
         self.assertNotIn('"snippet": "s"', out)

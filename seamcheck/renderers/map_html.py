@@ -1026,9 +1026,9 @@ def _console_payload(console) -> str:
 
     if console is None:
         return json.dumps({"backend": {}, "frontend": {}, "groups": [], "sections": []})
-    # Rows carry a snippet the panel never draws, and a section can hold 1,500 of them.
-    # Shipping all of it cost 1.6 MB on a page a phone opens over a tunnel; the reader
-    # filters to find a row, and is told when a section is longer than what was sent.
+    # Rows carry a snippet the panel never draws, and a section can hold well over a
+    # thousand of them - together a megabyte and a half on a page meant to open on a
+    # phone. Send a screenful, and say so when a section is longer than what was sent.
     limit = 400
 
     def _section(section):

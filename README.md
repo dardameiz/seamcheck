@@ -1,171 +1,145 @@
 # Seamcheck
 
-Find the code your project no longer connects to — and the connections it only *thinks*
-it has.
+**Your AI wrote 400 lines. Which of them are actually wired to anything?**
 
-Seamcheck builds a connectivity graph of a Django + vanilla-JS project by parsing it:
-which URLs exist, which views they route to, which `fetch()` calls resolve to them, which
-DOM elements the templates declare and the JavaScript writes, and which CSS rules and
-design tokens anything still references. It reports what is connected, what resolves to
-nothing, what nothing references — and, crucially, what it **cannot tell**.
+Seamcheck reads a Django + JavaScript project and tells you what connects to what — which
+`fetch()` lands on which view, which template element the JS is reaching for, which CSS
+rule nothing has referenced since 2023. Then it tells you what it *couldn't* work out,
+which turns out to be the part that matters.
 
-## Why the fourth answer matters
+No SaaS. No upload. One command, one HTML file, and an exit code for CI.
 
-Most dead-code tools have three verdicts: used, unused, and a crash. Seamcheck has four,
-and the fourth is the one that makes it safe to act on:
+## The four answers
 
-| Status | Means |
+Every dead-code tool ever written has told you something was unused and been wrong, and
+you stopped trusting it. Seamcheck has a fourth answer:
+
+| | |
 |---|---|
-| `connected` | Something reaches this, and here is the evidence |
-| `unused` | Both sides of the contract are observable, and nothing uses it |
-| `unresolved` | Something reaches for this and it does not exist |
-| `uncertain` | The scan has no evidence either way — **not** a claim that it is dead |
+| `connected` | something reaches this — here's the file and line |
+| `unresolved` | something reaches for this and it isn't there |
+| `unused` | both ends are observable and nothing uses it |
+| **`uncertain`** | **no evidence either way. Not a claim it's dead.** |
 
-A page URL reached by `<a href>` or browser navigation looks identical to a dead one if
-you only parse `fetch()` calls. Seamcheck says `uncertain` and names the missing evidence
-source instead of guessing. On a real 700-URL project that distinction is the difference
-between a usable report and 668 false "delete me" findings.
+That last row is the whole product. A page reached by an `<a href>` looks exactly like a
+dead one if you only parse `fetch()` calls. Seamcheck says so instead of guessing. On a
+700-URL project that's the difference between a report you act on and 668 lies.
 
-## What it finds
+It also reports **its own coverage** — how much of each file it actually reasoned about.
+No other tool I've found will tell you where it wasn't looking.
 
-- **Multi-writer DOM elements** — more than one module writing the same element. Whichever
-  runs last wins, which is how a display bug survives being "fixed" in one of them.
-- **`fetch()` calls that resolve to no route**, including routes short-circuited in
-  `asgi.py` before Django's resolver ever runs.
-- **Response fields a view sends that no consumer reads**, and fields read that no view sends.
-- **CSS rules and custom-property tokens nothing references.**
-- **Scan Coverage** — which files the scan actually reasoned about, so "no findings" can be
-  distinguished from "never looked".
+## What it found in the project it was built on
+
+Not hypotheticals. Real bugs, in a real 36,000-symbol codebase, found while writing this:
+
+- Five CSS custom properties in a **loaded** stylesheet that resolve to nothing —
+  `--text-primary`, `--border-color` and friends. Those declarations render nothing today.
+- An endpoint reported missing that turned out to be **`<str:division_id>` matching a
+  deliberate `'all'` sentinel** — so I fixed the matcher instead of "fixing" the code.
+- 65 API routes whose path appears in no source file at all.
+- 46 DOM elements written by more than one module — the reason a display bug survives
+  being "fixed" in one of them.
 
 ## Install
 
 ```bash
-pip install seamcheck[models,mcp]
+pip install seamcheck
 ```
 
-Add it to `INSTALLED_APPS` and point `SEAMCHECK_CONFIG` at your project:
+Then two things in `settings.py`:
 
 ```python
-INSTALLED_APPS = [..., "django_extensions", "seamcheck"]
+INSTALLED_APPS = [..., "seamcheck"]
 
 SEAMCHECK_CONFIG = {
     "urlconf_module": "myproject.urls",
-    "asgi_module": "myproject.asgi",
-    "first_party_prefixes": ["myapp", "myproject"],
     "templates_root": "myapp/templates",
     "js_source_root": "myapp/static/js",
-    "js_vite_manifest": "myapp/static/dist/.vite/manifest.json",
     "css_source_root": "myapp/static/css",
-    "tailwind_build_output": "myapp/static/css/tailwind-output.css",
-    "management_commands_dirs": ["myapp/management/commands"],
-    "celery_app_module": "myproject.celery",
-    "app_configs": ["myapp.apps.MyAppConfig"],
+    "first_party_prefixes": ["myapp", "myproject"],
 }
 ```
 
-Every project-specific path lives in that dict. There are no hardcoded project names
-anywhere in the extractors.
+Every project-specific path lives in that dict. Nothing is hardcoded anywhere in the
+extractors — which is how this was lifted out of the project it grew in without touching
+a line of it.
 
-### Node dependency, stated plainly
-
-JavaScript and CSS extraction shell out to Node, using `acorn` and `postcss`. The `node`
-extra bundles a Node runtime for machines that lack one, but **the two npm parsers still
-have to be installed** (`npm install --save-dev acorn postcss`). Without Node, the Python
-side — URLs, views, models, signals, admin actions, template tags, reachability, Scan
-Coverage — still works; the JS/CSS extractors return nothing rather than failing.
+**You need Node on PATH.** The JS and CSS parsers run on it. You do *not* need npm or
+`node_modules` — acorn and postcss ship inlined in the wheel. If Node is missing,
+Seamcheck says so and gives you the Python half rather than dying.
 
 ## Use
 
 ```bash
-python manage.py seamcheck                    # scan, write the map, print a summary
-python manage.py seamcheck --json             # the graph, as JSON
-python manage.py seamcheck --check            # diff vs the last snapshot; exit 1 on findings
-python manage.py seamcheck --since main       # diff against another commit's snapshot
-python manage.py seamcheck --format console        # the browsable console, 8 sections
-python manage.py seamcheck --format map            # the visual connectivity map
-python manage.py seamcheck --format map --since REF  # what changed between commits
-python manage.py seamcheck --explain <symbol-id>
-python manage.py seamcheck --triage <symbol-id> --status approved --reason "..."
+python manage.py seamcheck                 # scan, summary, write the map
+python manage.py seamcheck --check         # exit 1 on new findings. This is the CI one.
+python manage.py seamcheck --format map    # the UI, one self-contained HTML file
+python manage.py seamcheck --explain <id>  # one symbol, with the code around it
 ```
+
+### The UI
+
+One file, no network, opens on a phone. A left rail of views; a canvas that draws
+**every symbol a page touches at once** — 1,366 of them on the biggest page here — with
+the broken ones filled in red so they find you rather than the other way round.
+
+Click any node and it lights the line through it: page → module → `fetch()` → URL →
+view, each hop with the real source, and a button to show the whole enclosing function.
+Or isolate that one chain and drop everything else.
+
+There's a **Files** view too — your actual folder tree, with a bar per file showing how
+many of its declarations Seamcheck reasoned about. Because "no findings" and "never
+looked" are not the same sentence.
 
 ```bash
-python manage.py seamcheck --format markdown   # digest for a chat or a PR comment
-python manage.py seamcheck --format html       # one self-contained file
-python manage.py seamcheck --format markdown --out FINDINGS.md
+python manage.py seamcheck --format map --serve            # open it from your phone
+python manage.py seamcheck --format map --serve --tunnel   # ...from anywhere
 ```
 
-The HTML report and the map are single files with no network requests — publish them
-wherever you like. Seamcheck never uploads anything.
+Nothing is uploaded. `--serve` is a socket on your machine that dies with the command.
 
-### Reading it on a phone
-
-The report is self-contained, so getting it onto a phone is a file-transfer problem, not a
-hosting one. Any of these work, and none of them send your code anywhere:
+### Per-commit
 
 ```bash
-python manage.py seamcheck --format map --serve
-# Open on any device on this network:
-#     http://192.168.1.38:57071/GLb_D7GyG_Bk
+python manage.py seamcheck --backfill 20     # scan the last 20 commits
 ```
 
-`--serve` holds the page open on your local network until you press Ctrl-C. Nothing is
-uploaded, nothing is written to disk, and the URL carries a random token so another device
-cannot stumble into it. The response is sent `no-store` and `noindex`.
+Now the map has a commit picker. Pick one and see what *that commit* changed — added,
+removed, status flipped — including things it deleted, which no longer exist to be drawn
+and get named instead.
 
-Or skip the server entirely: write the file with `--out`, then AirDrop it, drop it in a
-synced folder, or attach it to a message. It opens standalone on any device, offline,
-forever — that is the whole point of the single-file design.
-
-If you want it permanently reachable, publish the file to your own hosting. That step is
-deliberately yours: a static-analysis tool should never hold upload credentials.
-
-`--check` is CI-ready: it exits 1 only on `unresolved`/`unused` findings that are untriaged
-or explicitly confirmed. It never fails a build over `uncertain`.
-
-### Triage
-
-A finding you have looked at and accepted goes in `seamcheck/triage.json`, committed:
+### CI
 
 ```bash
-python manage.py seamcheck --triage "css_token_def:token:--legacy" \
-  --status approved --reason "kept for the vendored theme"
+python manage.py seamcheck --check --since $BASE_SHA
 ```
 
-The mark is keyed to a **content fingerprint of the evidence**, not to a symbol id. If the
-snippet, the status, or (for a multi-writer element) the set of writers changes, the
-approval expires and the finding comes back with a note saying why. You cannot silence a
-finding and have it stay silent through a real change.
+`1` = new findings. `2` = no baseline, so the gate didn't run. `0` = clean. That
+distinction matters: a gate that never ran is not a gate that passed.
 
-### MCP
+### Agents
 
-```bash
-python -m seamcheck.mcp_server
-```
+`seamcheck_check`, `seamcheck_report`, `seamcheck_explain`, `seamcheck_triage` over MCP,
+and an `AGENTS.md` that tells your agent the one rule that matters: **never delete
+something because it's `uncertain`.**
 
-Exposes `seamcheck_check`, `seamcheck_explain`, `seamcheck_triage` and `seamcheck_report` so an agent can
-check its own work before claiming a task is done.
+## What it can't do
 
-## Limitations
+Written down because a tool that hides its blind spots is worse than no tool:
 
-Stated, not hidden:
-
-- Not a CSS selector engine — combinator selectors (`.a .b`) match on segment presence.
-- Selectors and fetch targets built at runtime are `uncertain`, never guessed.
-- The CSS/JS extractor does not read `className = ...`, `classList.add(...)`,
-  `setAttribute('class', ...)`, or class literals inside JS template strings, so a class
-  applied by JavaScript looks unreferenced. `css_selector` findings over-report as a
-  result; the report surfaces this as a caveat next to the group rather than hiding it.
-- Field matching pairs one view function against a whole consuming module, so a field can
-  be proven read but not proven unread.
-- WebSocket payloads are out of scope.
-- Reachability follows imports and dotted-string module references (`include("app.urls")`),
-  but not modules loaded by a mechanism neither of those covers.
+- **Django + vanilla JS.** No React, Vue, or TypeScript yet.
+- **Celery, Redis, WebSockets and Stripe aren't traced.** Anything reached only through
+  those is invisible, and the UI says so rather than showing a confident zero.
+- **A URL built at runtime** stays `uncertain`. The prefix is recorded, never a guess.
+- **It has been run against one real project.** Mine. That's one more than most tools at
+  this stage and far fewer than you'd want.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Commits follow
-[Conventional Commits](https://www.conventionalcommits.org/).
+Issues and PRs welcome. One house rule, and it's the reason the tool is worth anything:
+**never make a claim the scan can't evidence.** If you can't prove it, it's `uncertain`,
+and the note says which evidence source was missing.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT.

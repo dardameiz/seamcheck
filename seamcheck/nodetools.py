@@ -19,8 +19,8 @@ import subprocess
 
 logger = logging.getLogger(__name__)
 
-# Parsers run once per batch of files, so a missing Node printed the same line ninety
-# times in one scan. The fact is about the parser, not about the batch.
+# Reported once per parser. These run once per batch of files, and the fact being
+# reported is about the parser, not about any one batch.
 _reported: set[str] = set()
 
 

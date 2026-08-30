@@ -3,8 +3,14 @@ from unittest import mock
 
 from django.test import SimpleTestCase
 
+import seamcheck
 from seamcheck import nodetools
 from seamcheck.nodetools import parser_path, run_parser
+
+# Located from the package, not from the working directory: an installed copy lives
+# wherever pip put it, and a relative "seamcheck/" only resolves when the tests happen
+# to be run from the repo root.
+PACKAGE = pathlib.Path(seamcheck.__file__).parent
 
 
 class ParserLocationTests(SimpleTestCase):
@@ -13,12 +19,12 @@ class ParserLocationTests(SimpleTestCase):
         # resolve against nothing; the only reason the source ever ran is that the
         # project it was written in had a node_modules beside it.
         for directory, name in (("js_tools", "parse_js"), ("css_tools", "parse_css")):
-            path = parser_path(str(pathlib.Path("seamcheck") / directory), name)
+            path = parser_path(str(PACKAGE / directory), name)
             self.assertTrue(path.endswith(f"{name}.bundle.mjs"), path)
 
     def test_both_bundles_actually_shipped(self):
         for directory, name in (("js_tools", "parse_js"), ("css_tools", "parse_css")):
-            bundle = pathlib.Path("seamcheck") / directory / f"{name}.bundle.mjs"
+            bundle = PACKAGE / directory / f"{name}.bundle.mjs"
             self.assertTrue(bundle.is_file(), f"{bundle} is missing")
             # Bundled means the dependency is inlined, not imported by name.
             source = bundle.read_text(encoding="utf-8", errors="replace")
@@ -51,7 +57,7 @@ class DegradationTests(SimpleTestCase):
         self.assertIn("no CSS symbols", logs.output[0])
 
     def test_it_says_so_once_not_once_per_batch(self):
-        # Parsers run per batch of files; the same line appeared ninety times in one scan.
+        # Parsers run once per batch of files, so an unguarded warning repeats per batch.
         with (
             mock.patch("subprocess.run", side_effect=FileNotFoundError),
             self.assertLogs("seamcheck.nodetools", "WARNING") as logs,
