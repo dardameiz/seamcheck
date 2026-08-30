@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from signal_map.renderers._shared import where
 from signal_map.report import Report, ReportGroup
 
 CAP = 10
@@ -12,14 +13,15 @@ _UNCERTAIN_GLOSS = (
 )
 
 
-def _where(symbol) -> str:
-    if not symbol.file:
-        return ""
-    return f"`{symbol.file}:{symbol.line}`" if symbol.line else f"`{symbol.file}`"
+def _code_span(symbol) -> str:
+    # Markdown-specific presentation of the shared location string; empty stays empty
+    # rather than rendering a pair of bare backticks around nothing.
+    location = where(symbol)
+    return f"`{location}`" if location else ""
 
 
 def _items(symbols, cap: int) -> list[str]:
-    lines = [f"- **{symbol.label}** — {_where(symbol)}".rstrip(" —") for symbol in symbols[:cap]]
+    lines = [f"- **{symbol.label}** — {_code_span(symbol)}".rstrip(" —") for symbol in symbols[:cap]]
     if len(symbols) > cap:
         lines.append(f"- _+{len(symbols) - cap} more_")
     return lines

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import html as html_lib
 
+from signal_map.renderers._shared import where
 from signal_map.report import Report, ReportGroup
 
 _UNCERTAIN_GLOSS = (
@@ -17,10 +18,10 @@ _UNCERTAIN_GLOSS = (
 
 _CSS = """
 :root { --bg:#faf9f6; --card:#fff; --ink:#14171c; --muted:#5d6673; --line:#e1e0db;
-        --sig:#1f7a8c; --crit:#a93b4b; --warn:#a8681b; }
+        --crit:#a93b4b; --warn:#a8681b; }
 @media (prefers-color-scheme: dark) {
   :root { --bg:#101317; --card:#191d23; --ink:#e8ebef; --muted:#98a1ae; --line:#2a2f37;
-          --sig:#4fb3c4; --crit:#e0788a; --warn:#d69b4c; }
+          --crit:#e0788a; --warn:#d69b4c; }
 }
 * { box-sizing:border-box; }
 body { margin:0; background:var(--bg); color:var(--ink); font-size:15px; line-height:1.55;
@@ -32,7 +33,7 @@ h2 { font-size:16px; margin:26px 0 10px; }
 .item { background:var(--card); border:1px solid var(--line); border-radius:8px;
         padding:10px 12px; margin-bottom:8px; }
 .label { font-weight:600; word-break:break-word; }
-.where, .note { color:var(--muted); font-size:12.5px;
+.where, .note { color:var(--muted); font-size:13px;
                 font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
 .note { font-family:inherit; margin-top:4px; }
 details { background:var(--card); border:1px solid var(--line); border-radius:8px;
@@ -73,18 +74,12 @@ def _esc(value) -> str:
     return html_lib.escape(str(value if value is not None else ""))
 
 
-def _where(symbol) -> str:
-    if not symbol.file:
-        return ""
-    return f"{symbol.file}:{symbol.line}" if symbol.line else symbol.file
-
-
 def _item(symbol) -> str:
     note = f'<div class="note">{_esc(symbol.note)}</div>' if symbol.note else ""
     return (
         '<div class="item">'
         f'<div class="label">{_esc(symbol.label)}</div>'
-        f'<div class="where">{_esc(_where(symbol))}</div>{note}</div>'
+        f'<div class="where">{_esc(where(symbol))}</div>{note}</div>'
     )
 
 

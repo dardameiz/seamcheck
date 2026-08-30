@@ -7,10 +7,10 @@ from signal_map.renderers import html
 from signal_map.report import Report, ReportGroup
 
 
-def _symbol(id_, kind="url", status=Status.UNRESOLVED):
+def _symbol(id_, kind="url", status=Status.UNRESOLVED, label=None, file="a.py", line=7, note=""):
     return Symbol(
-        id=id_, kind=kind, label=id_, sub="", file="a.py", line=7,
-        status=status, snippet=f"<{id_}>", chain=[id_], note="",
+        id=id_, kind=kind, label=id_ if label is None else label, sub="", file=file, line=line,
+        status=status, snippet=f"<{id_}>", chain=[id_], note=note,
     )
 
 
@@ -35,11 +35,22 @@ class HtmlRenderTests(SimpleTestCase):
 
     def test_it_makes_no_network_requests(self):
         # This surface exists for a phone with no access to the machine that built it.
-        # A single CDN or webfont reference breaks it exactly where it cannot report back.
+        # A single CDN, webfont, or fetch-shaped reference breaks it exactly where it
+        # cannot report back - so every syntax that can trigger a fetch gets its own
+        # entry, not just the two literal URL schemes.
         out = html.render(_report(new_findings=[_symbol("x")]))
 
-        for forbidden in ("http://", "https://", "<link", "<img", " src="):
-            self.assertNotIn(forbidden, out)
+        forbidden = (
+            "http://", "https://",       # absolute URL, either scheme
+            '"//', "url(//",             # protocol-relative URL in an attribute or CSS url()
+            "url(", "@import",           # any CSS/font/image reference or external stylesheet
+            "<link", "<img",             # stylesheet/preconnect/prefetch tag, image tag
+            "srcset",                    # responsive image attribute (no leading space, unlike src=)
+            "href=",                     # anchor/link/SVG <use href="..."> reference
+            "src=",                      # any fetching attribute: script, img, iframe, audio, video
+        )
+        for pattern in forbidden:
+            self.assertNotIn(pattern, out)
 
     def test_groups_collapse_without_javascript(self):
         group = ReportGroup("url", Status.UNRESOLVED, "URLs", [_symbol("u1")], triaged=0)
@@ -99,3 +110,68 @@ class HtmlRenderTests(SimpleTestCase):
         out = html.render(_report(baseline_sha=None, baseline_message="No baseline stored yet."))
 
         self.assertIn("No baseline stored yet.", out)
+
+    def test_no_baseline_falls_back_when_the_message_is_empty(self):
+        # baseline_message is only populated when baseline_sha is None; the fixture's
+        # default is "" - this pins the fallback sentence for that not-yet-set state.
+        out = html.render(_report(baseline_sha=None, baseline_message=""))
+
+        self.assertIn("No baseline to compare against.", out)
+
+    def test_note_is_escaped(self):
+        # note is source-adjacent free text (e.g. why a symbol was triaged) and is just
+        # as attacker/typo-reachable as label - the note branch only renders when note
+        # is truthy, so every prior fixture (note="") skipped it entirely.
+        hostile = '<script>alert("note")</script>'
+        out = html.render(_report(new_findings=[_symbol("n1", note=hostile)]))
+
+        self.assertNotIn('<script>alert("note")', out)
+        self.assertIn(html_lib.escape(hostile), out)
+
+    def test_group_title_is_escaped(self):
+        hostile = 'URLs & <b>"unsafe"</b>'
+        group = ReportGroup("url", Status.UNRESOLVED, hostile, [_symbol("u1")], triaged=0)
+
+        out = html.render(_report(groups=[group]))
+
+        self.assertNotIn("<b>\"unsafe\"</b>", out)
+        self.assertIn(html_lib.escape(hostile), out)
+
+    def test_triage_invalidated_fields_are_escaped(self):
+        # symbol_id and note come straight from a dict built off scanned project data,
+        # not a Symbol - a separate interpolation site from the two above.
+        out = html.render(_report(triage_invalidated=[
+            {"symbol_id": "<sym & id>", "note": 'no longer <valid> & "true"'},
+        ]))
+
+        self.assertNotIn("<sym & id>", out)
+        self.assertNotIn("no longer <valid>", out)
+        self.assertIn(html_lib.escape("<sym & id>"), out)
+        self.assertIn(html_lib.escape('no longer <valid> & "true"'), out)
+
+    def test_where_has_no_trailing_colon_when_there_is_no_line(self):
+        out = html.render(_report(new_findings=[_symbol("n1", file="b.py", line=None)]))
+
+        self.assertIn("b.py", out)
+        self.assertNotIn("b.py:", out)
+
+    def test_where_is_blank_when_there_is_no_file(self):
+        out = html.render(_report(new_findings=[_symbol("n1", file="", line=None)]))
+
+        # The label div always renders; assert the immediately-following where div is
+        # empty rather than merely absent from the whole page (git_sha etc. would still
+        # make a bare assertNotIn("b.py") pass even if _where crashed instead of
+        # returning "").
+        self.assertIn('<div class="where"></div>', out)
+
+    def test_group_triaged_count_is_shown(self):
+        group = ReportGroup("url", Status.UNRESOLVED, "URLs", [_symbol("u1")], triaged=3)
+
+        out = html.render(_report(groups=[group]))
+
+        self.assertIn("3 triaged", out)
+
+    def test_resolved_count_is_shown(self):
+        out = html.render(_report(resolved=[_symbol("r1"), _symbol("r2")]))
+
+        self.assertIn("Resolved since the baseline (2)", out)

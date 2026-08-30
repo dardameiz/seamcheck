@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from signal_map.renderers._shared import where
 from signal_map.report import Report, ReportGroup
 
 CAP = 5
@@ -9,14 +10,8 @@ CAP = 5
 _UNCERTAIN_GLOSS = "uncertain = no evidence either way, not a claim that it is dead"
 
 
-def _where(symbol) -> str:
-    if not symbol.file:
-        return ""
-    return f"{symbol.file}:{symbol.line}" if symbol.line else symbol.file
-
-
 def _finding_lines(symbols, cap: int) -> list[str]:
-    lines = [f"    {symbol.label:<34} {_where(symbol)}".rstrip() for symbol in symbols[:cap]]
+    lines = [f"    {symbol.label:<34} {where(symbol)}".rstrip() for symbol in symbols[:cap]]
     if len(symbols) > cap:
         lines.append(f"    ... +{len(symbols) - cap} more")
     return lines
