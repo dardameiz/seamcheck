@@ -164,6 +164,10 @@ def extract_dom_selectors(js_files: list[str]) -> list[Symbol]:
 
 
 _SET_PROPERTY = "setProperty"
+# CSS-in-JS: a stylesheet built as a string and injected still consumes tokens, and a
+# CSS-only scan cannot see it. Without this, a token set by JS and read by JS-embedded
+# CSS is reported unused while working perfectly.
+_VAR_USE_RE = re.compile(r"var\(\s*(--[\w-]+)")
 
 
 def extract_js_css_tokens(js_files: list[str]) -> list[Symbol]:
@@ -207,6 +211,25 @@ def extract_js_css_tokens(js_files: list[str]) -> list[Symbol]:
                     note="Defined at runtime by JavaScript, not in any stylesheet.",
                 )
             )
+
+        # Token *uses* inside any string this module holds - injected stylesheets,
+        # template literals, inline style text.
+        for node, _enclosing in _walk(ast_root):
+            for text in _literal_strings(node):
+                for name in _VAR_USE_RE.findall(text):
+                    symbol_id = f"css_token_use:token:{name}"
+                    if symbol_id in seen:
+                        continue
+                    seen.add(symbol_id)
+                    symbols.append(
+                        Symbol(
+                            id=symbol_id, kind="css_token_use", label=name, sub="token",
+                            file=path, line=((node.get("loc") or {}).get("start") or {}).get("line"),
+                            status=Status.UNCERTAIN, snippet=f"var({name})",
+                            chain=[os.path.basename(path), name],
+                            note="Consumed by CSS that JavaScript injects.",
+                        )
+                    )
     return symbols
 
 

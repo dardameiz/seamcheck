@@ -146,8 +146,8 @@ def run_scan(
         js_tokens = extract_js_css_tokens(js_files)
         symbols += js_tokens
         edges += match_css_tokens(
-            [s for s in css_symbols if s.kind == "css_token_def"] + js_tokens,
-            [s for s in css_symbols if s.kind == "css_token_use"],
+            [s for s in css_symbols + js_tokens if s.kind == "css_token_def"],
+            [s for s in css_symbols + js_tokens if s.kind == "css_token_use"],
         )
 
     graph = Graph(symbols=classify(symbols, edges), edges=edges)

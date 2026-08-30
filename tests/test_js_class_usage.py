@@ -133,3 +133,28 @@ class AppliedClassNeedsNoTemplateElementTests(SimpleTestCase):
         usages = _extract("el.className = 'made-by-js';")
 
         self.assertEqual(match_dom_selectors([], usages), [])
+
+
+class JsInjectedCssTokenTests(SimpleTestCase):
+    def test_a_var_reference_inside_injected_css_counts_as_a_use(self):
+        # stats_manager.js sets --fall-duration and consumes it in a stylesheet it
+        # injects. Reading only .css files reported that working token as unused.
+        import tempfile
+
+        from signal_map.dom_matcher import match_css_tokens
+        from signal_map.extractors.dom_js_extractor import extract_js_css_tokens
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as handle:
+            handle.write(
+                "el.style.setProperty('--fall-duration', d);\n"
+                "sheet.textContent = `.confetti { animation-duration: var(--fall-duration); }`;"
+            )
+            path = handle.name
+
+        symbols = extract_js_css_tokens([path])
+        defs = [s for s in symbols if s.kind == "css_token_def"]
+        uses = [s for s in symbols if s.kind == "css_token_use"]
+        edges = match_css_tokens(defs, uses)
+
+        self.assertEqual([s.label for s in defs], ["--fall-duration"])
+        self.assertEqual([s.label for s in uses], ["--fall-duration"])
+        self.assertEqual([e.status for e in edges], [Status.CONNECTED])
