@@ -17,6 +17,7 @@ from signal_map.dom_matcher import (
 from signal_map.extractors.asgi_extractor import extract_asgi_routes
 from signal_map.extractors.css_extractor import extract_css
 from signal_map.extractors.django_extractor import extract_django_urls_views
+from signal_map.extractors.django_models_extractor import extract_django_models
 from signal_map.extractors.dom_js_extractor import (
     extract_dom_selectors,
     extract_js_class_usages,
@@ -103,6 +104,7 @@ def run_scan(
     entry_point_files: set[str] | None = None,
     asgi_file: str | None = None,
     first_party_prefixes: list[str] | None = None,
+    app_labels: list[str] | None = None,
     template_files: list[str] | None = None,
     css_files: list[str] | None = None,
     tailwind_build_classes: set[str] | None = None,
@@ -110,6 +112,11 @@ def run_scan(
     django_symbols, routing_edges = extract_django_urls_views(urlconf_module, first_party_prefixes)
     if asgi_file:
         django_symbols = django_symbols + extract_asgi_routes(asgi_file)
+
+    if app_labels:
+        # Model symbols were extracted and tested from the start but never reached the
+        # graph, so the Django-internals view had no models in it at all.
+        django_symbols = django_symbols + extract_django_models(app_labels)
 
     js_symbols, js_edges = extract_js(js_entry_files, js_project_root)
     match_edges = match_js_to_django(django_symbols, js_symbols)

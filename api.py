@@ -79,6 +79,7 @@ def scan(repo_root: str = ".") -> Graph:
         entry_point_files=_entry_point_files(config, repo_root),
         asgi_file=asgi_file if asgi_file and os.path.isfile(asgi_file) else None,
         first_party_prefixes=config.get("first_party_prefixes"),
+        app_labels=[label.split(".")[0] for label in config.get("app_configs", [])] or None,
         template_files=template_files,
         css_files=css_files,
         tailwind_build_classes=(
@@ -173,7 +174,9 @@ def report(
     }
     if fmt == "map":
         return _render_map(repo_root, ref)
-    if fmt not in renderers:
+    if fmt == "console":
+        return _render_console(repo_root, ref)
+    if fmt not in renderers and fmt not in ("map", "console"):
         raise ValueError(f"Unknown format {fmt!r}. Use one of: {', '.join(sorted(renderers))}.")
 
     if graph is None:
@@ -279,3 +282,21 @@ def _render_map(repo_root: str, ref: str) -> str:
         build_map(graph, _page_files(repo_root), git_sha=sha,
                   baseline=baseline, baseline_sha=baseline_sha if baseline else None)
     )
+
+
+def _render_console(repo_root: str, ref: str) -> str:
+    from signal_map.console import build_console
+    from signal_map.renderers import console_html
+    from signal_map.report import build_report
+
+    graph = scan(repo_root)
+    diff, baseline_sha, message = diff_against(graph, ref, repo_root)
+    try:
+        sha = current_git_sha(repo_root)
+    except Exception:  # noqa: BLE001
+        sha = "unknown"
+    report = build_report(
+        graph=graph, diff=diff, entries=load_triage(repo_root), git_sha=sha,
+        baseline_sha=baseline_sha, baseline_message=message,
+    )
+    return console_html.render(build_console(graph, report))

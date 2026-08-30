@@ -34,7 +34,8 @@ class Command(BaseCommand):
             # SystemExit) for call_command() invocations, so argparse-level validation
             # can't produce the SystemExit callers of an invalid --format expect.
             # _format_report() validates instead, via api.report()'s ValueError.
-            help="Output format: terminal, markdown, html, json. json emits the whole graph, as --json does.",
+            help="Output format: terminal, markdown, html, json, map, console. "
+                 "json emits the whole graph, as --json does.",
         )
         parser.add_argument("--out", default=None, help="Write to PATH instead of stdout ('-' for stdout).")
 

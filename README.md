@@ -81,6 +81,7 @@ python manage.py dump_connectivity_map                    # scan, write the map,
 python manage.py dump_connectivity_map --json             # the graph, as JSON
 python manage.py dump_connectivity_map --check            # diff vs the last snapshot; exit 1 on findings
 python manage.py dump_connectivity_map --since main       # diff against another commit's snapshot
+python manage.py dump_connectivity_map --format console        # the browsable console, 8 sections
 python manage.py dump_connectivity_map --format map            # the visual connectivity map
 python manage.py dump_connectivity_map --format map --since REF  # what changed between commits
 python manage.py dump_connectivity_map --explain <symbol-id>
