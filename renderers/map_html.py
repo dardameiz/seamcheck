@@ -66,6 +66,21 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:14px; overflo
      border:1px solid var(--line); background:var(--bg); color:var(--ink); }
 .note { padding:0 12px 8px; font-size:11.5px; color:var(--muted); }
 .note:empty { display:none; }
+/* A deleted symbol is in no current page, so no canvas can show it. Naming it here is
+   the difference between "this commit removed one selector" and an empty screen. */
+.gone { padding:0 12px 9px; font-size:11.5px; }
+.gone:empty { display:none; }
+.gone b { display:block; font-size:9.5px; text-transform:uppercase; letter-spacing:.09em;
+          color:var(--muted); margin-bottom:3px; font-weight:500; }
+.gone .ch { font-family:ui-monospace,Menlo,monospace; word-break:break-all;
+            margin-bottom:3px; color:var(--ink); }
+.gone .ch i { display:inline-block; min-width:62px; font-style:normal; font-size:10px;
+              text-transform:uppercase; letter-spacing:.05em; }
+.gone .ch.added i { color:var(--ok); }
+.gone .ch.removed i { color:var(--crit); }
+.gone .ch.status i { color:var(--warn); }
+.gone .ch span { color:var(--muted); }
+.gone { max-height:26dvh; overflow-y:auto; }
 
 .main { flex:1 1 auto; position:relative; min-height:0; }
 svg { position:absolute; inset:0; width:100%; height:100%; display:block;
@@ -100,6 +115,19 @@ svg.drag { cursor:grabbing; }
 .sheet .row { color:var(--muted); font-size:12px; margin-bottom:4px;
               font-family:ui-monospace,Menlo,monospace; word-break:break-all; }
 .sheet .note { padding:0; margin-top:8px; font-family:inherit; }
+.sheet .lbl { font-size:9.5px; text-transform:uppercase; letter-spacing:.09em;
+              color:var(--muted); margin:14px 0 6px; }
+/* One row per hop, joined by a rule down the left, so the walk reads as a route. */
+.hop { border-left:2px solid var(--line); padding:0 0 9px 10px; position:relative; }
+.hop.at { border-left-color:var(--sig); }
+.hop .hk { font-size:9.5px; text-transform:uppercase; letter-spacing:.07em; color:var(--muted); }
+.hop .hl { font-size:12.5px; font-family:ui-monospace,Menlo,monospace; word-break:break-all; }
+.hop.at .hl { font-weight:700; color:var(--sig); }
+.hop .hf { font-size:11px; color:var(--muted); word-break:break-all;
+           font-family:ui-monospace,Menlo,monospace; }
+.hop pre { margin:5px 0 0; padding:6px 8px; background:var(--bg); border:1px solid var(--line);
+           border-radius:6px; font-size:11px; overflow-x:auto; white-space:pre-wrap;
+           word-break:break-all; }
 .sheet .x { position:absolute; top:8px; right:10px; width:30px; height:30px;
             border-radius:8px; border:1px solid var(--line); background:var(--bg);
             color:var(--ink); cursor:pointer; }
@@ -296,13 +324,57 @@ svg.addEventListener("click", e => {
 
 function closeSheet() { sheet.hidden = true; }
 
+// The route that arrives at a node, and the ones leaving it. A node on its own says
+// "this exists"; the question a reader actually has is where the browser started and
+// where it ended up, so the sheet reconstructs that walk from the edges.
+function routes(id) {
+  const p = PAGES[current];
+  const back = new Map(), fwd = new Map();
+  p.edges.forEach(e => {
+    if (!back.has(e.target)) back.set(e.target, []);
+    if (!fwd.has(e.source)) fwd.set(e.source, []);
+    back.get(e.target).push(e.source);
+    fwd.get(e.source).push(e.target);
+  });
+  // Shortest walk back to the page node: the frontend end of the chain.
+  const seen = new Set([id]), queue = [[id]];
+  let inbound = [id];
+  while (queue.length) {
+    const path = queue.shift(), head = path[path.length - 1];
+    if ((byId.get(head) || {}).kind === "page") { inbound = path; break; }
+    (back.get(head) || []).forEach(prev => {
+      if (seen.has(prev)) return;
+      seen.add(prev); queue.push([...path, prev]);
+    });
+  }
+  // Edges are walkable both ways, so a node that reaches this one comes back as
+  // something it reaches. Listing it twice makes the route look like a loop.
+  const path = inbound.slice().reverse();
+  const seenOnPath = new Set(path);
+  return {inbound: path,
+          outbound: (fwd.get(id) || []).filter(x => !seenOnPath.has(x)).slice(0, 12)};
+}
+
+function hop(id, here) {
+  const n = byId.get(id); if (!n) return "";
+  return `<div class="hop${id === here ? " at" : ""}">
+    <div class="hk">${esc(n.kind)}</div>
+    <div class="hl">${esc(n.label)}</div>
+    ${n.file ? `<div class="hf">${esc(n.file)}${n.line ? ":" + n.line : ""}</div>` : ""}
+    ${n.snippet ? `<pre>${esc(n.snippet)}</pre>` : ""}</div>`;
+}
+
 function show(id) {
   const n = byId.get(id); if (!n) return;
   const ch = CHANGED[id];
+  const {inbound, outbound} = routes(id);
   dbody.innerHTML = `<h2>${esc(n.label)}</h2>
     <div class="row">${esc(n.kind)} · ${esc(n.status)}${ch ? " · " + esc(ch) : ""}</div>
     ${n.file ? `<div class="row">${esc(n.file)}${n.line ? ":" + n.line : ""}</div>` : ""}
-    ${n.note ? `<div class="note">${esc(n.note)}</div>` : ""}`;
+    ${n.note ? `<div class="note">${esc(n.note)}</div>` : ""}
+    <div class="lbl">Path — browser to backend</div>
+    ${inbound.map(step => hop(step, id)).join("")}
+    ${outbound.length ? `<div class="lbl">Reaches</div>${outbound.map(step => hop(step, id)).join("")}` : ""}`;
   sheet.hidden = false;
 }
 document.getElementById("dx").onclick = closeSheet;
@@ -371,11 +443,17 @@ document.getElementById("q").addEventListener("input", e => {
 });
 // --- the commit picker -------------------------------------------------------------
 const picker = document.getElementById("cm"), note = document.getElementById("cmnote");
+const gone = document.getElementById("gone");
+
+// "2026-08-30T14:18:06+02:00" -> "2026-08-30 14:18". The date alone cannot separate two
+// commits made the same afternoon, which is most of them.
+const when = iso => String(iso || "").replace("T", " ").slice(0, 16);
 
 function fillPicker() {
   const opts = [`<option value="">Everything in this scan</option>`];
   COMMITS.forEach((c, i) => opts.push(
-    `<option value="${i}">${esc(c.sha.slice(0, 8))} · ${esc(c.subject)}</option>`));
+    `<option value="${i}">${c.head ? "HEAD · " : ""}${esc(c.sha.slice(0, 8))} · ` +
+    `${esc(when(c.date))} · ${esc(c.subject)}</option>`));
   picker.innerHTML = opts.join("");
   if (!COMMITS.length) {
     picker.disabled = true;
@@ -393,17 +471,27 @@ function selectCommit(index) {
   const c = COMMITS[index];
   if (!c) {
     CHANGED = MAPDATA.changed; only = false;
-    note.textContent = "";
+    note.textContent = ""; gone.innerHTML = "";
   } else {
     CHANGED = c.changed; only = true;
     const n = countsFor(c.changed);
     const total = n.added + n.removed + n.status;
     note.textContent = !c.baseline
-      ? "Earliest scanned commit — nothing before it to compare against."
+      ? `${when(c.date)} — earliest scanned commit, nothing before it to compare against.`
       : total === 0
-      ? `No scanned symbol changed since ${c.baseline.slice(0, 8)}.`
-      : `${n.added} added · ${n.removed} removed · ${n.status} changed status, ` +
-        `vs ${c.baseline.slice(0, 8)}`;
+      ? `${when(c.date)} — no scanned symbol changed since ${c.baseline.slice(0, 8)}.`
+      : `${when(c.date)} · ${n.added} added · ${n.removed} removed · ` +
+        `${n.status} changed status, vs ${c.baseline.slice(0, 8)}`;
+    // Every change, named. The canvas draws today's code, so it shows only the ones
+    // that survived to today; this list is the whole commit either way.
+    const list = c.changes || [], more = (c.change_total || list.length) - list.length;
+    gone.innerHTML = list.length
+      ? `<b>What this commit changed</b>` + list.map(d =>
+          `<div class="ch ${esc(d.change)}"><i>${esc(d.change)}</i> ${esc(d.label)}` +
+          ` <span>${esc(d.kind)}${d.file ? " · " + esc(d.file) +
+          (d.line ? ":" + d.line : "") : ""}</span></div>`
+        ).join("") + (more > 0 ? `<div class="ch"><i></i>+${more} more</div>` : "")
+      : "";
   }
   // Every page says how much of this commit is in it, so the picker itself shows where
   // to look instead of making a reader open each page to find out.
@@ -416,6 +504,10 @@ function selectCommit(index) {
 picker.onchange = e => selectCommit(e.target.value === "" ? -1 : Number(e.target.value));
 fillPicker();
 fillPages(null);
+// Open on the newest scanned commit, not on the whole graph. The question this page is
+// usually opened to answer - in CI, or after someone else pushed - is "what did the last
+// commit do", and making a reader pick that every time buries it.
+if (COMMITS.length) { picker.value = "0"; selectCommit(0); }
 
 // --- the colour key, out of the canvas's way until asked for -------------------------
 const legendBox = document.getElementById("legend");
@@ -447,7 +539,7 @@ def _payload(connectivity_map: ConnectivityMap) -> str:
                     {
                         "id": node.id, "label": node.label, "kind": node.kind,
                         "status": node.status, "file": node.file, "line": node.line,
-                        "note": node.note, "snippet": "",
+                        "note": node.note, "snippet": node.snippet,
                     }
                     for node in page.nodes
                 ],
@@ -486,14 +578,15 @@ def render(connectivity_map: ConnectivityMap) -> str:
         f"<style>{_CSS}</style></head><body>",
         '<header class="top">',
         f'<div class="brand"><b>Signal Map</b>'
-        f'<span class="meta">{_esc(connectivity_map.git_sha[:12])} · {_esc(mode)}</span></div>',
+        f'<span class="meta">HEAD {_esc(connectivity_map.git_sha[:12])} · {_esc(mode)}</span>'
+        f"</div>",
         '<div class="filters">'
         '<label><span>Commit</span><select id="cm"></select></label>'
         '<label><span>Page</span><select id="pg"></select></label></div>',
         '<div class="crumbrow"><button id="up" type="button" hidden>\u2190</button>'
         '<span id="crumb"></span>'
         '<input id="q" type="search" placeholder="Filter"></div>',
-        '<div class="note" id="cmnote"></div>',
+        '<div class="note" id="cmnote"></div><div class="gone" id="gone"></div>',
         "</header>",
         '<main class="main">',
         '<svg id="cv"></svg>',

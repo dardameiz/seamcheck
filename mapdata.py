@@ -39,6 +39,9 @@ class MapNode:
     file: str = ""
     line: int | None = None
     note: str = ""
+    # The line of source the symbol was read from. Truncated: this ships to a browser
+    # once per node, and the map already carries thousands of them.
+    snippet: str = ""
 
 
 @dataclass
@@ -78,6 +81,7 @@ def _node(symbol: Symbol) -> MapNode:
     label = symbol.label if (symbol.label or "").strip() else "/"
     return MapNode(
         id=symbol.id, label=label, kind=symbol.kind, status=symbol.status.value,
+        snippet=(symbol.snippet or "")[:200],
         file=symbol.file, line=symbol.line, note=symbol.note,
     )
 

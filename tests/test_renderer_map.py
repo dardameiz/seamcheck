@@ -163,3 +163,61 @@ class MobileLayoutTests(SimpleTestCase):
 
     def test_double_tap_zooms_because_a_phone_has_no_wheel(self):
         self.assertIn("lastTap", map_html.render(_map()))
+
+
+class EvidencePathTests(SimpleTestCase):
+    def test_a_node_ships_the_source_line_it_was_read_from(self):
+        node = MapNode("f", "fetch()", "fetch_target", "connected",
+                       file="a.js", line=3, snippet='fetch("/api/x/")')
+        built = _map(pages=[PageMap("p", [node], [])])
+
+        self.assertIn('fetch(\\"/api/x/\\")', map_html.render(built))
+
+    def test_the_sheet_reconstructs_the_walk_from_browser_to_backend(self):
+        # A node alone says "this exists". The question a reader has is where the browser
+        # started and where it ended up.
+        out = map_html.render(_map())
+
+        self.assertIn("Path — browser to backend", out)
+        self.assertIn("function routes(id)", out)
+
+    def test_a_node_that_reaches_this_one_is_not_listed_as_one_it_reaches(self):
+        out = map_html.render(_map())
+
+        self.assertIn("seenOnPath", out)
+
+
+class CommitContextTests(SimpleTestCase):
+    def _commits(self):
+        return [
+            {"sha": "a" * 40, "subject": "second", "date": "2026-08-30T14:29:00+02:00",
+             "symbols": 2, "changed": {"url:x": "removed"}, "baseline": "b" * 40,
+             "head": True, "changes": [
+                 {"id": "url:x", "label": "x", "kind": "url", "file": "u.py",
+                  "line": 4, "change": "removed"}], "change_total": 1},
+        ]
+
+    def test_a_commit_is_offered_with_its_time_not_only_its_date(self):
+        # Two commits made the same afternoon are two different answers to "which one am
+        # I looking at"; the date alone cannot separate them.
+        out = map_html.render(_map(commits=self._commits()))
+
+        self.assertIn("const when = iso =>", out)
+        self.assertIn("2026-08-30T14:29:00+02:00", out)
+
+    def test_the_scanned_head_is_named_in_the_header(self):
+        self.assertIn("HEAD abc123def456", map_html.render(_map()))
+
+    def test_it_opens_on_the_newest_commit_not_on_the_whole_graph(self):
+        out = map_html.render(_map(commits=self._commits()))
+
+        self.assertIn('picker.value = "0"; selectCommit(0);', out)
+
+    def test_a_change_that_no_longer_exists_is_still_named(self):
+        # The canvas draws today's code. A symbol this commit deleted - or added and a
+        # later commit took away - is on no page, and an empty canvas under a note
+        # claiming two things changed reads as a broken page.
+        out = map_html.render(_map(commits=self._commits()))
+
+        self.assertIn("What this commit changed", out)
+        self.assertIn('id="gone"', out)

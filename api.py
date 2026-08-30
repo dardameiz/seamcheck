@@ -287,7 +287,10 @@ def _render_map(repo_root: str, ref: str) -> str:
                   commits=[
                       {"sha": entry.sha, "subject": entry.subject, "date": entry.date,
                        "symbols": entry.symbols, "changed": entry.changed,
-                       "baseline": entry.baseline_sha}
+                       "baseline": entry.baseline_sha, "head": entry.sha == sha,
+                       # Capped: a large refactor can change thousands, and a browser
+                       # needs the first screenful, not the whole set.
+                       "changes": entry.changes[:300], "change_total": len(entry.changes)}
                       for entry in commit_series(repo_root)
                   ])
     )

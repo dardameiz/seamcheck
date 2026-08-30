@@ -36,6 +36,11 @@ class CommitEntry:
     symbols: int
     # node id -> "added" | "removed" | "status", against the previous scanned commit.
     changed: dict[str, str] = field(default_factory=dict)
+    # Every change this commit made, carried in full. The canvas draws today's code, so
+    # it can only show a change that survived to today: a symbol this commit deleted, or
+    # one it added that a later commit took away again, exists on no page and would
+    # otherwise render as an empty screen under a note claiming two things changed.
+    changes: list[dict] = field(default_factory=list)
     baseline_sha: str | None = None
 
 
@@ -67,23 +72,31 @@ def _topo_rank(repo_root: str) -> dict[str, int]:
 
 
 def _commit_order(shas: list[str], repo_root: str) -> list[tuple[int, str, str, str]]:
-    """(rank, sha, date, subject) for every sha git still knows, oldest first.
+    """(sort key, sha, date, subject) for every sha git still knows, oldest first.
 
-    Ordered by ancestry, not by commit time. Two commits made in the same second share a
-    timestamp - routine during a rebase, a script, or CI - and sorting those by timestamp
-    falls back to comparing the sha, which puts a child before its parent and inverts the
-    diff. A commit git cannot rank (orphaned, from another clone) falls back to its time,
-    placed after everything ranked.
+    Ordered by commit time, because "the last commit" means the most recent one and a
+    reader opening this asks for it by that name. Pure ancestry order would answer with
+    whichever branch git chose to walk first - with two branches scanned it put a tool
+    commit ahead of work committed two hours later.
+
+    Ancestry breaks the ties. Two commits made in the same second share a timestamp -
+    routine during a rebase, a script or CI - and sorting only by time falls back to
+    comparing the sha, which puts a child before its parent and inverts the diff.
+
+    Ordering is display only: a commit's baseline is its nearest scanned ancestor, found
+    from the parent graph, so no diff depends on how this list happens to sort.
     """
     rank = _topo_rank(repo_root)
     known = []
     for sha in shas:
         try:
-            line = _git(["show", "-s", "--format=%ct\x1f%cs\x1f%s", sha], repo_root)
+            # %cI, not %cs: two commits an hour apart on the same day are two different
+            # answers to "which one am I looking at".
+            line = _git(["show", "-s", "--format=%ct\x1f%cI\x1f%s", sha], repo_root)
         except subprocess.CalledProcessError:
             continue  # rebased away, or from another clone - not this history
         stamp, date, subject = line.split("\x1f", 2)
-        known.append((rank.get(sha, len(rank) + int(stamp)), sha, date, subject))
+        known.append(((int(stamp), rank.get(sha, 0)), sha, date, subject))
     return sorted(known)
 
 
@@ -99,6 +112,25 @@ def _identity(symbol) -> str:
     A diff that loud about a line shift hides the one real change inside it.
     """
     return _LINE_SUFFIX.sub("", symbol.id) if symbol.line else symbol.id
+
+
+def _detail(symbol, change: str) -> dict:
+    return {"id": symbol.id, "label": symbol.label, "kind": symbol.kind,
+            "file": symbol.file or "", "line": symbol.line, "change": change}
+
+
+def _change_detail(before: Graph, after: Graph) -> list[dict]:
+    """Every changed symbol, named, whether or not it still exists to be drawn."""
+    was = {_identity(symbol): symbol for symbol in before.symbols}
+    now = {_identity(symbol): symbol for symbol in after.symbols}
+    changes = [_detail(was[key], "removed") for key in sorted(was.keys() - now.keys())]
+    changes += [_detail(now[key], "added") for key in sorted(now.keys() - was.keys())]
+    changes += [
+        _detail(now[key], "status")
+        for key in sorted(now.keys() & was.keys())
+        if was[key].status is not now[key].status
+    ]
+    return changes
 
 
 def _changes(before: Graph, after: Graph) -> dict[str, str]:
@@ -160,6 +192,7 @@ def commit_series(repo_root: str = ".") -> list[CommitEntry]:
         series.append(CommitEntry(
             sha=sha, subject=subject, date=date, symbols=len(graph.symbols),
             changed=_changes(graphs[baseline], graph) if baseline in graphs else {},
+            changes=_change_detail(graphs[baseline], graph) if baseline in graphs else [],
             baseline_sha=baseline if baseline in graphs else None,
         ))
     return list(reversed(series))
