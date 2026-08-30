@@ -8,7 +8,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "seamcheck"
-version = "0.1.0"
+version = "0.2.0"
 description = "Find the code your project no longer connects to - and the connections it only thinks it has."
 readme = "README.md"
 license = "MIT"
@@ -34,6 +34,9 @@ mcp = ["mcp>=1.0"]
 # Bundles a Node runtime so `pip install` alone is enough on a machine without one
 # (the pyright precedent). The npm parsers still have to be present - see README.
 node = ["nodejs-wheel-binaries>=20"]
+
+[project.scripts]
+seamcheck = "seamcheck.cli:main"
 
 [project.urls]
 Source = "https://github.com/dardameiz/seamcheck"

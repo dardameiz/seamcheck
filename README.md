@@ -71,11 +71,17 @@ Seamcheck says so and gives you the Python half rather than dying.
 ## Use
 
 ```bash
-python manage.py seamcheck                 # scan, summary, write the map
-python manage.py seamcheck --check         # exit 1 on new findings. This is the CI one.
-python manage.py seamcheck --format map    # the UI, one self-contained HTML file
-python manage.py seamcheck --explain <id>  # one symbol, with the code around it
+seamcheck help              # every command, one line each
+seamcheck scan              # scan, summary, snapshot for later diffs
+seamcheck check             # exit 1 on new findings. This is the CI one.
+seamcheck map               # the UI, one self-contained HTML file
+seamcheck serve             # ...opened from your phone
+seamcheck explain <id>      # one symbol, with the code around it
 ```
+
+It finds your project by walking up to the nearest `manage.py` and reading the settings
+module out of it, so it works from anywhere inside the tree. Everything is also available
+as `python manage.py seamcheck ...` if you prefer — same code, one implementation.
 
 ### The UI
 
@@ -92,8 +98,8 @@ many of its declarations Seamcheck reasoned about. Because "no findings" and "ne
 looked" are not the same sentence.
 
 ```bash
-python manage.py seamcheck --format map --serve            # open it from your phone
-python manage.py seamcheck --format map --serve --tunnel   # ...from anywhere
+seamcheck serve            # open it from your phone
+seamcheck serve --tunnel   # ...from anywhere
 ```
 
 Nothing is uploaded. `--serve` is a socket on your machine that dies with the command.
@@ -101,7 +107,7 @@ Nothing is uploaded. `--serve` is a socket on your machine that dies with the co
 ### Per-commit
 
 ```bash
-python manage.py seamcheck --backfill 20     # scan the last 20 commits
+seamcheck backfill 20       # scan the last 20 commits
 ```
 
 Now the map has a commit picker. Pick one and see what *that commit* changed — added,
@@ -111,7 +117,7 @@ and get named instead.
 ### CI
 
 ```bash
-python manage.py seamcheck --check --since $BASE_SHA
+seamcheck check --since $BASE_SHA
 ```
 
 `1` = new findings. `2` = no baseline, so the gate didn't run. `0` = clean. That
