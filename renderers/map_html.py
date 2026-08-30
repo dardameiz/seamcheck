@@ -147,13 +147,28 @@ svg.drag { cursor:grabbing; }
 .hop.at { border-left-color:var(--sig); }
 .hop .hk { font-size:9.5px; text-transform:uppercase; letter-spacing:.07em; color:var(--muted); }
 .hop .hl { font-size:12.5px; font-family:ui-monospace,Menlo,monospace; word-break:break-all; }
+.hop.at { background:color-mix(in srgb, var(--sig) 7%, transparent);
+          border-radius:0 7px 7px 0; }
 .hop.at .hl { font-weight:700; color:var(--sig); }
 .hop .hf { font-size:11px; color:var(--muted); word-break:break-all;
            font-family:ui-monospace,Menlo,monospace; }
-.hop pre.src { max-height:190px; overflow:auto; }
-.hop pre { margin:5px 0 0; padding:6px 8px; background:var(--bg); border:1px solid var(--line);
-           border-radius:6px; font-size:11px; overflow-x:auto; white-space:pre-wrap;
-           word-break:break-all; }
+.hop button.code { margin-top:5px; padding:3px 9px; font-size:11px; border-radius:6px;
+                   border:1px solid var(--line); background:var(--bg); color:var(--sig);
+                   cursor:pointer; }
+.codebox { position:fixed; inset:0; z-index:20; background:rgba(0,0,0,.45);
+           display:flex; align-items:center; justify-content:center; padding:16px; }
+.codecard { background:var(--panel); border:1px solid var(--line); border-radius:12px;
+            max-width:900px; width:100%; max-height:82vh; display:flex;
+            flex-direction:column; overflow:hidden; }
+.codehead { display:flex; align-items:center; gap:10px; padding:11px 14px;
+            border-bottom:1px solid var(--line); font-size:12px; color:var(--muted);
+            font-family:ui-monospace,Menlo,monospace; word-break:break-all; }
+.codehead button { margin-left:auto; flex:none; width:30px; height:30px; border-radius:8px;
+                   border:1px solid var(--line); background:var(--bg); color:var(--ink);
+                   cursor:pointer; }
+#codebody { margin:0; padding:14px; overflow:auto; font-size:12px; line-height:1.65;
+            font-family:ui-monospace,Menlo,monospace; white-space:pre; }
+
 .sheet .x { position:absolute; top:8px; right:10px; width:30px; height:30px;
             border-radius:8px; border:1px solid var(--line); background:var(--bg);
             color:var(--ink); cursor:pointer; }
@@ -517,28 +532,62 @@ function routes(id) {
 
 function hop(id, here) {
   const n = byId.get(id); if (!n) return "";
+  const code = n.context || n.snippet;
   return `<div class="hop${id === here ? " at" : ""}">
     <div class="hk">${esc(n.kind)}</div>
     <div class="hl">${esc(n.label)}</div>
     ${n.file ? `<div class="hf">${esc(n.file)}${n.line ? ":" + n.line : ""}</div>` : ""}
-    ${n.context ? `<pre class="src">${esc(n.context)}</pre>`
-      : n.snippet ? `<pre>${esc(n.snippet)}</pre>` : ""}</div>`;
+    ${code ? `<button class="code" data-code="${esc(id)}">code</button>` : ""}</div>`;
+}
+
+// Code opens on request, over the page. Inline, one chain filled the panel with six
+// listings a reader had not asked for and had to scroll past to see the shape of the path.
+const codebox = document.getElementById("codebox");
+function showCode(id) {
+  const n = byId.get(id); if (!n) return;
+  document.getElementById("codetitle").textContent =
+    n.label + (n.file ? "  —  " + n.file + (n.line ? ":" + n.line : "") : "");
+  document.getElementById("codebody").textContent = n.context || n.snippet || "";
+  codebox.hidden = false;
+}
+document.getElementById("codeclose").onclick = () => { codebox.hidden = true; };
+codebox.onclick = e => { if (e.target === codebox) codebox.hidden = true; };
+dbody.addEventListener("click", e => {
+  const b = e.target.closest(".code");
+  if (b) showCode(b.dataset.code);
+});
+
+// A fetch and the call that makes it are the same line of source. Deduped across the
+// whole sheet, not per list: one seen-set per list still printed that line under Path and
+// again under Reaches.
+function deduper() {
+  const seen = new Set();
+  return ids => ids.filter(x => {
+    const n = byId.get(x); if (!n) return false;
+    const key = n.file && n.line ? n.file + ":" + n.line : x;
+    if (seen.has(key)) return false;
+    seen.add(key); return true;
+  });
 }
 
 function show(id) {
   const n = byId.get(id); if (!n) return;
   const ch = CHANGED[id];
   const {inbound, outbound} = routes(id);
+  const take = deduper();
+  const path = take(inbound), reaches = take(outbound);
   dbody.innerHTML = `<h2>${esc(n.label)}</h2>
     <div class="acts">
       <button id="iso" type="button">${isolate ? "Show the whole page" : "Show only this chain"}</button>
     </div>
-    <div class="row">${esc(n.kind)} · ${esc(n.status)}${ch ? " · " + esc(ch) : ""}</div>
+    <div class="row"><span class="badge ${esc(n.status)}">${esc(n.status)}</span>
+      ${esc(n.kind)}${ch ? " · " + esc(ch) : ""}</div>
     ${n.file ? `<div class="row">${esc(n.file)}${n.line ? ":" + n.line : ""}</div>` : ""}
     ${n.note ? `<div class="note">${esc(n.note)}</div>` : ""}
     <div class="lbl">Path — browser to backend</div>
-    ${inbound.map(step => hop(step, id)).join("")}
-    ${outbound.length ? `<div class="lbl">Reaches</div>${outbound.map(step => hop(step, id)).join("")}` : ""}`;
+    ${path.map(step => hop(step, id)).join("")}
+    ${reaches.length ? `<div class="lbl">Reaches</div>` +
+      reaches.map(step => hop(step, id)).join("") : ""}`;
   sheet.hidden = false;
   document.getElementById("iso").onclick = () => {
     isolate = !isolate; view = {x:0, y:0, k:1}; draw(); show(id);
@@ -946,6 +995,10 @@ def render(connectivity_map: ConnectivityMap, console=None) -> str:
         '<button id="zf" type="button" aria-label="Fit to screen">\u2316</button></div>',
         '<button class="key" id="lg" type="button" aria-label="Colour key">?</button>',
         f'<div class="legend" id="legend" hidden>{legend}</div>',
+        '<div class="codebox" id="codebox" hidden><div class="codecard">'
+        '<div class="codehead"><span id="codetitle"></span>'
+        '<button id="codeclose" type="button" aria-label="Close">\u00d7</button></div>'
+        '<pre id="codebody"></pre></div></div>',
         '<aside class="sheet" id="detail" hidden>'
         '<button class="x" id="dx" type="button" aria-label="Close">\u00d7</button>'
         '<div id="dbody"></div></aside>',

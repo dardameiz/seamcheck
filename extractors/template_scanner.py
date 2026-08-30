@@ -13,7 +13,12 @@ import re
 
 from signal_map.graph import Status, Symbol
 
-_ATTRIBUTE_RE = re.compile(r"""\b(id|class|data-[\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')""")
+# A data-* attribute needs no value: `<button data-share-link>` is how a boolean flag is
+# written, and requiring `="..."` skipped every one of them - so JavaScript selecting
+# [data-share-link] was reported as reaching for an element that does not exist.
+_ATTRIBUTE_RE = re.compile(
+    r"""\b(id|class|data-[\w-]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'))?"""
+)
 # A value that is entirely a template expression has no literal name to match on.
 _TEMPLATE_EXPRESSION_RE = re.compile(r"\{[{%].*?[%}]\}|\$\{[^}]*\}")
 # A class token is written by a human or a utility framework. Anything carrying JS
@@ -40,6 +45,11 @@ def scan_templates(template_files: list[str]) -> list[Symbol]:
         for match in _ATTRIBUTE_RE.finditer(text):
             attribute = match.group(1)
             value = match.group(2) if match.group(2) is not None else match.group(3)
+            if value is None:
+                # `id` and `class` with no value say nothing; a bare data-* is the flag.
+                if not attribute.startswith("data-"):
+                    continue
+                value = ""
             kind = "data" if attribute.startswith("data-") else attribute
             label_prefix = attribute[len("data-"):] if kind == "data" else ""
             line = _line_of(text, match.start())

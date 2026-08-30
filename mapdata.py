@@ -24,8 +24,49 @@ _CONTEXT_LINES = 3
 _source_cache: dict[str, list[str]] = {}
 
 
+_MAX_BLOCK = 60
+_OPENERS = ("def ", "async def ", "class ", "function ", "export function ",
+            "export default function ", "export async function ")
+
+
+def _block_bounds(lines: list[str], index: int, path: str) -> tuple[int, int]:
+    """The enclosing block around `index`, as (start, end) line offsets.
+
+    Three lines either side showed a call without showing what it belongs to. Python is
+    bounded by indentation, JavaScript and CSS by their braces; anything unrecognised
+    falls back to the window. Capped, because one function in this project is 900 lines.
+    """
+    if path.endswith(".py"):
+        for start in range(index, -1, -1):
+            text = lines[start].lstrip()
+            if text.startswith(("def ", "async def ", "class ")):
+                indent = len(lines[start]) - len(text)
+                for end in range(start + 1, min(len(lines), start + _MAX_BLOCK)):
+                    body = lines[end]
+                    if body.strip() and (len(body) - len(body.lstrip())) <= indent:
+                        return start, end
+                return start, min(len(lines), start + _MAX_BLOCK)
+            if text and not lines[start].startswith((" ", "\t", "#", "@")):
+                break
+    elif path.endswith((".js", ".mjs", ".css")):
+        # Walk back counting braces until one is left unclosed - that line opened the block
+        # this line sits in. Matching on `function` or `{` instead picked the options
+        # object on the fetch() line itself, which opens and closes in the same breath.
+        depth = 0
+        for start in range(index, max(-1, index - 160), -1):
+            depth += lines[start].count("}") - lines[start].count("{")
+            if depth < 0:
+                forward = 0
+                for end in range(start, min(len(lines), start + _MAX_BLOCK)):
+                    forward += lines[end].count("{") - lines[end].count("}")
+                    if forward <= 0 and end > start:
+                        return start, end + 1
+                return start, min(len(lines), start + _MAX_BLOCK)
+    return -1, -1
+
+
 def _context(path: str | None, line: int | None) -> str:
-    """The lines around `line`, numbered, or nothing if the file cannot be read."""
+    """The block `line` sits in, numbered, or the lines around it as a fallback."""
     if not path or not line:
         return ""
     if path not in _source_cache:
@@ -36,11 +77,13 @@ def _context(path: str | None, line: int | None) -> str:
         except OSError:
             _source_cache[path] = []
     lines = _source_cache[path]
-    if not lines:
+    if not lines or line > len(lines):
         return ""
-    start = max(0, line - 1 - _CONTEXT_LINES)
-    end = min(len(lines), line + _CONTEXT_LINES)
-    return "\n".join(f"{n + 1:5d}  {lines[n][:160]}" for n in range(start, end))
+    start, end = _block_bounds(lines, line - 1, path)
+    if start < 0:
+        start = max(0, line - 1 - _CONTEXT_LINES)
+        end = min(len(lines), line + _CONTEXT_LINES)
+    return "\n".join(f"{n + 1:5d}  {lines[n][:160]}" for n in range(start, min(end, len(lines))))
 
 
 # Symbols that belong to a JS module and start a chain outward.

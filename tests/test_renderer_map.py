@@ -388,10 +388,18 @@ class ReadabilityTests(SimpleTestCase):
         self.assertIn("if (isolate && lit) return chainOf(p, lit)", out)
         self.assertIn("Show only this chain", out)
 
-    def test_the_evidence_sheet_carries_real_source_not_just_one_line(self):
+    def test_source_is_offered_on_request_not_poured_into_the_panel(self):
+        # Inline, one chain filled the panel with six listings nobody asked for, which had
+        # to be scrolled past to see the shape of the path.
         node = MapNode("v", "view", "view", "connected", file="v.py", line=3,
                        snippet="def x(): ...", context="    2  # above\n    3  def x():")
-        built = _map(pages=[PageMap("p", [node], [])])
+        out = map_html.render(_map(pages=[PageMap("p", [node], [])]))
 
-        self.assertIn("# above", map_html.render(built))
-        self.assertIn('pre class="src"', map_html.render(built))
+        self.assertIn("# above", out)
+        self.assertIn('<button class="code" data-code=', out)
+        self.assertIn('id="codebox"', out)
+
+    def test_the_same_line_of_source_is_not_listed_twice(self):
+        # A fetch and the call that makes it share a line, and both were printed in full
+        # under two different headings.
+        self.assertIn("function deduper()", map_html.render(_map()))
