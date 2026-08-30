@@ -39,7 +39,13 @@ class Command(BaseCommand):
         if options["explain"]:
             return self.stdout.write(api.explain(api.scan(options["repo_root"]), options["explain"]))
         if options["format"]:
-            return self._format_report(options)
+            self._format_report(options)
+            # --check composes with --format: the CI use case is "post this digest as a
+            # comment, fail the build" - so the digest must land before the exit, or a
+            # failing build ships with nothing to read.
+            if options["check"]:
+                self._exit_on_check(options["repo_root"])
+            return
         if options["json"]:
             from signal_map.graph import graph_to_dict
 
@@ -125,6 +131,10 @@ class Command(BaseCommand):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
         self.stdout.write(f"wrote {path}")
+
+    def _exit_on_check(self, repo_root):
+        if not api.check(repo_root)["passed"]:
+            raise SystemExit(1)
 
     def _summary(self, options):
         graph = api.scan(options["repo_root"])

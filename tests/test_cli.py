@@ -98,3 +98,30 @@ class ReportFormatTests(SimpleTestCase):
     def test_an_unknown_format_is_rejected(self):
         with self.assertRaises(SystemExit):
             self._run("--format", "yaml")
+
+    def test_check_composes_with_format_prints_digest_and_keeps_exit_code(self):
+        # --check --format markdown is the CI use case: post the digest as a comment,
+        # fail the build. Asserting only the exit code would pass even if nothing were
+        # printed - assert both, in the same test, against the fixture's real finding.
+        out = StringIO()
+        with override_settings(SIGNAL_MAP_CONFIG=_CONFIG), self.assertRaises(SystemExit) as raised:
+            call_command(
+                "dump_connectivity_map", "--check", "--format", "markdown",
+                stdout=out, stderr=StringIO(),
+            )
+
+        self.assertEqual(raised.exception.code, 1)
+        self.assertIn("## Signal Map", out.getvalue())
+
+    def test_check_composes_with_format_and_out_writes_file_and_keeps_exit_code(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "r.md")
+            out = StringIO()
+            with override_settings(SIGNAL_MAP_CONFIG=_CONFIG), self.assertRaises(SystemExit) as raised:
+                call_command(
+                    "dump_connectivity_map", "--check", "--format", "markdown", "--out", path,
+                    stdout=out, stderr=StringIO(),
+                )
+
+            self.assertEqual(raised.exception.code, 1)
+            self.assertIn("## Signal Map", Path(path).read_text())
