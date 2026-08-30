@@ -21,7 +21,13 @@ def _code_span(symbol) -> str:
 
 
 def _items(symbols, cap: int) -> list[str]:
-    lines = [f"- **{symbol.label}** — {_code_span(symbol)}".rstrip(" —") for symbol in symbols[:cap]]
+    # The label is source-controlled project text (a CSS class, a URL name, ...), not
+    # ours - `[`/`]` show up routinely (Tailwind arbitrary values like `text-[9px]`), and
+    # unescaped they are markdown link/reference syntax. A code span, matching how
+    # where() is already rendered, neutralises that without an HTML-escaping pass.
+    lines = [
+        f"- **`{symbol.label}`** — {_code_span(symbol)}".rstrip(" —") for symbol in symbols[:cap]
+    ]
     if len(symbols) > cap:
         lines.append(f"- _+{len(symbols) - cap} more_")
     return lines

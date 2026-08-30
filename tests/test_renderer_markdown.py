@@ -40,6 +40,14 @@ class MarkdownRenderTests(SimpleTestCase):
 
         self.assertIn("`a.py:7`", out)
 
+    def test_the_label_is_a_code_span_not_interpolated_raw(self):
+        # 45 real labels contain "[" / "]" (Tailwind arbitrary values like
+        # "text-[9px]") - unescaped markdown, "[" opens link/reference syntax. A code
+        # span neutralises it without a separate HTML-escaping pass.
+        out = markdown.render(_report(new_findings=[_symbol("text-[9px]")]))
+
+        self.assertIn("`text-[9px]`", out)
+
     def test_a_group_is_capped_at_ten_with_a_more_marker(self):
         group = ReportGroup("url", Status.UNRESOLVED, "URLs",
                             [_symbol(f"u{i}") for i in range(15)], triaged=0)
