@@ -41,6 +41,7 @@ python manage.py dump_connectivity_map --format console --serve    # open it fro
 python manage.py dump_connectivity_map --format console --serve --tunnel   # ... or off it
 python manage.py dump_connectivity_map --backfill 20   # scan the last 20 commits, so the
                                                        # map's commit picker has history
+python manage.py dump_connectivity_map --backfill 20 --backfill-ref development
 python manage.py dump_connectivity_map --format json         # the whole graph
 python manage.py dump_connectivity_map --explain <symbol-id> # one symbol's evidence
 python manage.py dump_connectivity_map --triage <symbol-id> --status approved --reason "..."
@@ -80,6 +81,9 @@ The tool is honest about what it cannot see, and so should you be:
   be proven read but never proven unread.
 - **WebSocket payloads, Celery tasks, Redis keys and Stripe hooks are not traced at all.**
   Anything reached only through those is invisible to the scan.
+- **A commit that changed no connection reports nothing.** The graph holds URLs, views,
+  calls, selectors and tokens - not values. A commit that adds an entry to a constant
+  correctly shows no change; that is not the picker failing.
 - **Selectors and fetch targets built at runtime** are `uncertain` by design, never guessed.
 
 ## Rules for you specifically
