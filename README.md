@@ -125,9 +125,39 @@ distinction matters: a gate that never ran is not a gate that passed.
 
 ### Agents
 
-`seamcheck_check`, `seamcheck_report`, `seamcheck_explain`, `seamcheck_triage` over MCP,
-and an `AGENTS.md` that tells your agent the one rule that matters: **never delete
-something because it's `uncertain`.**
+Seamcheck ships an MCP server, so your assistant can check its own work before it hands
+it to you. It speaks over stdin/stdout — no port, no daemon, no network.
+
+**Claude Code**
+
+```bash
+claude mcp add seamcheck -- seamcheck-mcp
+```
+
+**Cursor, Windsurf, Claude Desktop** — in the MCP config:
+
+```json
+{
+  "mcpServers": {
+    "seamcheck": {
+      "command": "seamcheck-mcp",
+      "cwd": "/path/to/your/django/project"
+    }
+  }
+}
+```
+
+`cwd` matters: Seamcheck reads a real project, so it needs to start in one. It finds the
+settings module the same way the CLI does — the nearest `manage.py` — so the project root
+is the right answer.
+
+Four tools: `seamcheck_check` (scan, report findings new since the last snapshot),
+`seamcheck_report` (the digest), `seamcheck_explain` (one symbol with its evidence), and
+`seamcheck_triage` (record a disposition).
+
+There is also an [`AGENTS.md`](seamcheck/AGENTS.md) with the one rule that matters:
+**never delete something because it came back `uncertain`.** That is the scan saying it
+has no evidence, not that the code is dead.
 
 ## What it can't do
 

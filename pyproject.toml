@@ -8,13 +8,21 @@ build-backend = "hatchling.build"
 
 [project]
 name = "seamcheck"
-version = "0.2.0"
+version = "0.3.0"
 description = "Find the code your project no longer connects to - and the connections it only thinks it has."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"
 authors = [{ name = "dardameiz" }]
-keywords = ["django", "static-analysis", "dead-code", "connectivity", "mcp"]
+# What someone actually types when they have this problem. The second half is the honest
+# framing of who this is for: people shipping code an assistant wrote, who need to know
+# which of it is wired to anything.
+keywords = [
+  "django", "static-analysis", "dead-code", "unused-code", "connectivity",
+  "code-map", "dependency-graph", "codebase-visualization",
+  "mcp", "mcp-server", "ai-code-review", "llm-generated-code", "vibe-coding",
+  "agent-tools", "ci", "code-quality", "javascript", "css",
+]
 # No "License :: OSI Approved ::" classifier: PEP 639 replaced it with the
 # License-Expression field above, and PyPI rejects a distribution carrying both.
 classifiers = [
@@ -23,6 +31,11 @@ classifiers = [
   "Intended Audience :: Developers",
   "Programming Language :: Python :: 3.12",
   "Topic :: Software Development :: Quality Assurance",
+  "Topic :: Software Development :: Testing",
+  "Environment :: Console",
+  "Environment :: Web Environment",
+  "Operating System :: OS Independent",
+  "Typing :: Typed",
 ]
 dependencies = ["django>=5.0"]
 
@@ -37,6 +50,8 @@ node = ["nodejs-wheel-binaries>=20"]
 
 [project.scripts]
 seamcheck = "seamcheck.cli:main"
+# Named so an agent's config is one word rather than a module path.
+seamcheck-mcp = "seamcheck.mcp_server:main"
 
 [project.urls]
 Source = "https://github.com/dardameiz/seamcheck"

@@ -33,5 +33,39 @@ def seamcheck_report(fmt: str = "markdown", repo_root: str = ".") -> str:
     return api.report(repo_root, fmt)
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Entry point for the `seamcheck-mcp` command.
+
+    An agent launches this and talks to it over stdin/stdout - there is no port and no
+    daemon. Django has to be set up first, because every tool below reads a real project
+    through its URLconf and settings, and the agent's working directory is the project.
+    """
+    import os
+    import pathlib
+    import sys
+
+    import django
+
+    from seamcheck.cli import find_project
+
+    found = find_project(pathlib.Path.cwd())
+    if found:
+        settings_module, root = found
+        sys.path.insert(0, str(root))
+        os.chdir(root)
+        os.environ.setdefault("DJANGO_SETTINGS_MODULE", settings_module)
+    elif not os.environ.get("DJANGO_SETTINGS_MODULE"):
+        # stderr, never stdout: stdout is the protocol channel and a stray line on it
+        # corrupts the session rather than producing a readable error.
+        print(
+            "seamcheck-mcp: no Django project here. Set the MCP server's working "
+            "directory to a project root, or set DJANGO_SETTINGS_MODULE.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+    django.setup()
     mcp.run()
+
+
+if __name__ == "__main__":
+    main()
