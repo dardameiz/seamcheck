@@ -51,6 +51,24 @@ class TerminalRenderTests(SimpleTestCase):
         self.assertIn("+4 more", out)
         self.assertNotIn("u8", out)
 
+    def test_a_group_caveat_is_shown_next_to_the_title(self):
+        group = ReportGroup(
+            "css_selector", Status.UNUSED, "Unreferenced CSS selectors",
+            [_symbol("s1", kind="css_selector", status=Status.UNUSED)], triaged=0,
+            caveat="JavaScript that applies classes via className is not yet scanned.",
+        )
+
+        out = terminal.render(_report(groups=[group]))
+
+        self.assertIn("JavaScript that applies classes via className is not yet scanned.", out)
+
+    def test_a_group_with_no_caveat_shows_none(self):
+        group = ReportGroup("url", Status.UNRESOLVED, "URLs", [_symbol("u1")], triaged=0)
+
+        out = terminal.render(_report(groups=[group]))
+
+        self.assertNotIn("is not yet scanned", out)
+
     def test_the_baseline_message_is_shown_when_there_is_no_baseline(self):
         out = terminal.render(
             _report(baseline_sha=None, baseline_message="No baseline snapshot stored yet.")

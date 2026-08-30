@@ -29,7 +29,11 @@ def _items(symbols, cap: int) -> list[str]:
 
 def _group_block(group: ReportGroup) -> list[str]:
     triaged = f" · {group.triaged} triaged" if group.triaged else ""
-    return [f"**{group.title}** ({len(group.symbols)}{triaged})", "", *_items(group.symbols, CAP), ""]
+    lines = [f"**{group.title}** ({len(group.symbols)}{triaged})", ""]
+    if group.caveat:
+        lines += [f"_{group.caveat}_", ""]
+    lines += [*_items(group.symbols, CAP), ""]
+    return lines
 
 
 def render(report: Report) -> str:

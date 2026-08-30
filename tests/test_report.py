@@ -112,6 +112,21 @@ class ContentTests(SimpleTestCase):
 
         self.assertEqual(report.groups[0].triaged, 0)
 
+    def test_css_selector_group_carries_a_caveat_about_js_applied_classes(self):
+        # The extractor never reads className/classList.add/setAttribute('class', ...),
+        # so a class applied by JS looks unreferenced - this group is 98% of a real
+        # scan's `unused` count and sorts first, so the caveat has to travel with the
+        # group rather than live only in the README nobody reads before triaging.
+        report = _report([_symbol("s", kind="css_selector", status=Status.UNUSED)])
+
+        self.assertIn("className", report.groups[0].caveat)
+        self.assertIn("classList.add", report.groups[0].caveat)
+
+    def test_a_kind_with_no_known_recall_gap_carries_no_caveat(self):
+        report = _report([_symbol("u", kind="url")])
+
+        self.assertEqual(report.groups[0].caveat, "")
+
     def test_group_status_is_the_most_severe_present_regardless_of_insertion_order(self):
         # json_field genuinely mixes statuses in one scan (field_matcher.py emits both
         # CONNECTED/UNUSED and UNRESOLVED into the same kind) -- the header must never

@@ -51,21 +51,58 @@ details > .item { margin:0 10px 8px; }
 """
 
 
-# Inline, tiny, and the only script on the page. Hides items whose text does not match,
-# and opens every group while a query is active so matches are not buried in a
-# collapsed <details>.
+# Inline, tiny, and the only script on the page. Hides items whose text does not match.
+#
+# Item text and each item's owning <details> are read ONCE, at load - a real render can
+# carry thousands of .item nodes, and re-reading textContent from every one of them on
+# every keystroke (the previous version) forces layout+paint of the whole page each
+# time. A group with zero matches is hidden outright rather than left open and empty,
+# and clearing the box restores every group to collapsed - the previous version only
+# ever opened groups and never closed them back up, so the page stayed in its heaviest
+# state (all six panels open) for the rest of the session after the first character.
 _FILTER_SCRIPT = """
 <script>
-const box = document.getElementById("filter");
-box.addEventListener("input", () => {
-  const q = box.value.trim().toLowerCase();
-  document.querySelectorAll(".item").forEach(el => {
-    el.hidden = q !== "" && !el.textContent.toLowerCase().includes(q);
+(function () {
+  const box = document.getElementById("filter");
+  const items = Array.from(document.querySelectorAll(".item")).map((el) => ({
+    el,
+    text: el.textContent.toLowerCase(),
+    details: el.closest("details"),
+  }));
+  const groups = Array.from(document.querySelectorAll("details")).map((el) => ({
+    el,
+    count: el.querySelector(".cnt"),
+  }));
+
+  function reset() {
+    items.forEach((item) => { item.el.hidden = false; });
+    groups.forEach((group) => {
+      group.el.hidden = false;
+      group.el.open = false;
+      if (group.count) { group.count.textContent = group.count.dataset.total; }
+    });
+  }
+
+  box.addEventListener("input", () => {
+    const q = box.value.trim().toLowerCase();
+    if (q === "") { reset(); return; }
+
+    const matches = new Map();
+    items.forEach((item) => {
+      const hit = item.text.includes(q);
+      item.el.hidden = !hit;
+      if (hit && item.details) {
+        matches.set(item.details, (matches.get(item.details) || 0) + 1);
+      }
+    });
+    groups.forEach((group) => {
+      const n = matches.get(group.el) || 0;
+      group.el.hidden = n === 0;
+      group.el.open = n > 0;
+      if (group.count) { group.count.textContent = String(n); }
+    });
   });
-  document.querySelectorAll("details").forEach(d => {
-    if (q !== "") { d.open = true; }
-  });
-});
+})();
 </script>
 """
 
@@ -85,10 +122,15 @@ def _item(symbol) -> str:
 
 def _group(group: ReportGroup) -> str:
     triaged = f" · {group.triaged} triaged" if group.triaged else ""
+    caveat = f"<div class='gloss caveat'>{_esc(group.caveat)}</div>" if group.caveat else ""
     items = "".join(_item(symbol) for symbol in group.symbols)
+    total = len(group.symbols)
+    # .cnt carries the live match count while filtering (see _FILTER_SCRIPT), and
+    # data-total is how the script restores the real count once the query clears.
     return (
         f"<details><summary>{_esc(group.title)} "
-        f"({len(group.symbols)}{_esc(triaged)})</summary>{items}</details>"
+        f"(<span class='cnt' data-total='{total}'>{total}</span>{_esc(triaged)})"
+        f"</summary>{caveat}{items}</details>"
     )
 
 

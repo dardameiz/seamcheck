@@ -126,6 +126,10 @@ Stated, not hidden:
 
 - Not a CSS selector engine — combinator selectors (`.a .b`) match on segment presence.
 - Selectors and fetch targets built at runtime are `uncertain`, never guessed.
+- The CSS/JS extractor does not read `className = ...`, `classList.add(...)`,
+  `setAttribute('class', ...)`, or class literals inside JS template strings, so a class
+  applied by JavaScript looks unreferenced. `css_selector` findings over-report as a
+  result; the report surfaces this as a caveat next to the group rather than hiding it.
 - Field matching pairs one view function against a whole consuming module, so a field can
   be proven read but not proven unread.
 - WebSocket payloads are out of scope.

@@ -29,6 +29,17 @@ _GROUP_TITLES = {
     "view": "Views",
 }
 
+# A caveat for a kind with a known recall gap in the extractor that produces it - shown
+# next to the group title in every renderer so a reader does not take the finding at
+# face value. Only kinds with a genuine, logged gap get one; do not use this to soften
+# a group that is simply large.
+_GROUP_CAVEATS = {
+    "css_selector": (
+        "JavaScript that applies classes via className, classList.add, or setAttribute "
+        "is not yet scanned, so many of these are false positives."
+    ),
+}
+
 
 @dataclass
 class ReportGroup:
@@ -37,6 +48,7 @@ class ReportGroup:
     title: str
     symbols: list[Symbol]
     triaged: int
+    caveat: str = ""
 
 
 @dataclass
@@ -118,6 +130,7 @@ def build_report(
                 title=_title_for(kind),
                 symbols=sorted_symbols,
                 triaged=sum(1 for symbol in sorted_symbols if symbol.id in triaged_ids),
+                caveat=_GROUP_CAVEATS.get(kind, ""),
             )
         )
     groups.sort(key=lambda group: (-len(group.symbols), group.kind))

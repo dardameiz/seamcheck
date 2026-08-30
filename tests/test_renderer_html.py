@@ -48,6 +48,12 @@ class HtmlRenderTests(SimpleTestCase):
             "srcset",                    # responsive image attribute (no leading space, unlike src=)
             "href=",                     # anchor/link/SVG <use href="..."> reference
             "src=",                      # any fetching attribute: script, img, iframe, audio, video
+            "fetch(",                    # fetch API
+            "XMLHttpRequest",            # XHR
+            "import(",                   # dynamic ES module import
+            "new WebSocket",             # WebSocket connection
+            "EventSource",               # server-sent events
+            "sendBeacon",                # navigator.sendBeacon
         )
         for pattern in forbidden:
             self.assertNotIn(pattern, out)
@@ -103,7 +109,73 @@ class HtmlRenderTests(SimpleTestCase):
         self.assertIn("<script>", out)
         self.assertIn('id="filter"', out)
 
-    def test_uncertain_is_glossed_not_listed(self):
+    def test_a_group_caveat_is_shown_under_the_summary(self):
+        group = ReportGroup(
+            "css_selector", Status.UNUSED, "Unreferenced CSS selectors",
+            [_symbol("s1", kind="css_selector", status=Status.UNUSED)], triaged=0,
+            caveat="JavaScript that applies classes via className is not yet scanned.",
+        )
+
+        out = html.render(_report(groups=[group]))
+
+        summary_end = out.index("</summary>")
+        caveat_pos = out.index(
+            "JavaScript that applies classes via className is not yet scanned."
+        )
+        self.assertGreater(caveat_pos, summary_end)
+
+    def test_a_group_with_no_caveat_shows_none(self):
+        group = ReportGroup("url", Status.UNRESOLVED, "URLs", [_symbol("u1")], triaged=0)
+
+        out = html.render(_report(groups=[group]))
+
+        self.assertNotIn("is not yet scanned", out)
+
+    def test_filter_script_caches_item_text_once_instead_of_per_keystroke(self):
+        # The old script re-read el.textContent on every "input" event across every
+        # .item node - on a real render (7,097 items) that forces layout+paint of the
+        # whole page on the first character AND every keystroke after it. The fix reads
+        # and lowercases each item's text exactly once, at load, outside the handler.
+        out = html.render(_report(groups=[
+            ReportGroup("url", Status.UNRESOLVED, "URLs", [_symbol("u1")], triaged=0)
+        ]))
+        script = out[out.index("<script>") : out.index("</script>")]
+
+        self.assertEqual(script.count("textContent.toLowerCase()"), 1)
+        self.assertIn('document.querySelectorAll(".item")', script)
+        # The DOM query happens once, in the setup code above addEventListener - not
+        # inside the per-keystroke callback.
+        setup, _, handler = script.partition("addEventListener")
+        self.assertIn("querySelectorAll", setup)
+        self.assertNotIn("querySelectorAll", handler)
+
+    def test_filter_script_hides_a_group_with_zero_matches(self):
+        out = html.render(_report())
+        script = out[out.index("<script>") : out.index("</script>")]
+
+        self.assertIn("group.el.hidden = n === 0", script)
+
+    def test_filter_script_restores_collapse_and_count_when_query_clears(self):
+        out = html.render(_report())
+        script = out[out.index("<script>") : out.index("</script>")]
+
+        self.assertIn("group.el.open = false", script)
+        self.assertIn("group.count.textContent = group.count.dataset.total", script)
+
+    def test_group_summary_carries_the_total_for_the_script_to_restore(self):
+        group = ReportGroup(
+            "url", Status.UNRESOLVED, "URLs",
+            [_symbol("u1"), _symbol("u2")], triaged=0,
+        )
+
+        out = html.render(_report(groups=[group]))
+
+        self.assertIn("data-total='2'", out)
+
+    def test_the_uncertain_gloss_sentence_is_rendered(self):
+        # Not a test that uncertain symbols are excluded from groups/new_findings - that
+        # guarantee is structural, in report.py's _FINDING_STATUSES, and cannot reach a
+        # renderer at all. This only checks the gloss sentence text is present.
         self.assertIn("no evidence either way", html.render(_report()).lower())
 
     def test_no_baseline_says_so(self):

@@ -19,7 +19,11 @@ def _finding_lines(symbols, cap: int) -> list[str]:
 
 def _group_block(group: ReportGroup) -> list[str]:
     triaged = f", {group.triaged} triaged" if group.triaged else ""
-    return [f"  {group.title} ({len(group.symbols)}{triaged})", *_finding_lines(group.symbols, CAP)]
+    lines = [f"  {group.title} ({len(group.symbols)}{triaged})"]
+    if group.caveat:
+        lines.append(f"    {group.caveat}")
+    lines += _finding_lines(group.symbols, CAP)
+    return lines
 
 
 def render(report: Report) -> str:

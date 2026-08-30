@@ -49,7 +49,28 @@ class MarkdownRenderTests(SimpleTestCase):
         self.assertIn("+5 more", out)
         self.assertNotIn("u14", out)
 
-    def test_uncertain_is_glossed_not_listed(self):
+    def test_a_group_caveat_is_rendered_as_an_italic_line(self):
+        group = ReportGroup(
+            "css_selector", Status.UNUSED, "Unreferenced CSS selectors",
+            [_symbol("s1", kind="css_selector", status=Status.UNUSED)], triaged=0,
+            caveat="JavaScript that applies classes via className is not yet scanned.",
+        )
+
+        out = markdown.render(_report(groups=[group]))
+
+        self.assertIn("_JavaScript that applies classes via className is not yet scanned._", out)
+
+    def test_a_group_with_no_caveat_shows_none(self):
+        group = ReportGroup("url", Status.UNRESOLVED, "URLs", [_symbol("u1")], triaged=0)
+
+        out = markdown.render(_report(groups=[group]))
+
+        self.assertNotIn("is not yet scanned", out)
+
+    def test_the_uncertain_gloss_sentence_is_rendered(self):
+        # Not a test that uncertain symbols are excluded from groups/new_findings - that
+        # guarantee is structural, in report.py's _FINDING_STATUSES, and cannot reach a
+        # renderer at all. This only checks the gloss sentence text is present.
         out = markdown.render(_report())
 
         self.assertIn("no evidence either way", out.lower())
