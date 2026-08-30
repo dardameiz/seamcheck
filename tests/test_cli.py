@@ -71,6 +71,30 @@ class DumpConnectivityMapTests(SimpleTestCase):
         with self.assertRaises(SystemExit):
             self._run("--triage", "view:whatever")
 
+    def test_out_without_format_is_rejected(self):
+        # --out is only ever read inside _format_report(); every other path (bare
+        # --check, --since, the no-flags summary) used to silently ignore it, so
+        # "--check --out report.md" wrote nothing and said nothing about why.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "report.md")
+            with self.assertRaises(CommandError) as raised:
+                self._run("--check", "--out", path)
+
+        self.assertIn("--out", str(raised.exception))
+
+    def test_json_flag_composes_with_out_via_the_shared_format_path(self):
+        # --json used to be a second, drifting copy of the "--format json" dump (one
+        # always re-scanned, the other reused a shared graph) and, unlike --format
+        # json, never looked at --out at all. Prove the merge by observing --out now
+        # actually being honoured for --json too.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "g.json")
+            printed = self._run("--json", "--out", path)
+
+            data = json.loads(Path(path).read_text())
+            self.assertIn("symbols", data)
+            self.assertNotIn("symbols", printed)
+
 
 class ReportFormatTests(SimpleTestCase):
     def _run(self, *args):
@@ -102,6 +126,16 @@ class ReportFormatTests(SimpleTestCase):
     def test_an_unknown_format_is_rejected(self):
         with self.assertRaises(SystemExit):
             self._run("--format", "yaml")
+
+    def test_an_empty_format_value_is_rejected_not_silently_treated_as_unset(self):
+        # `--format ""` is falsy, so a bare `if options["format"]:` used to fall through
+        # to the no-flags summary path, which writes the whole (18 MB on a real
+        # project) connectivity map to disk - silently, with no hint --format was even
+        # seen.
+        with self.assertRaises(CommandError) as raised:
+            self._run("--format", "")
+
+        self.assertIn("--format", str(raised.exception))
 
     def test_check_composes_with_format_prints_digest_and_keeps_exit_code(self):
         # --check --format markdown is the CI use case: post the digest as a comment,
