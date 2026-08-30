@@ -264,7 +264,7 @@ def _http_symbols(
             snippet = f'fetch("{target}")' if exact else f'fetch("{target}" + <runtime value>)'
             symbols.append(
                 Symbol(
-                    id=call_id, kind="js_call", label="fetch()", sub=basename, file=path,
+                    id=call_id, kind="js_call", label=target, sub=basename, file=path,
                     line=line, status=status, snippet=snippet,
                     chain=chain, note="" if exact else _PREFIX_NOTE,
                 )
@@ -283,9 +283,9 @@ def _http_symbols(
         else:
             symbols.append(
                 Symbol(
-                    id=call_id, kind="js_call", label="fetch()", sub=basename, file=path,
-                    line=line, status=Status.UNCERTAIN, snippet="fetch(<dynamic value>)",
-                    chain=chain, note=_DYNAMIC_NOTE,
+                    id=call_id, kind="js_call", label="fetch(<runtime value>)", sub=basename,
+                    file=path, line=line, status=Status.UNCERTAIN,
+                    snippet="fetch(<dynamic value>)", chain=chain, note=_DYNAMIC_NOTE,
                 )
             )
     return symbols, edges

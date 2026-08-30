@@ -11,10 +11,37 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import pathlib
 from dataclasses import dataclass, field
 
 from signal_map.graph import Graph, Status, Symbol
 from signal_map.pagenames import PageName
+
+# Kinds worth carrying source context for. Every kind would cost roughly a megabyte, and
+# most of it would be a DOM selector whose one line already says everything it does.
+_CONTEXT_KINDS = frozenset({"module", "js_call", "fetch_target", "url", "view", "json_field"})
+_CONTEXT_LINES = 3
+_source_cache: dict[str, list[str]] = {}
+
+
+def _context(path: str | None, line: int | None) -> str:
+    """The lines around `line`, numbered, or nothing if the file cannot be read."""
+    if not path or not line:
+        return ""
+    if path not in _source_cache:
+        try:
+            _source_cache[path] = pathlib.Path(path).read_text(
+                encoding="utf-8", errors="replace"
+            ).splitlines()
+        except OSError:
+            _source_cache[path] = []
+    lines = _source_cache[path]
+    if not lines:
+        return ""
+    start = max(0, line - 1 - _CONTEXT_LINES)
+    end = min(len(lines), line + _CONTEXT_LINES)
+    return "\n".join(f"{n + 1:5d}  {lines[n][:160]}" for n in range(start, end))
+
 
 # Symbols that belong to a JS module and start a chain outward.
 _SEED_KINDS = frozenset({"js_call", "fetch_target", "dom_selector", "multi_writer_element"})
@@ -42,6 +69,9 @@ class MapNode:
     # The line of source the symbol was read from. Truncated: this ships to a browser
     # once per node, and the map already carries thousands of them.
     snippet: str = ""
+    # A few lines around it, for the kinds that carry the frontend-to-backend story. One
+    # line tells you a call happened; the lines around it are where you learn how.
+    context: str = ""
 
 
 @dataclass
@@ -81,7 +111,8 @@ def _node(symbol: Symbol) -> MapNode:
     label = symbol.label if (symbol.label or "").strip() else "/"
     return MapNode(
         id=symbol.id, label=label, kind=symbol.kind, status=symbol.status.value,
-        snippet=(symbol.snippet or "")[:200],
+        snippet=(symbol.snippet or "")[:400],
+        context=_context(symbol.file, symbol.line) if symbol.kind in _CONTEXT_KINDS else "",
         file=symbol.file, line=symbol.line, note=symbol.note,
     )
 

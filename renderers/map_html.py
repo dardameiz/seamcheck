@@ -72,6 +72,19 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:14px; overflo
          white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 #q { flex:0 1 130px; min-width:78px; padding:7px 9px; font-size:13px; border-radius:8px;
      border:1px solid var(--line); background:var(--bg); color:var(--ink); }
+/* Always on screen. A reader should never have to hunt for what a colour claims, and the
+   four statuses are the whole contract this tool makes. */
+.legendbar { display:flex; flex-wrap:wrap; gap:4px 14px; padding:0 12px 9px; font-size:11px; }
+.legendbar .k { display:flex; align-items:baseline; gap:5px; color:var(--ink); }
+.legendbar .k i { width:9px; height:9px; border-radius:2px; border:1.5px solid; flex:none;
+            transform:translateY(1px); }
+.legendbar .k em { font-style:normal; color:var(--muted); }
+.legendbar .connected i { border-color:var(--ok); }
+.legendbar .unresolved i { border-color:var(--crit); }
+.legendbar .unused i { border-color:var(--warn); }
+.legendbar .uncertain i { border-color:var(--dim); }
+.legendbar .filled i { border-color:var(--crit);
+                 background:color-mix(in srgb, var(--crit) 22%, var(--panel)); }
 .note { padding:0 12px 8px; font-size:11.5px; color:var(--muted); }
 .note:empty { display:none; }
 /* A deleted symbol is in no current page, so no canvas can show it. Naming it here is
@@ -98,7 +111,8 @@ svg.drag { cursor:grabbing; }
 .nd text { font-size:11px; fill:var(--ink); pointer-events:none;
            font-family:ui-monospace,Menlo,monospace; }
 .nd { cursor:pointer; }
-.nd.faded { opacity:.12; }
+.nd.faded { opacity:.10; }
+.nd.lit rect { stroke-width:3.5; }
 .ed { fill:none; stroke-width:1.2; opacity:.45; }
 .ed.faded { opacity:.05; }
 .col { font-size:10px; fill:var(--muted); text-transform:uppercase; letter-spacing:.08em; }
@@ -123,6 +137,9 @@ svg.drag { cursor:grabbing; }
 .sheet .row { color:var(--muted); font-size:12px; margin-bottom:4px;
               font-family:ui-monospace,Menlo,monospace; word-break:break-all; }
 .sheet .note { padding:0; margin-top:8px; font-family:inherit; }
+.acts { margin:8px 0 4px; }
+.acts button { padding:7px 11px; font-size:12.5px; border-radius:8px; cursor:pointer;
+               border:1px solid var(--line); background:var(--bg); color:var(--sig); }
 .sheet .lbl { font-size:9.5px; text-transform:uppercase; letter-spacing:.09em;
               color:var(--muted); margin:14px 0 6px; }
 /* One row per hop, joined by a rule down the left, so the walk reads as a route. */
@@ -133,6 +150,7 @@ svg.drag { cursor:grabbing; }
 .hop.at .hl { font-weight:700; color:var(--sig); }
 .hop .hf { font-size:11px; color:var(--muted); word-break:break-all;
            font-family:ui-monospace,Menlo,monospace; }
+.hop pre.src { max-height:190px; overflow:auto; }
 .hop pre { margin:5px 0 0; padding:6px 8px; background:var(--bg); border:1px solid var(--line);
            border-radius:6px; font-size:11px; overflow-x:auto; white-space:pre-wrap;
            word-break:break-all; }
@@ -209,6 +227,10 @@ const ORDER = new Map(COLS.map((c, i) => [c[0], i]));
 const esc = v => String(v == null ? "" : v).replace(/[&<>"']/g,
   c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 let current = 0, focus = null, view = {x:0, y:0, k:1}, query = "";
+// The node a reader clicked, and whether the canvas should show only its chain. A page
+// draws 1,366 symbols; the one question a click asks is "what is this joined to", and
+// answering it by colour beats answering it by making the reader trace a line by eye.
+let lit = null, isolate = false;
 
 // A section is a lens on the same canvas, not a different page. The list of rows is the
 // CLI's answer; on screen the answer is the shape.
@@ -259,12 +281,42 @@ pages.onchange = e => {
 // not explorable by any amount of scrolling. Clicking a module opens just its subgraph.
 // A commit selection narrows every page to the nodes that commit touched, plus the
 // page node itself so the column still has a root to hang from.
+// The line through a node: what leads to it, and what it leads to. Followed with the
+// arrows, not across them - an undirected walk reaches the page node, and from there
+// every module and everything under them, so clicking one endpoint lit all 327 symbols
+// on the page and told a reader nothing.
+function chainOf(p, id) {
+  const back = new Map(), fwd = new Map();
+  p.edges.forEach(e => {
+    if (!back.has(e.target)) back.set(e.target, []);
+    if (!fwd.has(e.source)) fwd.set(e.source, []);
+    back.get(e.target).push(e.source);
+    fwd.get(e.source).push(e.target);
+  });
+  const seen = new Set([id]);
+  const walk = (adj, from) => {
+    let front = [from];
+    while (front.length) {
+      const next = [];
+      front.forEach(n => (adj.get(n) || []).forEach(m => {
+        if (seen.has(m)) return;
+        seen.add(m); next.push(m);
+      }));
+      front = next;
+    }
+  };
+  walk(back, id);
+  walk(fwd, id);
+  return seen;
+}
+
 function changedIn(p) {
   return new Set(p.nodes.filter(n => CHANGED[n.id] || n.kind === "page").map(n => n.id));
 }
 
 function visible(p) {
   if (only) return changedIn(p);
+  if (isolate && lit) return chainOf(p, lit);
   // Everything this page touches, in one canvas. Showing only modules until a reader
   // drilled in hid the whole point: which symbols connect and which stand alone.
   if (!focus) {
@@ -374,14 +426,19 @@ function draw() {
     view.k = Math.min(1, Math.max(0.06, Math.min(haveW / (width + 40), haveH / (height + 40))));
     if (height * view.k < haveH) view.y = Math.min(48, (haveH - height * view.k) / 2);
   }
+  // What the click lit up. Everything else stays on the canvas but recedes, so the chain
+  // reads as a line through the page instead of the reader tracing edges by eye. Declared
+  // before the edges that read it: the node loop is further down, but the edge loop is not.
+  const chain = lit && !isolate ? chainOf(p, lit) : null;
   const out = [`<g transform="translate(${view.x},${view.y}) scale(${view.k})">`];
   columns.forEach(c => out.push(
     `<text class="col" x="${c.x}" y="44">${esc(c.label)} ${c.count}</text>`));
   p.edges.forEach(e => {
     const a = pos.get(e.source), b = pos.get(e.target);
     if (!a || !b) return;
+    const dim = chain && !(chain.has(e.source) && chain.has(e.target));
     const mx = (a.x + 150 + b.x) / 2;
-    out.push(`<path class="ed" stroke="${S[e.status] || "var(--dim)"}"
+    out.push(`<path class="ed${dim ? " faded" : ""}" stroke="${S[e.status] || "var(--dim)"}"
       d="M${a.x + 150},${a.y + 10} C${mx},${a.y + 10} ${mx},${b.y + 10} ${b.x},${b.y + 10}"/>`);
   });
   // "Alone" is the STATUS, not the edge count. A symbol reaches a page by an edge, so
@@ -400,7 +457,8 @@ function draw() {
     const label = n.label.length > 20 ? n.label.slice(0, 19) + "…" : n.label;
     // The drawn box is 20px tall and the view opens scaled down, so on a phone the
     // visible target can be 8px. The transparent rect below it fills the row pitch.
-    out.push(`<g class="nd${hit(n) ? "" : " faded"}" data-id="${n.id}">
+    const shown = hit(n) && (!chain || chain.has(n.id));
+    out.push(`<g class="nd${shown ? "" : " faded"}${n.id === lit ? " lit" : ""}" data-id="${n.id}">
       <rect x="${q.x - 5}" y="${q.y - 5}" width="160" height="30" fill="transparent"
             pointer-events="all"/>
       <rect x="${q.x}" y="${q.y}" width="150" height="20" rx="5"
@@ -418,10 +476,10 @@ function draw() {
 svg.addEventListener("click", e => {
   if (moved) return;
   const g = e.target.closest(".nd");
-  if (!g) return;
-  const n = byId.get(g.dataset.id);
-  show(g.dataset.id);
-  if (n && n.kind === "module") { focus = g.dataset.id; view = {x:0,y:0,k:1}; draw(); }
+  if (!g) { if (lit) { lit = null; isolate = false; closeSheet(); draw(); } return; }
+  lit = g.dataset.id;
+  show(lit);
+  draw();
 });
 
 function closeSheet() { sheet.hidden = true; }
@@ -463,7 +521,8 @@ function hop(id, here) {
     <div class="hk">${esc(n.kind)}</div>
     <div class="hl">${esc(n.label)}</div>
     ${n.file ? `<div class="hf">${esc(n.file)}${n.line ? ":" + n.line : ""}</div>` : ""}
-    ${n.snippet ? `<pre>${esc(n.snippet)}</pre>` : ""}</div>`;
+    ${n.context ? `<pre class="src">${esc(n.context)}</pre>`
+      : n.snippet ? `<pre>${esc(n.snippet)}</pre>` : ""}</div>`;
 }
 
 function show(id) {
@@ -471,6 +530,9 @@ function show(id) {
   const ch = CHANGED[id];
   const {inbound, outbound} = routes(id);
   dbody.innerHTML = `<h2>${esc(n.label)}</h2>
+    <div class="acts">
+      <button id="iso" type="button">${isolate ? "Show the whole page" : "Show only this chain"}</button>
+    </div>
     <div class="row">${esc(n.kind)} · ${esc(n.status)}${ch ? " · " + esc(ch) : ""}</div>
     ${n.file ? `<div class="row">${esc(n.file)}${n.line ? ":" + n.line : ""}</div>` : ""}
     ${n.note ? `<div class="note">${esc(n.note)}</div>` : ""}
@@ -478,8 +540,11 @@ function show(id) {
     ${inbound.map(step => hop(step, id)).join("")}
     ${outbound.length ? `<div class="lbl">Reaches</div>${outbound.map(step => hop(step, id)).join("")}` : ""}`;
   sheet.hidden = false;
+  document.getElementById("iso").onclick = () => {
+    isolate = !isolate; view = {x:0, y:0, k:1}; draw(); show(id);
+  };
 }
-document.getElementById("dx").onclick = closeSheet;
+document.getElementById("dx").onclick = () => { lit = null; isolate = false; closeSheet(); draw(); };
 
 // Pointer events, not mouse events: one code path covers a mouse, a finger and a pen.
 // Listening for `mousedown` alone left a phone with no pan and no zoom at all, and the
@@ -533,7 +598,16 @@ window.addEventListener("pointercancel", release);
 
 svg.addEventListener("wheel", e => {
   e.preventDefault();
-  zoomTo(view.k * (e.deltaY < 0 ? 1.1 : 0.9));
+  // A Mac trackpad fires a stream of high-resolution wheel events, so a fixed 1.1x per
+  // event flew from one end of the zoom range to the other on a single flick. macOS marks
+  // a pinch as ctrlKey, which is the gesture that should zoom; a plain two-finger scroll
+  // pans, as it does in every map on this platform.
+  if (e.ctrlKey || e.metaKey) {
+    zoomTo(view.k * Math.exp(-e.deltaY * 0.01));
+    return;
+  }
+  view.x -= e.deltaX; view.y -= e.deltaY;
+  draw();
 }, {passive: false});
 
 // A pinch needs two fingers and some dexterity; these need one thumb.
@@ -730,6 +804,7 @@ function switchTo(next) {
   // extractor feeds yet) has nothing to draw and falls back to its rows.
   const drawable = SECTION_KINDS[mode] !== undefined && !asList;
   panel.hidden = drawable; svg.hidden = !drawable;
+  document.getElementById("colourkey").hidden = !drawable;
   document.querySelector(".zoom").hidden = !drawable;
   document.getElementById("lg").hidden = !drawable;
   const hasLens = SECTION_KINDS[mode] !== undefined;
@@ -775,6 +850,7 @@ def _payload(connectivity_map: ConnectivityMap) -> str:
                         "id": node.id, "label": node.label, "kind": node.kind,
                         "status": node.status, "file": node.file, "line": node.line,
                         "note": node.note, "snippet": node.snippet,
+                        "context": node.context,
                     }
                     for node in page.nodes
                 ],
@@ -853,6 +929,13 @@ def render(connectivity_map: ConnectivityMap, console=None) -> str:
         '<button id="aslist" type="button" hidden>Show as list</button>'
         '<span id="crumb"></span>'
         '<input id="q" type="search" placeholder="Filter"></div>',
+        '<div class="legendbar" id="colourkey">'
+        '<span class="k connected"><i></i>connected<em>something reaches it, evidence attached</em></span>'
+        '<span class="k unresolved"><i></i>unresolved<em>something reaches for it and it is not there</em></span>'
+        '<span class="k unused"><i></i>unused<em>both ends observable, nothing uses it</em></span>'
+        '<span class="k uncertain"><i></i>uncertain<em>no evidence either way \u2014 not a claim it is dead</em></span>'
+        '<span class="k filled"><i></i>filled<em>unresolved or unused: the ones to look at</em></span>'
+        "</div>",
         '<div class="note" id="cmnote"></div><div class="gone" id="gone"></div>',
         "</header>",
         '<main class="main">',

@@ -347,3 +347,51 @@ class BigCanvasTests(SimpleTestCase):
         out = map_html.render(_map())
 
         self.assertIn("const withLabels = view.k >= 0.34", out)
+
+
+class ReadabilityTests(SimpleTestCase):
+    def test_a_trackpad_pans_and_only_a_pinch_zooms(self):
+        # A Mac trackpad streams high-resolution wheel events; a fixed 1.1x per event
+        # crossed the whole zoom range on one flick. macOS marks a pinch as ctrlKey.
+        out = map_html.render(_map())
+
+        self.assertIn("if (e.ctrlKey || e.metaKey)", out)
+        self.assertIn("Math.exp(-e.deltaY * 0.01)", out)
+        self.assertNotIn("e.deltaY < 0 ? 1.1 : 0.9", out)
+
+    def test_the_colour_key_is_on_screen_not_behind_a_button(self):
+        out = map_html.render(_map())
+
+        self.assertIn('id="colourkey"', out)
+        for status in ("connected", "unresolved", "unused", "uncertain"):
+            self.assertIn(f'class="k {status}"', out)
+        self.assertIn("not a claim it is dead", out)
+
+    def test_the_legend_does_not_borrow_the_key_buttons_class(self):
+        # Both were called .key, so the strip inherited the button's absolute position and
+        # rendered as a 40px square in the bottom corner.
+        out = map_html.render(_map())
+
+        self.assertIn('class="legendbar"', out)
+
+    def test_clicking_lights_the_line_through_a_node_not_its_whole_island(self):
+        # Walking edges undirected reaches the page node, and from there everything:
+        # clicking one endpoint lit all 327 symbols and said nothing.
+        out = map_html.render(_map())
+
+        self.assertIn("walk(back, id);", out)
+        self.assertIn("walk(fwd, id);", out)
+
+    def test_a_chain_can_be_isolated_onto_the_canvas(self):
+        out = map_html.render(_map())
+
+        self.assertIn("if (isolate && lit) return chainOf(p, lit)", out)
+        self.assertIn("Show only this chain", out)
+
+    def test_the_evidence_sheet_carries_real_source_not_just_one_line(self):
+        node = MapNode("v", "view", "view", "connected", file="v.py", line=3,
+                       snippet="def x(): ...", context="    2  # above\n    3  def x():")
+        built = _map(pages=[PageMap("p", [node], [])])
+
+        self.assertIn("# above", map_html.render(built))
+        self.assertIn('pre class="src"', map_html.render(built))
