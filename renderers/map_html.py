@@ -38,11 +38,19 @@ _CSS = """
           --sig:#4fb3c4; --ok:#56b98c; --crit:#e0788a; --warn:#d69b4c; --dim:#6e7885; }
 }
 * { box-sizing:border-box; }
+/* An author `display` beats the UA rule that [hidden] relies on, so el.hidden = true read
+   back as true while the zoom buttons and the breadcrumb stayed on screen over the panel. */
+[hidden] { display:none !important; }
 /* The canvas is the point. Everything else is a strip above it, and the whole document
    is exactly one screen tall so nothing scrolls the map out of view. */
 body { margin:0; background:var(--bg); color:var(--ink); font-size:14px; overflow:hidden;
-       height:100dvh; display:flex; flex-direction:column;
+       height:100dvh;
        font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+.shell { display:flex; height:100%; }
+.content { flex:1 1 auto; min-width:0; display:flex; flex-direction:column; }
+/* The rail is the desktop's navigation. A phone has no room for it and uses the VIEW
+   select instead; both drive the same switch, from one list of items. */
+.rail { display:none; }
 .top { flex:none; background:var(--panel); border-bottom:1px solid var(--line); }
 .brand { display:flex; align-items:baseline; gap:9px; padding:8px 12px 6px; }
 .brand b { font-size:14px; }
@@ -170,6 +178,17 @@ svg.drag { cursor:grabbing; }
 @media (min-width: 761px) {
   .brand, .filters, .crumbrow { padding-left:16px; padding-right:16px; }
   .filters { max-width:820px; }
+  .onlymob { display:none; }
+  .rail { display:flex; flex-direction:column; width:236px; flex:none; overflow-y:auto;
+          background:var(--panel); border-right:1px solid var(--line); }
+  .railhead { font-size:14px; font-weight:700; padding:14px 16px 10px; }
+  .nv { display:flex; justify-content:space-between; align-items:center; gap:8px;
+        padding:9px 16px; cursor:pointer; border-top:1px solid var(--line);
+        font-size:13px; }
+  .nv:hover { background:var(--bg); }
+  .nv[aria-current="true"] { background:var(--bg); box-shadow:inset 3px 0 0 var(--sig);
+                             font-weight:600; }
+  .nv .c { color:var(--muted); font-size:11px; font-variant-numeric:tabular-nums; }
   .sheet { left:auto; right:0; width:380px; top:0; bottom:auto; max-height:100%;
            border-top:0; border-left:1px solid var(--line); }
 }
@@ -537,10 +556,9 @@ function selectCommit(index) {
 picker.onchange = e => selectCommit(e.target.value === "" ? -1 : Number(e.target.value));
 fillPicker();
 fillPages(null);
-// Open on the newest scanned commit, not on the whole graph. The question this page is
-// usually opened to answer - in CI, or after someone else pushed - is "what did the last
-// commit do", and making a reader pick that every time buries it.
-if (COMMITS.length) { picker.value = "0"; selectCommit(0); }
+// The newest commit sits first in the list and is marked HEAD, so "what did the last
+// commit do" is one tap away - but it is not the opening view. A commit whose only change
+// was a deletion has nothing left to draw, and opening there showed an empty canvas.
 
 // --- the colour key, out of the canvas's way until asked for -------------------------
 const legendBox = document.getElementById("legend");
@@ -557,15 +575,32 @@ const D = CONSOLE, panel = document.getElementById("panel");
 const pgwrap = document.getElementById("pgwrap"), viewer = document.getElementById("vw");
 const ROWS_PER_PAGE = 60;
 let mode = "map", cq = "", cstatus = "", shown = ROWS_PER_PAGE;
-// Opened to review, the first question is "what state is this in", and the commit filter
-// defaults to the newest commit - which routinely changed nothing drawable, leaving a
-// bare canvas that reads as a broken page. The map is one switch away.
-const OPENS_ON = "overview";
+// The map is what this page is for, so it opens on the map with the whole scan drawn.
+// The commit filter therefore starts at "everything": defaulting it to the newest commit
+// left the canvas holding one node, because a commit that only deletes something has
+// nothing left to draw - which reads as a page with no nodes in it.
+const OPENS_ON = "map";
 
-viewer.innerHTML = [`<option value="map">Map — what reaches what</option>`,
-  `<option value="overview">Overview</option>`].concat(
-  D.sections.map(sec => `<option value="${esc(sec.key)}">${esc(sec.title)}` +
-    `${sec.unavailable ? "" : ` — ${sec.total ?? sec.rows.length}`}</option>`)).join("");
+const VIEWS = [{key: "map", title: "Map — what reaches what", count: null},
+               {key: "overview", title: "Overview", count: null}].concat(
+  D.sections.map(sec => ({key: sec.key, title: sec.title,
+                          count: sec.unavailable ? null : (sec.total ?? sec.rows.length)})));
+
+viewer.innerHTML = VIEWS.map(v =>
+  `<option value="${esc(v.key)}">${esc(v.title)}` +
+  `${v.count === null ? "" : ` — ${v.count}`}</option>`).join("");
+
+// The same items as a rail, for a screen with room for one. Built from VIEWS, not from a
+// second copy of the list: two navigations that can disagree is how a menu goes stale.
+const rail = document.getElementById("nav");
+rail.innerHTML = VIEWS.map(v =>
+  `<div class="nv" role="link" tabindex="0" data-key="${esc(v.key)}">
+     <span>${esc(v.title)}</span>
+     <span class="c">${v.count === null ? "—" : v.count}</span></div>`).join("");
+rail.querySelectorAll(".nv").forEach(el => {
+  el.onclick = () => { viewer.value = el.dataset.key; switchTo(el.dataset.key); };
+  el.onkeydown = e => { if (e.key === "Enter") el.click(); };
+});
 
 function pills(counts) {
   return ["connected","unresolved","unused","uncertain"]
@@ -637,6 +672,8 @@ function renderPanel() {
 
 function switchTo(next) {
   mode = next;
+  rail.querySelectorAll(".nv").forEach(el =>
+    el.setAttribute("aria-current", el.dataset.key === next));
   const isMap = mode === "map";
   panel.hidden = isMap; svg.style.display = isMap ? "" : "none";
   document.querySelector(".zoom").hidden = !isMap;
@@ -738,11 +775,14 @@ def render(connectivity_map: ConnectivityMap, console=None) -> str:
         'viewport-fit=cover">',
         f"<title>Signal Map — {_esc(connectivity_map.git_sha[:12])}</title>",
         f"<style>{_CSS}</style></head><body>",
+        '<div class="shell"><aside class="rail">'
+        '<div class="railhead">Signal Map</div><div class="nav" id="nav"></div></aside>'
+        '<div class="content">'
         '<header class="top">',
         f'<div class="brand"><b>Signal Map</b>'
         f'<span class="meta">HEAD {_esc(connectivity_map.git_sha[:12])} · {_esc(mode)}</span>'
         f"</div>",
-        '<div class="filters"><label class="wide"><span>View</span>'
+        '<div class="filters onlymob"><label class="wide"><span>View</span>'
         '<select id="vw"></select></label></div>',
         '<div class="filters">'
         '<label><span>Commit</span><select id="cm"></select></label>'
@@ -763,7 +803,7 @@ def render(connectivity_map: ConnectivityMap, console=None) -> str:
         '<aside class="sheet" id="detail" hidden>'
         '<button class="x" id="dx" type="button" aria-label="Close">\u00d7</button>'
         '<div id="dbody"></div></aside>',
-        "</main>",
+        "</main></div></div>",
         f"<script>const MAPDATA={_payload(connectivity_map)};</script>",
         f"<script>const CONSOLE={_console_payload(console)};</script>",
         f"<script>{_SCRIPT}</script>",

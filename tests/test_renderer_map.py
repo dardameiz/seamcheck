@@ -208,10 +208,13 @@ class CommitContextTests(SimpleTestCase):
     def test_the_scanned_head_is_named_in_the_header(self):
         self.assertIn("HEAD abc123def456", map_html.render(_map()))
 
-    def test_it_opens_on_the_newest_commit_not_on_the_whole_graph(self):
+    def test_the_newest_commit_is_first_and_marked_but_is_not_the_opening_view(self):
+        # It used to open there. A commit whose only change was a deletion has nothing
+        # left to draw, so the page opened on a canvas holding one node.
         out = map_html.render(_map(commits=self._commits()))
 
-        self.assertIn('picker.value = "0"; selectCommit(0);', out)
+        self.assertIn("HEAD · ", out)
+        self.assertNotIn("selectCommit(0);", out)
 
     def test_a_change_that_no_longer_exists_is_still_named(self):
         # The canvas draws today's code. A symbol this commit deleted - or added and a
@@ -270,7 +273,26 @@ class MergedReviewViewTests(SimpleTestCase):
 
         self.assertIn('"sections": []', out)
 
-    def test_it_opens_on_the_summary_not_on_a_canvas_a_commit_may_have_emptied(self):
+    def test_it_opens_on_the_map_because_that_is_what_the_page_is_for(self):
         out = map_html.render(_map(), console=self._console())
 
-        self.assertIn('const OPENS_ON = "overview"', out)
+        self.assertIn('const OPENS_ON = "map"', out)
+
+    def test_a_desktop_gets_a_rail_and_a_phone_gets_the_select(self):
+        # Rebuilding for the phone deleted the rail entirely; both drive one switch, and
+        # both are built from one list so they cannot disagree.
+        out = map_html.render(_map(), console=self._console())
+
+        self.assertIn('<div class="nav" id="nav">', out)
+        self.assertIn("const VIEWS = ", out)
+        self.assertIn('class="filters onlymob"', out)
+        self.assertIn(".onlymob { display:none; }", out)
+
+
+class HiddenElementTests(SimpleTestCase):
+    def test_hidden_beats_an_author_display_rule(self):
+        # .zoom and .crumbrow set display:flex, which beats the UA rule [hidden] relies
+        # on: el.hidden read back true while both stayed on screen over the panel.
+        out = map_html.render(_map())
+
+        self.assertIn("[hidden] { display:none !important; }", out)
