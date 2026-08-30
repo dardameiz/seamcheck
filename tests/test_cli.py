@@ -203,3 +203,54 @@ class ReportFormatTests(SimpleTestCase):
             )
 
         self.assertEqual(len(calls), 1)
+
+
+@override_settings(SIGNAL_MAP_CONFIG=_CONFIG)
+class CheckSinceExitCodeTests(SimpleTestCase):
+    """`--check --since` is the CI gate. It printed findings and exited 0."""
+
+    def _run(self, *args):
+        out = StringIO()
+        try:
+            call_command("dump_connectivity_map", *args, stdout=out, stderr=StringIO())
+        except SystemExit as exit_code:
+            return out.getvalue(), int(str(exit_code.code))
+        return out.getvalue(), 0
+
+    def _diff(self, **kwargs):
+        from signal_map.diff import DiffResult
+
+        return DiffResult(**{"new_unresolved": [], "new_unused": [], "resolved": [],
+                             "triage_invalidated": [], **kwargs})
+
+    def test_a_gate_that_found_something_new_fails_the_build(self):
+        symbol = mock.Mock(id="url:gone")
+        with mock.patch.object(api, "diff_against",
+                               return_value=(self._diff(new_unresolved=[symbol]), "abc", "")):
+            output, code = self._run("--check", "--since", "abc")
+
+        self.assertIn("new_unresolved: url:gone", output)
+        self.assertEqual(code, 1)
+
+    def test_a_gate_that_found_nothing_new_passes(self):
+        with mock.patch.object(api, "diff_against", return_value=(self._diff(), "abc", "")):
+            _, code = self._run("--check", "--since", "abc")
+
+        self.assertEqual(code, 0)
+
+    def test_since_without_check_only_reports_and_never_fails(self):
+        symbol = mock.Mock(id="url:gone")
+        with mock.patch.object(api, "diff_against",
+                               return_value=(self._diff(new_unresolved=[symbol]), "abc", "")):
+            output, code = self._run("--since", "abc")
+
+        self.assertIn("new_unresolved: url:gone", output)
+        self.assertEqual(code, 0)
+
+    def test_a_gate_with_no_baseline_did_not_pass_it_did_not_run(self):
+        # Exiting 0 here tells CI the build is clean when nothing was compared at all.
+        with mock.patch.object(api, "diff_against", return_value=(None, "abc", "no baseline")):
+            output, code = self._run("--check", "--since", "abc")
+
+        self.assertIn("no baseline", output)
+        self.assertEqual(code, 2)

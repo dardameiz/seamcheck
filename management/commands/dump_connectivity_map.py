@@ -114,8 +114,20 @@ class Command(BaseCommand):
             result, _, message = api.diff_against(graph, options["since"], repo_root)
             if message:
                 self.stdout.write(message)
+                # A gate asked to compare against a baseline that is not there has not
+                # passed - it has not run. Exit 2, so CI can tell "nothing new" (0) from
+                # "no findings, because nothing was checked".
+                if options["check"]:
+                    raise SystemExit(2)
                 return
             self._report(result)
+            # `--since` alone answers "what changed"; with `--check` it is a gate, and a
+            # gate that prints findings and exits 0 tells CI the build is clean. This
+            # branch returned before ever reaching an exit code.
+            if options["check"] and (
+                result.new_unresolved or result.new_unused or result.triage_invalidated
+            ):
+                raise SystemExit(1)
             return
 
         outcome = api.check(repo_root)
