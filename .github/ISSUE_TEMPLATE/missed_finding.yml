@@ -1,5 +1,5 @@
 name: Missed finding
-description: Something is genuinely dead or broken and Signal Map did not report it
+description: Something is genuinely dead or broken and Seamcheck did not report it
 labels: ["false-negative"]
 body:
   - type: textarea

@@ -11,7 +11,7 @@
 
 - [ ] Test written first, and **watched fail** with the fix removed
 - [ ] Tests are `SimpleTestCase` methods (a bare `def test_*()` is silently skipped)
-- [ ] `ruff check signal_map/` clean
+- [ ] `ruff check seamcheck/` clean
 - [ ] Run against a real project, not only fixtures
 - [ ] Nothing new is claimed `unused` without both sides of the contract observable
 - [ ] Conventional Commit prefix (`feat:`, `fix:`, `test:`, `docs:`, `refactor:`, `chore:`)

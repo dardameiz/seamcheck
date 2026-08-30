@@ -1,8 +1,8 @@
-# Contributing to Signal Map
+# Contributing to Seamcheck
 
 ## The one rule that matters
 
-**Signal Map must never claim something is dead without evidence.** A false `unused` costs
+**Seamcheck must never claim something is dead without evidence.** A false `unused` costs
 a maintainer a deletion, a revert, and their trust in the tool. A missing finding costs
 nothing by comparison. When in doubt the answer is `uncertain` with a note naming the
 evidence the scan does not have.
@@ -14,11 +14,11 @@ Every pull request is read against that rule first.
 ```bash
 pip install -e ".[models,mcp]"
 npm install --save-dev acorn postcss     # only needed for the JS/CSS extractors
-python manage.py test signal_map
-ruff check signal_map/
+python manage.py test seamcheck
+ruff check seamcheck/
 ```
 
-Signal Map is developed inside a host Django project so it is always run against real
+Seamcheck is developed inside a host Django project so it is always run against real
 code. See [PACKAGING.md](PACKAGING.md).
 
 ## Test-driven, and prove the test fails
@@ -60,9 +60,9 @@ retrofitted onto history.
 - Every symbol carries `file`, `line` where known, and the snippet that produced it. No
   classification without the evidence behind it.
 - No hardcoded project-specific strings in extractor or classifier code — those come from
-  `SIGNAL_MAP_CONFIG`.
+  `SEAMCHECK_CONFIG`.
 
 ## Reporting a bug
 
 The most useful report is a minimal fixture plus the two numbers that disagree: what
-Signal Map said, and what the codebase actually contains.
+Seamcheck said, and what the codebase actually contains.

@@ -1,5 +1,5 @@
 name: False finding
-description: Signal Map reported something as unused, unresolved or multi-writer and it is not
+description: Seamcheck reported something as unused, unresolved or multi-writer and it is not
 labels: ["false-positive"]
 body:
   - type: markdown
@@ -10,7 +10,7 @@ body:
     id: symbol
     attributes:
       label: Symbol id
-      description: From `dump_connectivity_map --explain <symbol-id>`, or the reported id.
+      description: From `seamcheck --explain <symbol-id>`, or the reported id.
     validations:
       required: true
   - type: textarea
@@ -30,4 +30,4 @@ body:
   - type: input
     id: version
     attributes:
-      label: Signal Map version
+      label: Seamcheck version

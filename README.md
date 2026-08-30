@@ -1,9 +1,9 @@
-# Signal Map
+# Seamcheck
 
 Find the code your project no longer connects to — and the connections it only *thinks*
 it has.
 
-Signal Map builds a connectivity graph of a Django + vanilla-JS project by parsing it:
+Seamcheck builds a connectivity graph of a Django + vanilla-JS project by parsing it:
 which URLs exist, which views they route to, which `fetch()` calls resolve to them, which
 DOM elements the templates declare and the JavaScript writes, and which CSS rules and
 design tokens anything still references. It reports what is connected, what resolves to
@@ -11,7 +11,7 @@ nothing, what nothing references — and, crucially, what it **cannot tell**.
 
 ## Why the fourth answer matters
 
-Most dead-code tools have three verdicts: used, unused, and a crash. Signal Map has four,
+Most dead-code tools have three verdicts: used, unused, and a crash. Seamcheck has four,
 and the fourth is the one that makes it safe to act on:
 
 | Status | Means |
@@ -22,7 +22,7 @@ and the fourth is the one that makes it safe to act on:
 | `uncertain` | The scan has no evidence either way — **not** a claim that it is dead |
 
 A page URL reached by `<a href>` or browser navigation looks identical to a dead one if
-you only parse `fetch()` calls. Signal Map says `uncertain` and names the missing evidence
+you only parse `fetch()` calls. Seamcheck says `uncertain` and names the missing evidence
 source instead of guessing. On a real 700-URL project that distinction is the difference
 between a usable report and 668 false "delete me" findings.
 
@@ -40,15 +40,15 @@ between a usable report and 668 false "delete me" findings.
 ## Install
 
 ```bash
-pip install signal-map[models,mcp]
+pip install seamcheck[models,mcp]
 ```
 
-Add it to `INSTALLED_APPS` and point `SIGNAL_MAP_CONFIG` at your project:
+Add it to `INSTALLED_APPS` and point `SEAMCHECK_CONFIG` at your project:
 
 ```python
-INSTALLED_APPS = [..., "django_extensions", "signal_map"]
+INSTALLED_APPS = [..., "django_extensions", "seamcheck"]
 
-SIGNAL_MAP_CONFIG = {
+SEAMCHECK_CONFIG = {
     "urlconf_module": "myproject.urls",
     "asgi_module": "myproject.asgi",
     "first_party_prefixes": ["myapp", "myproject"],
@@ -77,25 +77,25 @@ Coverage — still works; the JS/CSS extractors return nothing rather than faili
 ## Use
 
 ```bash
-python manage.py dump_connectivity_map                    # scan, write the map, print a summary
-python manage.py dump_connectivity_map --json             # the graph, as JSON
-python manage.py dump_connectivity_map --check            # diff vs the last snapshot; exit 1 on findings
-python manage.py dump_connectivity_map --since main       # diff against another commit's snapshot
-python manage.py dump_connectivity_map --format console        # the browsable console, 8 sections
-python manage.py dump_connectivity_map --format map            # the visual connectivity map
-python manage.py dump_connectivity_map --format map --since REF  # what changed between commits
-python manage.py dump_connectivity_map --explain <symbol-id>
-python manage.py dump_connectivity_map --triage <symbol-id> --status approved --reason "..."
+python manage.py seamcheck                    # scan, write the map, print a summary
+python manage.py seamcheck --json             # the graph, as JSON
+python manage.py seamcheck --check            # diff vs the last snapshot; exit 1 on findings
+python manage.py seamcheck --since main       # diff against another commit's snapshot
+python manage.py seamcheck --format console        # the browsable console, 8 sections
+python manage.py seamcheck --format map            # the visual connectivity map
+python manage.py seamcheck --format map --since REF  # what changed between commits
+python manage.py seamcheck --explain <symbol-id>
+python manage.py seamcheck --triage <symbol-id> --status approved --reason "..."
 ```
 
 ```bash
-python manage.py dump_connectivity_map --format markdown   # digest for a chat or a PR comment
-python manage.py dump_connectivity_map --format html       # one self-contained file
-python manage.py dump_connectivity_map --format markdown --out FINDINGS.md
+python manage.py seamcheck --format markdown   # digest for a chat or a PR comment
+python manage.py seamcheck --format html       # one self-contained file
+python manage.py seamcheck --format markdown --out FINDINGS.md
 ```
 
 The HTML report and the map are single files with no network requests — publish them
-wherever you like. Signal Map never uploads anything.
+wherever you like. Seamcheck never uploads anything.
 
 ### Reading it on a phone
 
@@ -103,7 +103,7 @@ The report is self-contained, so getting it onto a phone is a file-transfer prob
 hosting one. Any of these work, and none of them send your code anywhere:
 
 ```bash
-python manage.py dump_connectivity_map --format map --serve
+python manage.py seamcheck --format map --serve
 # Open on any device on this network:
 #     http://192.168.1.38:57071/GLb_D7GyG_Bk
 ```
@@ -124,10 +124,10 @@ or explicitly confirmed. It never fails a build over `uncertain`.
 
 ### Triage
 
-A finding you have looked at and accepted goes in `signal_map/triage.json`, committed:
+A finding you have looked at and accepted goes in `seamcheck/triage.json`, committed:
 
 ```bash
-python manage.py dump_connectivity_map --triage "css_token_def:token:--legacy" \
+python manage.py seamcheck --triage "css_token_def:token:--legacy" \
   --status approved --reason "kept for the vendored theme"
 ```
 
@@ -139,10 +139,10 @@ finding and have it stay silent through a real change.
 ### MCP
 
 ```bash
-python -m signal_map.mcp_server
+python -m seamcheck.mcp_server
 ```
 
-Exposes `signal_map_check`, `signal_map_explain`, `signal_map_triage` and `signal_map_report` so an agent can
+Exposes `seamcheck_check`, `seamcheck_explain`, `seamcheck_triage` and `seamcheck_report` so an agent can
 check its own work before claiming a task is done.
 
 ## Limitations

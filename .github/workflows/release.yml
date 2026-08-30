@@ -1,18 +1,18 @@
-# Publishes to PyPI on a version tag, using Trusted Publishing (OIDC) - no API token
-# is ever stored in the repo. Configure once at
-# https://pypi.org/manage/account/publishing/ with:
-#   PyPI project: signal-map
-#   Owner/repo:   <you>/signal-map
-#   Workflow:     release.yml
-#   Environment:  pypi
-#
-# Inert inside the host project (GitHub only reads .github/ at the repo root);
-# it activates when this directory becomes its own repo. See PACKAGING.md.
 name: release
 
+# Publishing is gated on a tag, and on the `pypi` environment - set a required reviewer
+# on that environment and no release can happen without someone approving it.
+#
+# No API token exists anywhere. `id-token: write` lets GitHub mint a short-lived OIDC
+# token that says "I am release.yml in this repo"; PyPI checks that against the trusted
+# publisher you registered and hands back an upload token good for a few minutes.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -22,23 +22,58 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m pip install --upgrade build
-      - run: python -m build
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # The wheel is only useful if the parsers inside it can run with no node_modules
+      # to resolve against. Rebuilt and diffed here so a stale bundle cannot ship.
+      - name: Rebuild the parser bundles
+        run: |
+          seamcheck/build_parsers.sh
+          git diff --exit-code -- seamcheck/js_tools seamcheck/css_tools \
+            || { echo "::error::bundles are stale - run seamcheck/build_parsers.sh and commit"; exit 1; }
+
+      - name: Build
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+
+      # Prove the artefact works before it is published, not after: install the wheel
+      # into a clean venv with no node_modules anywhere and run a parser from it.
+      - name: Smoke-test the wheel
+        run: |
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/pip install dist/*.whl
+          cd /tmp
+          printf '.a{color:var(--x,1px)}' > s.css
+          echo /tmp/s.css | node "$(/tmp/smoke/bin/python -c 'import seamcheck,os;print(os.path.join(os.path.dirname(seamcheck.__file__),"css_tools","parse_css.bundle.mjs"))')"
+
       - uses: actions/upload-artifact@v4
         with:
           name: dist
           path: dist/
 
-  publish:
+  testpypi:
     needs: build
     runs-on: ubuntu-latest
-    environment: pypi
+    environment: testpypi
     permissions:
-      # The OIDC token PyPI exchanges for a short-lived upload credential.
       id-token: write
     steps:
       - uses: actions/download-artifact@v4
+        with: { name: dist, path: dist/ }
+      - uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          name: dist
-          path: dist/
+          repository-url: https://test.pypi.org/legacy/
+
+  pypi:
+    needs: testpypi
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: dist, path: dist/ }
       - uses: pypa/gh-action-pypi-publish@release/v1

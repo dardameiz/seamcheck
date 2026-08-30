@@ -2,7 +2,7 @@
 
 ## Scope
 
-Signal Map is a local, offline development tool. It reads source files, shells out to
+Seamcheck is a local, offline development tool. It reads source files, shells out to
 `node` for the bundled JavaScript and CSS parsers, and writes JSON to disk. It makes no
 network requests, opens no ports, and is not intended to run in production.
 
@@ -29,7 +29,7 @@ You can expect an acknowledgement within a week.
 
 In scope:
 
-- Anything that makes Signal Map execute code it was only supposed to parse.
+- Anything that makes Seamcheck execute code it was only supposed to parse.
 - Path traversal or arbitrary file write via a config value or a scanned filename.
 - Command injection through the `node` subprocess boundary.
 
