@@ -102,7 +102,7 @@ class BackfillDriverTests(SimpleTestCase):
     def test_the_driver_re_imports_the_tool_after_django_has_loaded_the_checkouts(self):
         from signal_map.history import _DRIVER
 
-        driver = _DRIVER.format(tool="/tool", sha="abc", out="/out")
+        driver = _DRIVER.format(tool="/tool", sha="abc", out="/out", config={})
         setup = driver.index("django.setup()")
 
         # django.setup() imports the checkout's own signal_map. Everything that makes the
@@ -112,6 +112,17 @@ class BackfillDriverTests(SimpleTestCase):
         self.assertGreater(driver.rindex("sys.path.insert(0, TOOL)"), setup)
         self.assertGreater(driver.index("from signal_map import api"), setup)
         self.assertIn("assert api.__file__.startswith(TOOL)", driver)
+
+    def test_the_driver_carries_todays_config_into_the_checkout(self):
+        from signal_map.history import _DRIVER
+
+        # A commit from before the tool existed has no SIGNAL_MAP_CONFIG, so it cannot be
+        # scanned at all; one whose config merely differed would be measured differently.
+        driver = _DRIVER.format(tool="/tool", sha="abc", out="/out",
+                                config={"templates_root": "t"})
+
+        self.assertIn("_s.SIGNAL_MAP_CONFIG = {'templates_root': 't'}", driver)
+        self.assertGreater(driver.index("_s.SIGNAL_MAP_CONFIG"), driver.index("django.setup()"))
 
 
 class OrderingTests(SimpleTestCase):

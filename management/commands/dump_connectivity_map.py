@@ -30,6 +30,10 @@ class Command(BaseCommand):
                  "roughly 30s per commit.",
         )
         parser.add_argument(
+            "--backfill-ref", default="HEAD", metavar="REF",
+            help="Which branch --backfill walks. Defaults to HEAD.",
+        )
+        parser.add_argument(
             "--tunnel", action="store_true",
             help="With --serve, also open a temporary public HTTPS link via cloudflared, "
                  "for a device that is not on this network. Anyone with the link can read "
@@ -67,7 +71,9 @@ class Command(BaseCommand):
             return self.stdout.write(api.explain(api.scan(options["repo_root"]), options["explain"]))
 
         if options["backfill"] is not None:
-            return self._backfill(options["repo_root"], options["backfill"])
+            return self._backfill(
+                options["repo_root"], options["backfill"], options["backfill_ref"]
+            )
         if options["format"] is not None:
             if not options["format"]:
                 # `--format ""` is falsy, so a bare `if options["format"]:` falls through
@@ -192,11 +198,11 @@ class Command(BaseCommand):
         for status, count in sorted(counts.items()):
             self.stdout.write(f"  {status:<12} {count}")
 
-    def _backfill(self, repo_root, count):
+    def _backfill(self, repo_root, count, ref="HEAD"):
         """Fill in the commit history the map's picker reads."""
         from signal_map.history import backfill
 
-        scanned = backfill(repo_root, count)
+        scanned = backfill(repo_root, count, ref=ref)
         if not scanned:
             return self.stdout.write(f"Nothing to scan: the last {count} commits already have snapshots.")
         for sha in scanned:

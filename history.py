@@ -124,6 +124,12 @@ TOOL = {tool!r}
 sys.path.insert(0, TOOL)
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "myproject.settings")
 import django; django.setup()
+# The instrument's settings travel with the instrument. A commit from before the tool
+# existed has no SIGNAL_MAP_CONFIG at all, and one whose config merely differed would be
+# measured differently - the same "did the project change or did the tool" ambiguity the
+# import juggling below exists to remove.
+from django.conf import settings as _s
+_s.SIGNAL_MAP_CONFIG = {config!r}
 # django.setup() puts the checkout ahead of us on sys.path and imports the signal_map
 # that commit shipped with. Evict it and re-import from TOOL, or every commit is
 # measured by its own scanner and the diff means nothing. The assert is here because
@@ -139,7 +145,7 @@ save_snapshot(api.scan("."), {sha!r}, {out!r})
 
 
 def backfill(repo_root: str = ".", count: int = 10, links: tuple[str, ...] = DEFAULT_LINKS,
-             scratch: str | None = None) -> list[str]:
+             scratch: str | None = None, ref: str = "HEAD") -> list[str]:
     """Scan the last `count` commits into snapshots, so the series is not empty.
 
     Two things have to be true for the resulting diffs to mean anything.
@@ -156,13 +162,19 @@ def backfill(repo_root: str = ".", count: int = 10, links: tuple[str, ...] = DEF
     """
     root = pathlib.Path(repo_root).resolve()
     have = set(snapshot_shas(repo_root))
-    wanted = _git(["log", f"-{count}", "--format=%H"], repo_root).splitlines()
+    # `ref` because the branch you are standing on is not always the one whose history is
+    # worth measuring: a tool branch's commits change nothing the scan reads.
+    wanted = _git(["log", f"-{count}", "--format=%H", ref], repo_root).splitlines()
     todo = [sha for sha in wanted if sha and sha not in have]
     if not todo:
         return []
 
+    from django.conf import settings
+
+    config = dict(getattr(settings, "SIGNAL_MAP_CONFIG", {}))
     base = pathlib.Path(scratch or os.environ.get("TMPDIR", "/tmp")) / "signal-map-backfill"
-    scanned = []
+    scanned: list[str] = []
+    failed: list[tuple[str, list[str]]] = []
     for sha in todo:
         checkout = base / sha[:12]
         shutil.rmtree(checkout, ignore_errors=True)
@@ -177,11 +189,19 @@ def backfill(repo_root: str = ".", count: int = 10, links: tuple[str, ...] = DEF
             (root / _SCANS_DIR).mkdir(parents=True, exist_ok=True)
             result = subprocess.run(
                 [str(python) if python.exists() else "python", "-c",
-                 _DRIVER.format(tool=str(_tool_root()), sha=sha, out=str(root))],
+                 _DRIVER.format(tool=str(_tool_root()), sha=sha, out=str(root),
+                                config=config)],
                 cwd=checkout, capture_output=True, text=True, check=False,
             )
             if result.returncode == 0 and (root / _SCANS_DIR / f"{sha}.json").is_file():
                 scanned.append(sha)
+            else:
+                # A swallowed failure here reads as "nothing to do" and is indistinguishable
+                # from success; the reason is the only useful thing to return.
+                failed.append((sha, (result.stderr or result.stdout).strip().splitlines()[-1:]))
         finally:
             _git(["worktree", "remove", "--force", str(checkout)], repo_root)
+    if failed and not scanned:
+        detail = "; ".join(f"{sha[:8]}: {' '.join(why)}" for sha, why in failed[:3])
+        raise RuntimeError(f"every commit failed to scan - {detail}")
     return scanned
