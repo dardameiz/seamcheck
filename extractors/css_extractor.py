@@ -5,17 +5,17 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 from dataclasses import replace
 
 from signal_map.graph import Status, Symbol
+from signal_map.nodetools import parser_path, run_parser
 
 _FALLBACK_NOTE = (
     "Resolves to the fallback written into the var() call; no definition is required. "
     "Only a bare var(--x) with no definition renders nothing."
 )
 
-_PARSE_SCRIPT = os.path.join(os.path.dirname(__file__), os.pardir, "css_tools", "parse_css.mjs")
+_CSS_TOOLS = os.path.join(os.path.dirname(__file__), os.pardir, "css_tools")
 # Tailwind escapes variant separators in the compiled CSS (`.md\:flex`, `.w-1\/2`)
 # while templates write them bare. Capturing only [\w-] stops at the backslash and
 # yields "md", which matches no template class.
@@ -27,11 +27,10 @@ def parse_css_files(css_files: list[str]) -> list[dict]:
     existing = [path for path in css_files if os.path.isfile(path)]
     if not existing:
         return []
-    result = subprocess.run(
-        ["node", _PARSE_SCRIPT], input="\n".join(existing),
-        capture_output=True, text=True, check=True,
-    )
-    return [json.loads(line) for line in result.stdout.splitlines()]
+    return [
+        json.loads(line)
+        for line in run_parser(parser_path(_CSS_TOOLS, "parse_css"), existing, "CSS")
+    ]
 
 
 def _symbol(kind: str, label: str, sub: str, path: str, line, snippet: str) -> Symbol:

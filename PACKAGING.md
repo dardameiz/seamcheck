@@ -26,6 +26,17 @@ signal-map/
 Nothing in `signal_map/` imports from the host project, and every project-specific path
 comes from `SIGNAL_MAP_CONFIG` in the host's settings — so no source change is needed.
 
+Before publishing, rebuild the parser bundles and commit them:
+
+```bash
+signal_map/build_parsers.sh
+```
+
+They carry `acorn` and `postcss` inlined. A `pip install` has no `node_modules`, so an
+unbundled parser exits `ERR_MODULE_NOT_FOUND` and the scan loses every JavaScript and CSS
+symbol - about half the graph. Node itself still has to be on PATH; without it the scan
+says so and returns the Django half rather than failing.
+
 Two things do need doing at publish time:
 
 1. Copy `.github/workflows/signal-map.yml` from the host repo (it lives at the host root

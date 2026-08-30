@@ -41,6 +41,9 @@ Issues = "https://github.com/dardameiz/signal-map/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["signal_map"]
+# The parser bundles are the wheel's whole reason for working: a pip install has no
+# node_modules to resolve acorn or postcss against, so they ship inlined.
+artifacts = ["signal_map/js_tools/*.bundle.mjs", "signal_map/css_tools/*.bundle.mjs"]
 # Fixtures, tests and the host project's own triage file are not part of what an
 # installing user needs; they stay in the sdist for contributors.
 exclude = ["signal_map/tests", "signal_map/triage.json"]

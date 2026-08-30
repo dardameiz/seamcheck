@@ -6,12 +6,12 @@ import json
 import os
 import pathlib
 import re
-import subprocess
 import tempfile
 
 from signal_map.graph import Edge, Status, Symbol
+from signal_map.nodetools import parser_path, run_parser
 
-_PARSE_SCRIPT = os.path.join(os.path.dirname(__file__), os.pardir, "js_tools", "parse_js.mjs")
+_JS_TOOLS = os.path.join(os.path.dirname(__file__), os.pardir, "js_tools")
 _JS_EXTENSIONS = (".js", ".mjs", ".jsx")
 
 # fetch() is the whole HTTP surface in most modern front ends, but sendBeacon() is a real
@@ -76,15 +76,8 @@ _FUNCTION_TYPES = ("FunctionDeclaration", "FunctionExpression", "ArrowFunctionEx
 def _parse_files(paths: list[str]) -> dict[str, dict]:
     if not paths:
         return {}
-    result = subprocess.run(
-        ["node", _PARSE_SCRIPT],
-        input="\n".join(paths),
-        capture_output=True,
-        text=True,
-        check=True,
-    )
     parsed: dict[str, dict] = {}
-    for line in result.stdout.splitlines():
+    for line in run_parser(parser_path(_JS_TOOLS, "parse_js"), paths, "JavaScript"):
         record = json.loads(line)
         if "ast" in record:
             parsed[record["path"]] = record["ast"]
