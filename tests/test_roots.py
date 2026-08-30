@@ -2,7 +2,7 @@ from pathlib import Path
 
 from django.test import SimpleTestCase
 
-from signal_map.roots import discover_js_roots, static_js_references
+from signal_map.roots import discover_js_roots, static_js_references, vite_entries
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -39,3 +39,27 @@ class JsRootTests(SimpleTestCase):
         for root in roots:
             self.assertTrue(root.endswith(".js"), root)
             self.assertTrue(Path(root).is_file(), root)
+
+
+class UnquotedViteEntryTests(SimpleTestCase):
+    def test_an_unquoted_object_key_is_still_an_entry(self):
+        # `main: resolve(...)` is valid JS. Requiring quotes silently skipped this
+        # project's largest entry - the one importing all 65 button classes - leaving
+        # 64 files unscanned and their DOM writes, fetch calls and CSS tokens invisible.
+        import tempfile
+        from pathlib import Path as _P
+
+        with tempfile.TemporaryDirectory() as tmp:
+            entry = _P(tmp) / "app.js"
+            entry.write_text("")
+            config = _P(tmp) / "vite.config.js"
+            config.write_text(
+                "export default { build: { rollupOptions: { input: {\n"
+                "  'quoted': resolve(__dirname, 'app.js'),\n"
+                "  main: resolve(__dirname, 'app.js'),\n"
+                "} } } }"
+            )
+
+            found = vite_entries(str(config))
+
+        self.assertEqual(found, ["app.js", "app.js"])

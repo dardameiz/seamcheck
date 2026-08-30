@@ -10,7 +10,11 @@ from __future__ import annotations
 import pathlib
 import re
 
-_VITE_ENTRY_RE = re.compile(r"['\"][\w-]+['\"]\s*:\s*\w+\(\s*__dirname\s*,\s*['\"]([^'\"]+)['\"]")
+# The key may be quoted or bare - `main: resolve(...)` is valid JS, and requiring
+# quotes silently skipped this project's largest entry point.
+_VITE_ENTRY_RE = re.compile(
+    r"(?:['\"][\w-]+['\"]|[A-Za-z_$][\w$]*)\s*:\s*\w+\(\s*__dirname\s*,\s*['\"]([^'\"]+)['\"]"
+)
 _STATIC_JS_RE = re.compile(r"\{%\s*static_js\s+['\"]([^'\"]+\.js)['\"]")
 
 
