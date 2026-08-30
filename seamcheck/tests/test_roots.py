@@ -16,27 +16,28 @@ class StaticJsReferenceTests(SimpleTestCase):
 
 
 class JsRootTests(SimpleTestCase):
+    """Against this package's own fixtures. These used to name a specific project's
+    vite.config.js and template root, so they described whichever codebase the package
+    was installed beside and failed outright in a clone."""
+
+    def _roots(self):
+        return discover_js_roots(
+            vite_config=str(FIXTURES_DIR / "fixture_vite.config.js"),
+            templates_root=str(FIXTURES_DIR),
+            static_root=str(FIXTURES_DIR),
+        )
+
     def test_roots_are_vite_entries_plus_static_js_scripts(self):
         # Scripts loaded by {% static_js %} are never imported by a Vite entry, so a
         # Vite-only root set leaves their fetch() calls invisible and their endpoints
         # looking unused.
-        roots = discover_js_roots(
-            vite_config="vite.config.js",
-            templates_root="pointless/templates",
-            static_root="pointless/static",
-        )
+        roots = self._roots()
 
-        self.assertTrue(any(r.endswith("base-main.js") for r in roots))
-        self.assertTrue(any(r.endswith("button_manager.js") for r in roots))
+        self.assertTrue(any(r.endswith("fixture_entry.js") for r in roots), roots)
+        self.assertTrue(any(r.endswith("fixture_module.js") for r in roots), roots)
 
     def test_every_root_is_an_existing_js_file(self):
-        roots = discover_js_roots(
-            vite_config="vite.config.js",
-            templates_root="pointless/templates",
-            static_root="pointless/static",
-        )
-
-        for root in roots:
+        for root in self._roots():
             self.assertTrue(root.endswith(".js"), root)
             self.assertTrue(Path(root).is_file(), root)
 

@@ -1,5 +1,22 @@
 # Contributing to Seamcheck
 
+## Running the tests
+
+```bash
+git clone https://github.com/dardameiz/seamcheck && cd seamcheck
+pip install -e . pytest
+pytest
+```
+
+446 tests, no database, no host project needed. `conftest.py` supplies the minimal Django
+settings, and the suite runs against the fixtures under `seamcheck/tests/fixtures/`.
+
+To rebuild the Node parsers after touching either `.mjs` source:
+
+```bash
+npm ci && ./build_parsers.sh
+```
+
 ## The one rule that matters
 
 **Seamcheck must never claim something is dead without evidence.** A false `unused` costs

@@ -57,3 +57,9 @@ line-length = 120  # matches the host project this is developed inside
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "C4"]
+
+
+[tool.pytest.ini_options]
+# Django's own runner needs a project; pytest plus conftest.py does not, which is what
+# lets someone clone this repo and run the suite without one.
+testpaths = ["seamcheck/tests"]
