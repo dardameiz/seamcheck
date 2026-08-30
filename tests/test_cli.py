@@ -2,9 +2,13 @@ import json
 import tempfile
 from io import StringIO
 from pathlib import Path
+from unittest import mock
 
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import SimpleTestCase, override_settings
+
+from signal_map import api
 
 FIXTURES_DIR = str(Path(__file__).parent / "fixtures")
 _CONFIG = {
@@ -125,3 +129,43 @@ class ReportFormatTests(SimpleTestCase):
 
             self.assertEqual(raised.exception.code, 1)
             self.assertIn("## Signal Map", Path(path).read_text())
+
+    def test_html_with_no_out_and_no_report_output_raises_command_error(self):
+        # The design doc requires --out for html when report_output isn't configured -
+        # falling through to stdout would dump the whole ~1MB document into a terminal,
+        # exactly what the config-fallback branch two lines above exists to prevent.
+        with override_settings(SIGNAL_MAP_CONFIG=_CONFIG), self.assertRaises(CommandError) as raised:
+            call_command("dump_connectivity_map", "--format", "html", stdout=StringIO(), stderr=StringIO())
+
+        self.assertIn("--out", str(raised.exception))
+
+    def test_since_composes_with_format_using_the_given_ref_not_head(self):
+        # An unresolvable ref surfaces its own name in the "No baseline" message, which
+        # only happens if --since actually reached api.report() rather than the default
+        # "HEAD" - this is the forwarding proof, not a real second-snapshot round trip.
+        output = self._run("--format", "markdown", "--since", "not-a-real-ref-xyz")
+
+        self.assertIn("not-a-real-ref-xyz", output)
+
+    def test_check_composes_with_format_scans_once(self):
+        # --check --format markdown must not pay for two full scans just because two
+        # flags are set; count calls rather than asserting "it still works", which
+        # would not catch a regression back to scanning twice.
+        calls = []
+        real_scan = api.scan
+
+        def counting_scan(*args, **kwargs):
+            calls.append(1)
+            return real_scan(*args, **kwargs)
+
+        with (
+            override_settings(SIGNAL_MAP_CONFIG=_CONFIG),
+            mock.patch("signal_map.api.scan", side_effect=counting_scan),
+            self.assertRaises(SystemExit),
+        ):
+            call_command(
+                "dump_connectivity_map", "--check", "--format", "markdown",
+                stdout=StringIO(), stderr=StringIO(),
+            )
+
+        self.assertEqual(len(calls), 1)

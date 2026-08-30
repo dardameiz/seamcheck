@@ -6,7 +6,7 @@ import json
 import pathlib
 
 from django.conf import settings
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 
 from signal_map import api
 
@@ -39,12 +39,17 @@ class Command(BaseCommand):
         if options["explain"]:
             return self.stdout.write(api.explain(api.scan(options["repo_root"]), options["explain"]))
         if options["format"]:
-            self._format_report(options)
+            # Scan once and share it: without this, --check --format pays for a full
+            # scan twice (once for the digest, once for the exit code) to do the same
+            # work. When --check isn't set, graph stays None and _format_report scans
+            # for itself, unchanged from the --format-alone path.
+            graph = api.scan(options["repo_root"]) if options["check"] else None
+            self._format_report(options, graph)
             # --check composes with --format: the CI use case is "post this digest as a
             # comment, fail the build" - so the digest must land before the exit, or a
             # failing build ships with nothing to read.
             if options["check"]:
-                self._exit_on_check(options["repo_root"])
+                self._exit_on_check(options["repo_root"], graph)
             return
         if options["json"]:
             from signal_map.graph import graph_to_dict
@@ -96,17 +101,17 @@ class Command(BaseCommand):
         for item in result.triage_invalidated:
             self.stdout.write(f"triage invalidated: {item['symbol_id']} - {item['note']}")
 
-    def _format_report(self, options):
+    def _format_report(self, options, graph=None):
         fmt = options["format"]
         repo_root = options["repo_root"]
 
         if fmt == "json":
             from signal_map.graph import graph_to_dict
 
-            text = json.dumps(graph_to_dict(api.scan(repo_root)), indent=2)
+            text = json.dumps(graph_to_dict(graph if graph is not None else api.scan(repo_root)), indent=2)
         else:
             try:
-                text = api.report(repo_root, fmt)
+                text = api.report(repo_root, fmt, ref=options["since"] or "HEAD", graph=graph)
             except ValueError as error:
                 self.stderr.write(str(error))
                 raise SystemExit(2) from error
@@ -117,14 +122,21 @@ class Command(BaseCommand):
             # promises the terminal must not silently redirect to a file.
             return self.stdout.write(text)
         if destination is None:
+            if fmt != "html":
+                return self.stdout.write(text)
             # An HTML report with no destination goes to the configured path, because
             # dumping a whole document into a terminal helps nobody. Read config from
             # settings, not api._config(): a command reaching into another module's
             # private helper is how a refactor there silently breaks this one.
             config = getattr(settings, "SIGNAL_MAP_CONFIG", {})
-            configured = config.get("report_output") if fmt == "html" else None
+            configured = config.get("report_output")
             if not configured:
-                return self.stdout.write(text)
+                # Falling through to stdout here would be the exact ~1MB-dump-to-a-
+                # terminal outcome this branch exists to prevent - fail cleanly instead.
+                raise CommandError(
+                    "--format html has no destination: pass --out PATH, or --out - to "
+                    "print the document to stdout."
+                )
             destination = configured
 
         path = pathlib.Path(repo_root) / destination
@@ -132,8 +144,8 @@ class Command(BaseCommand):
         path.write_text(text, encoding="utf-8")
         self.stdout.write(f"wrote {path}")
 
-    def _exit_on_check(self, repo_root):
-        if not api.check(repo_root)["passed"]:
+    def _exit_on_check(self, repo_root, graph=None):
+        if not api.check(repo_root, graph=graph)["passed"]:
             raise SystemExit(1)
 
     def _summary(self, options):

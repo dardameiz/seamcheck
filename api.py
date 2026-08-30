@@ -128,8 +128,9 @@ def _rev_parse(ref: str, repo_root: str) -> str:
     ).stdout.strip()
 
 
-def check(repo_root: str = ".") -> dict:
-    graph = scan(repo_root)
+def check(repo_root: str = ".", graph: Graph | None = None) -> dict:
+    if graph is None:
+        graph = scan(repo_root)
     entries = load_triage(repo_root)
     graph = apply_triage(graph, entries)
     result, message = diff_against(graph, "HEAD", repo_root)
@@ -149,7 +150,9 @@ def check(repo_root: str = ".") -> dict:
     }
 
 
-def report(repo_root: str = ".", fmt: str = "terminal", ref: str = "HEAD") -> str:
+def report(
+    repo_root: str = ".", fmt: str = "terminal", ref: str = "HEAD", graph: Graph | None = None
+) -> str:
     """Render the report. One model, chosen serializer - ordering lives in report.py."""
     from signal_map.renderers import html as html_renderer
     from signal_map.renderers import markdown as markdown_renderer
@@ -164,7 +167,8 @@ def report(repo_root: str = ".", fmt: str = "terminal", ref: str = "HEAD") -> st
     if fmt not in renderers:
         raise ValueError(f"Unknown format {fmt!r}. Use one of: {', '.join(sorted(renderers))}.")
 
-    graph = scan(repo_root)
+    if graph is None:
+        graph = scan(repo_root)
     diff, message = diff_against(graph, ref, repo_root)
     try:
         sha = current_git_sha(repo_root)
