@@ -296,3 +296,54 @@ class HiddenElementTests(SimpleTestCase):
         out = map_html.render(_map())
 
         self.assertIn("[hidden] { display:none !important; }", out)
+
+
+class BigCanvasTests(SimpleTestCase):
+    """Everything a page touches, in one canvas."""
+
+    def test_a_page_draws_all_its_symbols_not_only_its_modules(self):
+        # It used to show page and module nodes until a reader drilled in, which hid the
+        # thing the canvas is for: which symbols connect and which do not.
+        out = map_html.render(_map())
+
+        self.assertNotIn('n.kind === "page" || n.kind === "module"', out)
+        self.assertIn("const kinds = SECTION_KINDS[mode]", out)
+
+    def test_a_column_wraps_into_lanes_instead_of_running_off_the_page(self):
+        # One page holds 839 selectors: in a single file that column stood 25,000px tall.
+        out = map_html.render(_map())
+
+        self.assertIn("function place(buckets, used, rows)", out)
+        self.assertIn("ROW_CHOICES", out)
+
+    def test_the_wrap_is_chosen_by_measuring_not_by_a_constant(self):
+        # A fixed 42 laid the widest page out 6,600px wide; a formula off the tallest
+        # column alone then made the small pages worse.
+        out = map_html.render(_map())
+
+        self.assertIn("if (fit > bestFit)", out)
+
+    def test_a_section_is_a_lens_on_the_canvas_and_a_list_only_on_request(self):
+        out = map_html.render(_map())
+
+        self.assertIn("SECTION_KINDS = {", out)
+        self.assertIn('id="aslist"', out)
+
+    def test_the_switch_back_to_the_map_survives_list_mode(self):
+        # The toggle lived in a row hidden whenever the canvas was, so the list was a
+        # dead end.
+        out = map_html.render(_map())
+
+        self.assertIn("listToggle.hidden = !hasLens", out)
+
+    def test_unresolved_and_unused_are_filled_not_just_outlined(self):
+        # At the zoom where a whole page fits, labels are gone and an outline among
+        # 1,366 outlines carries nothing.
+        out = map_html.render(_map())
+
+        self.assertIn("color-mix(in srgb, ${stroke} 22%, var(--panel))", out)
+
+    def test_labels_are_dropped_when_they_would_be_unreadable(self):
+        out = map_html.render(_map())
+
+        self.assertIn("const withLabels = view.k >= 0.34", out)

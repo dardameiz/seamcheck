@@ -210,6 +210,17 @@ const esc = v => String(v == null ? "" : v).replace(/[&<>"']/g,
   c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 let current = 0, focus = null, view = {x:0, y:0, k:1}, query = "";
 
+// A section is a lens on the same canvas, not a different page. The list of rows is the
+// CLI's answer; on screen the answer is the shape.
+const SECTION_KINDS = {
+  map: null,
+  boundary: new Set(["module", "js_call", "fetch_target", "url", "view", "json_field"]),
+  dom: new Set(["dom_attr", "dom_selector", "multi_writer_element"]),
+  django: new Set(["url", "view", "model", "admin_action", "signal_receiver",
+                   "template_tag", "management_command"]),
+  css: new Set(["css_selector", "css_token_def", "css_token_use"]),
+};
+
 const svg = document.getElementById("cv");
 const sheet = document.getElementById("detail");
 const dbody = document.getElementById("dbody");
@@ -254,6 +265,13 @@ function changedIn(p) {
 
 function visible(p) {
   if (only) return changedIn(p);
+  // Everything this page touches, in one canvas. Showing only modules until a reader
+  // drilled in hid the whole point: which symbols connect and which stand alone.
+  if (!focus) {
+    const kinds = SECTION_KINDS[mode];
+    return new Set(p.nodes.filter(n => !kinds || n.kind === "page" || kinds.has(n.kind))
+                          .map(n => n.id));
+  }
   const adj = new Map();
   p.edges.forEach(e => {
     if (!adj.has(e.source)) adj.set(e.source, []);
@@ -261,10 +279,6 @@ function visible(p) {
     adj.get(e.source).push(e.target);
     adj.get(e.target).push(e.source);
   });
-  if (!focus) {
-    const keep = new Set(p.nodes.filter(n => n.kind === "page" || n.kind === "module").map(n => n.id));
-    return keep;
-  }
   const keep = new Set([focus]);
   let front = [focus];
   for (let hop = 0; hop < 4 && front.length; hop++) {
@@ -279,6 +293,39 @@ function visible(p) {
   return keep;
 }
 
+const NODE_W = 150, LANE = 160, ROW = 30;
+
+const ROW_CHOICES = [16, 22, 30, 42, 58, 80, 110, 150, 210];
+
+// How tall a column runs before wrapping into another lane. Fixed at 42, the widest page
+// laid out 6,600 x 1,300 and fitting that to a landscape canvas shrank it to 18% with two
+// thirds of the screen empty; a formula off the tallest column alone then made the SMALL
+// pages worse, because what drives the width is every column's lanes, not one column's
+// depth. So the layout is simply computed at each candidate and the one that fits largest
+// wins - a handful of arithmetic passes over a few thousand nodes, once per draw.
+function place(buckets, used, rows) {
+  const pos = new Map();
+  const columns = [];
+  let x = 40, deepest = 1;
+  used.forEach(c => {
+    const items = buckets.get(c);
+    const lanes = Math.max(1, Math.ceil(items.length / rows));
+    items.forEach((n, i) => pos.set(n.id, {
+      x: x + Math.floor(i / rows) * LANE,
+      y: 62 + (i % rows) * ROW,
+    }));
+    deepest = Math.max(deepest, Math.min(items.length, rows));
+    columns.push({x, label: COLS[c] ? COLS[c][1] : "Other", count: items.length});
+    x += lanes * LANE + 50;
+  });
+  return {pos, columns, width: x, height: 62 + deepest * ROW};
+}
+
+// A column wraps into lanes instead of running off the bottom of the world. One page here
+// holds 839 selectors: stacked in a single file that column stood 25,000px tall and no
+// amount of scrolling made the page legible, which is why the map used to show only
+// modules until you drilled in. Wrapped, the same page is about 1,300px tall and every
+// symbol it has is on screen at once.
 function layout(p, keep) {
   const buckets = new Map();
   p.nodes.filter(n => keep.has(n.id)).forEach(n => {
@@ -287,23 +334,17 @@ function layout(p, keep) {
     buckets.get(c).push(n);
   });
   const used = [...buckets.keys()].sort((a, b) => a - b);
-  const pos = new Map();
-  used.forEach((c, ci) => buckets.get(c).forEach((n, ri) =>
-    pos.set(n.id, {x: 40 + ci * 210, y: 62 + ri * 30})));
-  return {pos, columns: used.map((c, ci) => ({x: 40 + ci * 210, label: COLS[c] ? COLS[c][1] : "Other"}))};
+  const w = svg.clientWidth || 1200, h = svg.clientHeight || 700;
+  let best = null, bestFit = -1;
+  ROW_CHOICES.forEach(rows => {
+    const candidate = place(buckets, used, rows);
+    const fit = Math.min(w / (candidate.width + 40), h / (candidate.height + 40));
+    if (fit > bestFit) { bestFit = fit; best = candidate; }
+  });
+  return best;
 }
 
 const hit = n => !query || (n.label + " " + n.file).toLowerCase().includes(query);
-
-// How many rows the deepest column holds, for the fit.
-function rowsDeep(keep, pos) {
-  const perColumn = new Map();
-  keep.forEach(id => {
-    const q = pos.get(id); if (!q) return;
-    perColumn.set(q.x, (perColumn.get(q.x) || 0) + 1);
-  });
-  return Math.max(1, ...perColumn.values());
-}
 
 function draw() {
   const p = PAGES[current];
@@ -321,23 +362,21 @@ function draw() {
     return;
   }
   const keep = visible(p);
-  const {pos, columns} = layout(p, keep);
+  const {pos, columns, width, height} = layout(p, keep);
   // A phone is narrower than two columns of this map, so an untouched view opens showing
   // the whole chain, nudged clear of the left edge. Only the first draw of a view fits:
   // once someone pans or zooms, the view is theirs.
   if (view.k === 1 && view.x === 0 && view.y === 0) {
-    const need = 40 + columns.length * 210 + 10;
     const haveW = svg.clientWidth || 800, haveH = svg.clientHeight || 600;
-    if (need > haveW) view.k = Math.max(0.35, haveW / need);
-    // Tall columns stay pannable rather than being shrunk to nothing; short ones get
-    // centred, because a handful of nodes pinned to the top corner reads as a bug.
-    // Short pages get a small top margin, not half a screen of nothing: centring 16
-    // rows in an 800px canvas buried the map in dead space.
-    const tall = 62 + rowsDeep(keep, pos) * 30;
-    if (tall * view.k < haveH) view.y = Math.min(48, (haveH - tall * view.k) / 2);
+    // Fit the whole page, however wide it got. The floor is low on purpose: at that zoom
+    // nobody is reading labels, they are seeing which blocks connect and which stand
+    // alone - the question the canvas exists to answer.
+    view.k = Math.min(1, Math.max(0.06, Math.min(haveW / (width + 40), haveH / (height + 40))));
+    if (height * view.k < haveH) view.y = Math.min(48, (haveH - height * view.k) / 2);
   }
   const out = [`<g transform="translate(${view.x},${view.y}) scale(${view.k})">`];
-  columns.forEach(c => out.push(`<text class="col" x="${c.x}" y="44">${esc(c.label)}</text>`));
+  columns.forEach(c => out.push(
+    `<text class="col" x="${c.x}" y="44">${esc(c.label)} ${c.count}</text>`));
   p.edges.forEach(e => {
     const a = pos.get(e.source), b = pos.get(e.target);
     if (!a || !b) return;
@@ -345,18 +384,29 @@ function draw() {
     out.push(`<path class="ed" stroke="${S[e.status] || "var(--dim)"}"
       d="M${a.x + 150},${a.y + 10} C${mx},${a.y + 10} ${mx},${b.y + 10} ${b.x},${b.y + 10}"/>`);
   });
+  // "Alone" is the STATUS, not the edge count. A symbol reaches a page by an edge, so
+  // nothing here can have no edges, and the map's edge set carries no self-loops either -
+  // a marking driven off degree fired on precisely nothing. What alone actually means is
+  // unresolved (something reached for it and it was not there) or unused (both ends were
+  // observable and nothing used it), so those are filled rather than outlined: at the zoom
+  // where a whole page fits, labels are gone and a solid block is the only thing that
+  // carries across a wall of outlines.
+  const withLabels = view.k >= 0.34;
   p.nodes.filter(n => keep.has(n.id)).forEach(n => {
     const q = pos.get(n.id); if (!q) return;
     const ch = CHANGED[n.id];
+    const stroke = ch ? CH[ch] : (S[n.status] || "var(--dim)");
+    const alone = n.status === "unresolved" || n.status === "unused";
     const label = n.label.length > 20 ? n.label.slice(0, 19) + "…" : n.label;
     // The drawn box is 20px tall and the view opens scaled down, so on a phone the
     // visible target can be 8px. The transparent rect below it fills the row pitch.
     out.push(`<g class="nd${hit(n) ? "" : " faded"}" data-id="${n.id}">
       <rect x="${q.x - 5}" y="${q.y - 5}" width="160" height="30" fill="transparent"
             pointer-events="all"/>
-      <rect x="${q.x}" y="${q.y}" width="150" height="20" rx="5" fill="var(--panel)"
-            stroke="${ch ? CH[ch] : (S[n.status] || "var(--dim)")}" stroke-width="${ch ? 3 : 1.5}"/>
-      <text x="${q.x + 7}" y="${q.y + 14}">${esc(label)}</text></g>`);
+      <rect x="${q.x}" y="${q.y}" width="150" height="20" rx="5"
+            fill="${alone ? `color-mix(in srgb, ${stroke} 22%, var(--panel))` : "var(--panel)"}"
+            stroke="${stroke}" stroke-width="${ch ? 3 : 1.5}"/>
+      ${withLabels ? `<text x="${q.x + 7}" y="${q.y + 14}">${esc(label)}</text>` : ""}</g>`);
   });
   out.push("</g>");
   svg.innerHTML = out.join("");
@@ -574,7 +624,9 @@ document.addEventListener("pointerdown", () => { legendBox.hidden = true; });
 const D = CONSOLE, panel = document.getElementById("panel");
 const pgwrap = document.getElementById("pgwrap"), viewer = document.getElementById("vw");
 const ROWS_PER_PAGE = 60;
-let mode = "map", cq = "", cstatus = "", shown = ROWS_PER_PAGE;
+let mode = "map", cq = "", cstatus = "", shown = ROWS_PER_PAGE, asList = false;
+const listToggle = document.getElementById("aslist");
+listToggle.onclick = () => { asList = !asList; switchTo(mode); };
 // The map is what this page is for, so it opens on the map with the whole scan drawn.
 // The commit filter therefore starts at "everything": defaulting it to the newest commit
 // left the canvas holding one node, because a commit that only deletes something has
@@ -674,15 +726,25 @@ function switchTo(next) {
   mode = next;
   rail.querySelectorAll(".nv").forEach(el =>
     el.setAttribute("aria-current", el.dataset.key === next));
-  const isMap = mode === "map";
-  panel.hidden = isMap; svg.style.display = isMap ? "" : "none";
-  document.querySelector(".zoom").hidden = !isMap;
-  document.getElementById("lg").hidden = !isMap;
-  document.querySelector(".crumbrow").hidden = !isMap;
-  pgwrap.hidden = !isMap;
+  // A section with a lens draws on the canvas; one without (Overview, and the sections no
+  // extractor feeds yet) has nothing to draw and falls back to its rows.
+  const drawable = SECTION_KINDS[mode] !== undefined && !asList;
+  panel.hidden = drawable; svg.hidden = !drawable;
+  document.querySelector(".zoom").hidden = !drawable;
+  document.getElementById("lg").hidden = !drawable;
+  const hasLens = SECTION_KINDS[mode] !== undefined;
+  // The row stays while a lens exists, or the button that switches back to the map goes
+  // with it and the list becomes a dead end.
+  document.querySelector(".crumbrow").hidden = !hasLens;
+  document.getElementById("crumb").hidden = !drawable;
+  document.getElementById("q").hidden = !drawable;
+  pgwrap.hidden = !drawable;
+  listToggle.hidden = !hasLens;
+  listToggle.textContent = asList ? "Show as map" : "Show as list";
   closeSheet();
   cq = ""; cstatus = ""; shown = ROWS_PER_PAGE;
-  if (isMap) draw(); else renderPanel();
+  focus = null; view = {x:0, y:0, k:1};
+  if (drawable) draw(); else renderPanel();
 }
 
 viewer.onchange = e => switchTo(e.target.value);
@@ -788,6 +850,7 @@ def render(connectivity_map: ConnectivityMap, console=None) -> str:
         '<label><span>Commit</span><select id="cm"></select></label>'
         '<label id="pgwrap"><span>Page</span><select id="pg"></select></label></div>',
         '<div class="crumbrow"><button id="up" type="button" hidden>\u2190</button>'
+        '<button id="aslist" type="button" hidden>Show as list</button>'
         '<span id="crumb"></span>'
         '<input id="q" type="search" placeholder="Filter"></div>',
         '<div class="note" id="cmnote"></div><div class="gone" id="gone"></div>',
