@@ -97,6 +97,11 @@ def match_css_selectors(
             edges.append(Edge(from_id=symbol.id, to_id=defined.id, status=Status.CONNECTED))
         elif key[0] == "class" and symbol.label in tailwind_build_classes:
             edges.append(Edge(from_id=symbol.id, to_id=symbol.id, status=Status.CONNECTED))
+        elif symbol.sub.startswith("class:apply"):
+            # A class JavaScript applies exists to be styled OR to be a hook the code
+            # later queries. Having no stylesheet rule is therefore not a defect, so
+            # these contribute evidence and never become findings themselves.
+            continue
         else:
             edges.append(Edge(from_id=symbol.id, to_id=symbol.id, status=Status.UNRESOLVED))
 

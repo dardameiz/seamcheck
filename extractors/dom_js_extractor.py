@@ -208,3 +208,101 @@ def extract_js_css_tokens(js_files: list[str]) -> list[Symbol]:
                 )
             )
     return symbols
+
+
+_CLASS_LIST_METHODS = frozenset({"add", "remove", "toggle", "replace"})
+# The closing quote is optional: a template literal splits at every ${...}, so a
+# quasi routinely ends mid-attribute (`<div class="row ` before the hole).
+_CLASS_ATTR_RE = re.compile(r"""\bclass\s*=\s*["']([^"']*)(?:["']|$)""")
+# A class token is written by a human or a utility framework; anything carrying JS
+# punctuation is an interpolation fragment, not a name.
+_NOT_A_CLASS_RE = re.compile(r"""[${}()'"^,;<>=]|^\W+$""")
+
+
+def _class_tokens(raw: str) -> list[str]:
+    return [token for token in raw.split() if token and not _NOT_A_CLASS_RE.search(token)]
+
+
+def _literal_strings(node: dict) -> list[str]:
+    """String content a node contributes statically.
+
+    A template literal's quasis are static text; its `${...}` holes are not, so the
+    static neighbours are kept and the holes contribute nothing rather than a guess.
+    """
+    node_type = node.get("type")
+    if node_type == "Literal" and isinstance(node.get("value"), str):
+        return [node["value"]]
+    if node_type == "TemplateLiteral":
+        # Join the static chunks with a literal "${}" so any token touching an
+        # interpolation keeps the marker and is rejected as a name. `bb-spark-${i}`
+        # must not yield the fragment "bb-spark-"; `ab-star ${x}` must still yield
+        # "ab-star", because that token is whole.
+        return ["${}".join((quasi.get("value") or {}).get("raw", "") for quasi in node.get("quasis") or [])]
+    return []
+
+
+def extract_js_class_usages(js_files: list[str]) -> list[Symbol]:
+    """CSS classes JavaScript puts on elements: className, classList, setAttribute, markup.
+
+    A stylesheet rule referenced only this way looks unreferenced to a scan that reads
+    only querySelector() and template class= attributes. Measured on this project, that
+    was 3,205 unread sites and 5,318 selectors with no evidence either way.
+
+    Emitted with sub "class:apply" rather than ":write" deliberately: applying a class is
+    evidence the rule is live, but twenty modules adding `.active` is normal, so these
+    must not reach multi-writer detection.
+    """
+    symbols: list[Symbol] = []
+    seen: set[str] = set()
+
+    def _record(name: str, path: str, line, enclosing: str, snippet: str) -> None:
+        symbol_id = f"dom_selector:class:{name}:{path}:{line}"
+        if symbol_id in seen:
+            return
+        seen.add(symbol_id)
+        basename = os.path.basename(path)
+        symbols.append(
+            Symbol(
+                id=symbol_id, kind="dom_selector", label=name, sub="class:apply", file=path,
+                line=line, status=Status.UNCERTAIN, snippet=snippet,
+                chain=[basename, enclosing] if enclosing else [basename], note="",
+            )
+        )
+
+    for path, ast_root in _parse_files([f for f in js_files if os.path.isfile(f)]).items():
+        for node, enclosing in _walk(ast_root):
+            line = ((node.get("loc") or {}).get("start") or {}).get("line")
+            node_type = node.get("type")
+            sources: list[tuple[str, str]] = []
+
+            if node_type == "AssignmentExpression":
+                target = node.get("left") or {}
+                if (target.get("property") or {}).get("name") == "className":
+                    for text in _literal_strings(node.get("right") or {}):
+                        sources += [(token, "className = ...") for token in _class_tokens(text)]
+
+            elif node_type == "CallExpression":
+                callee = node.get("callee") or {}
+                method = (callee.get("property") or {}).get("name")
+                arguments = node.get("arguments") or []
+                if method in _CLASS_LIST_METHODS and (
+                    ((callee.get("object") or {}).get("property") or {}).get("name") == "classList"
+                ):
+                    for argument in arguments:
+                        for text in _literal_strings(argument):
+                            sources += [(token, f"classList.{method}(...)") for token in _class_tokens(text)]
+                elif method == "setAttribute" and len(arguments) >= 2:
+                    first = arguments[0]
+                    if first.get("type") == "Literal" and first.get("value") == "class":
+                        for text in _literal_strings(arguments[1]):
+                            sources += [(token, 'setAttribute("class", ...)') for token in _class_tokens(text)]
+
+            # Markup built as a string: class="..." inside any literal or template chunk.
+            for text in _literal_strings(node):
+                for match in _CLASS_ATTR_RE.findall(text):
+                    sources += [(token, 'class="..." in generated markup') for token in _class_tokens(match)]
+
+            for name, snippet in sources:
+                _record(name, path, line, enclosing, snippet)
+
+    return symbols

@@ -17,7 +17,11 @@ from signal_map.dom_matcher import (
 from signal_map.extractors.asgi_extractor import extract_asgi_routes
 from signal_map.extractors.css_extractor import extract_css
 from signal_map.extractors.django_extractor import extract_django_urls_views
-from signal_map.extractors.dom_js_extractor import extract_dom_selectors, extract_js_css_tokens
+from signal_map.extractors.dom_js_extractor import (
+    extract_dom_selectors,
+    extract_js_class_usages,
+    extract_js_css_tokens,
+)
 from signal_map.extractors.entry_points_extractor import extract_entry_points
 from signal_map.extractors.js_extractor import discover_js_files, extract_js
 from signal_map.extractors.template_scanner import scan_templates
@@ -117,7 +121,9 @@ def run_scan(
 
     dom_attrs = scan_templates(template_files or [])
     js_files = discover_js_files(js_entry_files, js_project_root) if template_files else []
-    dom_selectors = extract_dom_selectors(js_files)
+    # Classes applied at runtime are evidence a CSS rule is live; without them the
+    # scan reported 5,318 selectors with no evidence either way.
+    dom_selectors = extract_dom_selectors(js_files) + extract_js_class_usages(js_files)
     css_symbols = extract_css(css_files or [])
 
     if dom_attrs or dom_selectors or css_symbols:
