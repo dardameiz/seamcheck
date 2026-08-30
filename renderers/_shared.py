@@ -8,9 +8,22 @@ instead of forking the function.
 
 from __future__ import annotations
 
+import os
+
 
 def where(symbol) -> str:
-    """"file:line", "file" when there is no line, or "" when there is no file at all."""
+    """"file:line", "file" when there is no line, or "" when there is no file at all.
+
+    `symbol.file` arrives in whichever form its extractor happened to build it in -
+    repo-relative ("pointless/static/x.js"), relative with a leading "./" (os.path.join
+    with "."), or absolute (the entry-point extractor's os.path.abspath()). Three
+    spellings of the same location is already a readability bug; an absolute path is
+    worse, since it leaks the machine's directory layout into a document the README
+    tells people to publish. os.path.relpath() collapses all three to one repo-relative
+    form when rendered from the repo root - the normal way both the CLI and the MCP
+    server are run.
+    """
     if not symbol.file:
         return ""
-    return f"{symbol.file}:{symbol.line}" if symbol.line else symbol.file
+    path = os.path.relpath(symbol.file)
+    return f"{path}:{symbol.line}" if symbol.line else path
