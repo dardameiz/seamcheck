@@ -76,7 +76,10 @@ class TerminalRenderTests(SimpleTestCase):
 
         self.assertIn("No baseline snapshot stored yet.", out)
 
-    def test_uncertain_is_counted_but_never_presented_as_an_action(self):
+    def test_the_uncertain_count_label_and_gloss_sentence_are_rendered(self):
+        # Not a test that uncertain symbols are excluded from groups/new_findings - that
+        # guarantee is structural, in report.py's _FINDING_STATUSES, and cannot reach a
+        # renderer at all. This only checks the count label and gloss sentence text.
         out = terminal.render(_report())
 
         self.assertIn("uncertain", out)
