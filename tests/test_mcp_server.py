@@ -1,3 +1,4 @@
+import asyncio
 import tempfile
 from pathlib import Path
 
@@ -45,7 +46,15 @@ class McpToolFunctionTests(SimpleTestCase):
             self.assertTrue(result["ok"], result["message"])
             self.assertTrue((Path(tmp) / "signal_map" / "triage.json").is_file())
 
-    def test_the_three_tools_are_registered_on_the_server(self):
+    def test_the_four_tools_are_registered_on_the_server(self):
         from signal_map.mcp_server import mcp
 
         self.assertEqual(mcp.name, "signal-map")
+
+        # mcp.list_tools() is FastMCP's public registry accessor (the same call the
+        # MCP protocol's tools/list request serves); it's async because that request is.
+        registered = {tool.name for tool in asyncio.run(mcp.list_tools())}
+        self.assertEqual(
+            registered,
+            {"signal_map_check", "signal_map_explain", "signal_map_triage", "signal_map_report"},
+        )
