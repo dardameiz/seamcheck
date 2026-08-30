@@ -4,7 +4,9 @@
 import { readFileSync } from 'node:fs';
 import postcss from 'postcss';
 
-const VAR_USE = /var\(\s*(--[\w-]+)/g;
+// The comma decides whether this is a question or a statement: `var(--x)` asks for a
+// definition, `var(--x, .08em)` supplies its own answer and needs none.
+const VAR_USE = /var\(\s*(--[\w-]+)\s*(,)?/g;
 
 let buffer = '';
 process.stdin.setEncoding('utf8');
@@ -25,7 +27,7 @@ process.stdin.on('end', () => {
           record.tokenDefs.push({ name: decl.prop, line });
         }
         for (const match of decl.value.matchAll(VAR_USE)) {
-          record.tokenUses.push({ name: match[1], line });
+          record.tokenUses.push({ name: match[1], line, fallback: Boolean(match[2]) });
         }
       });
       root.walkAtRules('import', (rule) => {

@@ -167,7 +167,10 @@ _SET_PROPERTY = "setProperty"
 # CSS-in-JS: a stylesheet built as a string and injected still consumes tokens, and a
 # CSS-only scan cannot see it. Without this, a token set by JS and read by JS-embedded
 # CSS is reported unused while working perfectly.
-_VAR_USE_RE = re.compile(r"var\(\s*(--[\w-]+)")
+# The comma decides whether this is a question or a statement: `var(--x)` asks for a
+# definition, `var(--x, 50)` supplies its own answer. Injected CSS uses both forms, and
+# reading only the name reported the second as a broken reference.
+_VAR_USE_RE = re.compile(r"var\(\s*(--[\w-]+)\s*(,)?")
 
 
 def extract_js_css_tokens(js_files: list[str]) -> list[Symbol]:
@@ -216,18 +219,21 @@ def extract_js_css_tokens(js_files: list[str]) -> list[Symbol]:
         # template literals, inline style text.
         for node, _enclosing in _walk(ast_root):
             for text in _literal_strings(node):
-                for name in _VAR_USE_RE.findall(text):
-                    symbol_id = f"css_token_use:token:{name}"
+                for name, comma in _VAR_USE_RE.findall(text):
+                    sub = "token-fallback" if comma else "token"
+                    symbol_id = f"css_token_use:{sub}:{name}"
                     if symbol_id in seen:
                         continue
                     seen.add(symbol_id)
                     symbols.append(
                         Symbol(
-                            id=symbol_id, kind="css_token_use", label=name, sub="token",
+                            id=symbol_id, kind="css_token_use", label=name, sub=sub,
                             file=path, line=((node.get("loc") or {}).get("start") or {}).get("line"),
-                            status=Status.UNCERTAIN, snippet=f"var({name})",
+                            status=Status.UNCERTAIN,
+                            snippet=f"var({name}, ...)" if comma else f"var({name})",
                             chain=[os.path.basename(path), name],
-                            note="Consumed by CSS that JavaScript injects.",
+                            note="Consumed by CSS that JavaScript injects."
+                            + (" Resolves to its own fallback." if comma else ""),
                         )
                     )
     return symbols

@@ -15,7 +15,7 @@ from signal_map.dom_matcher import (
     match_dom_selectors,
 )
 from signal_map.extractors.asgi_extractor import extract_asgi_routes
-from signal_map.extractors.css_extractor import extract_css
+from signal_map.extractors.css_extractor import extract_css, extract_template_css
 from signal_map.extractors.django_extractor import extract_django_urls_views
 from signal_map.extractors.django_models_extractor import extract_django_models
 from signal_map.extractors.dom_js_extractor import (
@@ -132,6 +132,13 @@ def run_scan(
     # scan reported 5,318 selectors with no evidence either way.
     dom_selectors = extract_dom_selectors(js_files) + extract_js_class_usages(js_files)
     css_symbols = extract_css(css_files or [])
+    # A <style> block in a template is a stylesheet. Reading only .css files reported
+    # every element styled that way as one nothing reaches - this project keeps 1,016
+    # class and id selectors in 29 templates. Merged by id so a selector that also
+    # exists in a real stylesheet stays one symbol.
+    by_id = {symbol.id: symbol for symbol in extract_template_css(template_files or [])}
+    by_id.update({symbol.id: symbol for symbol in css_symbols})
+    css_symbols = list(by_id.values())
 
     if dom_attrs or dom_selectors or css_symbols:
         selectors = [s for s in css_symbols if s.kind == "css_selector"]

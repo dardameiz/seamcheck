@@ -6,8 +6,14 @@ import json
 import os
 import re
 import subprocess
+from dataclasses import replace
 
 from signal_map.graph import Status, Symbol
+
+_FALLBACK_NOTE = (
+    "Resolves to the fallback written into the var() call; no definition is required. "
+    "Only a bare var(--x) with no definition renders nothing."
+)
 
 _PARSE_SCRIPT = os.path.join(os.path.dirname(__file__), os.pardir, "css_tools", "parse_css.mjs")
 # Tailwind escapes variant separators in the compiled CSS (`.md\:flex`, `.w-1\/2`)
@@ -59,14 +65,71 @@ def extract_css(css_files: list[str]) -> list[Symbol]:
                 seen.add(symbol.id)
                 symbols.append(symbol)
         for use in record.get("tokenUses", []):
+            # A use that carries its own fallback is a different symbol from one that
+            # demands a definition, and must not share an id with it: 53 of this
+            # project's 63 "undefined token" findings were the fallback form.
+            fallback = bool(use.get("fallback"))
             symbol = _symbol(
-                "css_token_use", use["name"], "token", path, use["line"],
-                f"var({use['name']})",
+                "css_token_use", use["name"],
+                "token-fallback" if fallback else "token", path, use["line"],
+                f"var({use['name']}, ...)" if fallback else f"var({use['name']})",
             )
+            if fallback:
+                symbol = replace(symbol, note=_FALLBACK_NOTE)
             if symbol.id not in seen:
                 seen.add(symbol.id)
                 symbols.append(symbol)
     return symbols
+
+
+_STYLE_BLOCK_RE = re.compile(r"<style[^>]*>(.*?)</style>", re.S | re.I)
+
+
+def extract_template_css(template_files: list[str]) -> list[Symbol]:
+    """CSS written inside a template's own <style> block.
+
+    Reading only .css files made every element styled that way look like one nothing
+    reaches. This project keeps 1,016 class and id selectors in 29 templates' <style>
+    blocks - the same order as the whole "nothing reaches it" backlog.
+
+    The blocks go through the same postcss parse as a stylesheet, so a selector mentioned
+    in a comment is still not a selector, and line numbers are mapped back to the
+    template rather than to the block.
+    """
+    import pathlib
+    import tempfile
+
+    symbols: list[Symbol] = []
+    with tempfile.TemporaryDirectory() as scratch:
+        origins: dict[str, tuple[str, int]] = {}
+        for index, template in enumerate(sorted(template_files)):
+            try:
+                source = pathlib.Path(template).read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            for match in _STYLE_BLOCK_RE.finditer(source):
+                block = match.group(1)
+                if not block.strip():
+                    continue
+                # Where the block starts in the template, so a rule's line points at the
+                # template a reader would open, not at an offset inside a fragment.
+                offset = source.count("\n", 0, match.start(1))
+                path = os.path.join(scratch, f"{index}-{offset}.css")
+                pathlib.Path(path).write_text(block, encoding="utf-8")
+                origins[path] = (template, offset)
+
+        for record in parse_css_files(list(origins)):
+            template, offset = origins[record["path"]]
+            for rule in record.get("selectors", []):
+                line = (rule["line"] + offset) if rule["line"] else None
+                for marker, raw_name in _SELECTOR_TOKEN_RE.findall(rule["selector"]):
+                    name = _CSS_ESCAPE_RE.sub(r"\1", raw_name)
+                    symbols.append(_symbol(
+                        "css_selector", name, "id" if marker == "#" else "class",
+                        template, line, rule["selector"],
+                    ))
+    # One symbol per selector name: the id carries no line, so duplicates would collide.
+    return list({symbol.id: symbol for symbol in symbols}.values())
 
 
 def css_imports(css_files: list[str]) -> dict[str, list[str]]:

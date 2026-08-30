@@ -114,19 +114,32 @@ def match_css_selectors(
 
 
 def match_css_tokens(token_defs: list[Symbol], token_uses: list[Symbol]) -> list[Edge]:
-    defined = {symbol.label: symbol for symbol in token_defs}
-    used = {symbol.label: symbol for symbol in token_uses}
+    """Definitions against uses.
 
-    edges = [
-        Edge(from_id=used[name].id, to_id=defined[name].id, status=Status.CONNECTED)
-        for name in sorted(defined.keys() & used.keys())
-    ]
+    Iterated, not keyed by label: a token used both bare and with a fallback is two
+    symbols sharing one name, and a dict keyed by name silently dropped one of them.
+    """
+    defined = {symbol.label: symbol for symbol in token_defs}
+    edges: list[Edge] = []
+    used_labels: set[str] = set()
+
+    for use in sorted(token_uses, key=lambda symbol: symbol.id):
+        used_labels.add(use.label)
+        target = defined.get(use.label)
+        if target is not None:
+            edges.append(Edge(from_id=use.id, to_id=target.id, status=Status.CONNECTED))
+        elif use.sub == "token-fallback":
+            # `var(--x, .08em)` carries its own value. It is not waiting on a definition,
+            # and calling it unresolved reported 53 of this project's 63 "undefined
+            # token" findings as bugs while the CSS was correct - Font Awesome alone
+            # ships hundreds of them deliberately.
+            edges.append(Edge(from_id=use.id, to_id=use.id, status=Status.CONNECTED))
+        else:
+            edges.append(Edge(from_id=use.id, to_id=use.id, status=Status.UNRESOLVED))
+
     edges += [
-        Edge(from_id=defined[name].id, to_id=defined[name].id, status=Status.UNUSED)
-        for name in sorted(defined.keys() - used.keys())
-    ]
-    edges += [
-        Edge(from_id=used[name].id, to_id=used[name].id, status=Status.UNRESOLVED)
-        for name in sorted(used.keys() - defined.keys())
+        Edge(from_id=symbol.id, to_id=symbol.id, status=Status.UNUSED)
+        for name, symbol in sorted(defined.items())
+        if name not in used_labels
     ]
     return edges
