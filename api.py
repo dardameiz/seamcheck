@@ -149,6 +149,39 @@ def check(repo_root: str = ".") -> dict:
     }
 
 
+def report(repo_root: str = ".", fmt: str = "terminal", ref: str = "HEAD") -> str:
+    """Render the report. One model, chosen serializer - ordering lives in report.py."""
+    from signal_map.renderers import html as html_renderer
+    from signal_map.renderers import markdown as markdown_renderer
+    from signal_map.renderers import terminal as terminal_renderer
+    from signal_map.report import build_report
+
+    renderers = {
+        "terminal": terminal_renderer.render,
+        "markdown": markdown_renderer.render,
+        "html": html_renderer.render,
+    }
+    if fmt not in renderers:
+        raise ValueError(f"Unknown format {fmt!r}. Use one of: {', '.join(sorted(renderers))}.")
+
+    graph = scan(repo_root)
+    diff, message = diff_against(graph, ref, repo_root)
+    try:
+        sha = current_git_sha(repo_root)
+    except Exception:  # noqa: BLE001 - a report is still useful outside a git checkout
+        sha = "unknown"
+
+    built = build_report(
+        graph=graph,
+        diff=diff,
+        entries=load_triage(repo_root),
+        git_sha=sha,
+        baseline_sha=None if diff is None else sha,
+        baseline_message=message,
+    )
+    return renderers[fmt](built)
+
+
 def triage(symbol_id: str, status: str, repo_root: str = ".", reason: str = "") -> dict:
     try:
         triage_status = TriageStatus(status)

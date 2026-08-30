@@ -66,3 +66,35 @@ class DumpConnectivityMapTests(SimpleTestCase):
     def test_triage_without_status_is_rejected(self):
         with self.assertRaises(SystemExit):
             self._run("--triage", "view:whatever")
+
+
+class ReportFormatTests(SimpleTestCase):
+    def _run(self, *args):
+        out = StringIO()
+        with override_settings(SIGNAL_MAP_CONFIG=_CONFIG):
+            call_command("dump_connectivity_map", *args, stdout=out, stderr=StringIO())
+        return out.getvalue()
+
+    def test_markdown_format_prints_a_markdown_report(self):
+        self.assertIn("## Signal Map", self._run("--format", "markdown"))
+
+    def test_html_format_prints_a_complete_document(self):
+        self.assertIn("<!doctype html>", self._run("--format", "html", "--out", "-"))
+
+    def test_json_format_still_returns_the_whole_graph(self):
+        # --json has existing callers; changing what it returns would break them.
+        data = json.loads(self._run("--format", "json"))
+
+        self.assertIn("symbols", data)
+
+    def test_out_writes_to_a_file_instead_of_stdout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "r.md")
+            printed = self._run("--format", "markdown", "--out", path)
+
+            self.assertIn("## Signal Map", Path(path).read_text())
+            self.assertNotIn("## Signal Map", printed)
+
+    def test_an_unknown_format_is_rejected(self):
+        with self.assertRaises(SystemExit):
+            self._run("--format", "yaml")

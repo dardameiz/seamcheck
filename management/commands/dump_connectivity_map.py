@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import pathlib
 
+from django.conf import settings
 from django.core.management.base import BaseCommand
 
 from signal_map import api
@@ -21,12 +23,23 @@ class Command(BaseCommand):
         parser.add_argument("--status", help="Triage status: approved, confirmed, deferred, untriaged.")
         parser.add_argument("--reason", default="", help="Why this disposition.")
         parser.add_argument("--repo-root", default=".", help="Repo to read snapshots/triage from.")
+        parser.add_argument(
+            "--format", default=None,
+            # No choices=: Django's CommandParser.error() raises CommandError (not
+            # SystemExit) for call_command() invocations, so argparse-level validation
+            # can't produce the SystemExit callers of an invalid --format expect.
+            # _format_report() validates instead, via api.report()'s ValueError.
+            help="Output format: terminal, markdown, html, json. json emits the whole graph, as --json does.",
+        )
+        parser.add_argument("--out", default=None, help="Write to PATH instead of stdout ('-' for stdout).")
 
     def handle(self, *args, **options):
         if options["triage"]:
             return self._triage(options)
         if options["explain"]:
             return self.stdout.write(api.explain(api.scan(options["repo_root"]), options["explain"]))
+        if options["format"]:
+            return self._format_report(options)
         if options["json"]:
             from signal_map.graph import graph_to_dict
 
@@ -76,6 +89,42 @@ class Command(BaseCommand):
             self.stdout.write(f"new_unused: {symbol.id}")
         for item in result.triage_invalidated:
             self.stdout.write(f"triage invalidated: {item['symbol_id']} - {item['note']}")
+
+    def _format_report(self, options):
+        fmt = options["format"]
+        repo_root = options["repo_root"]
+
+        if fmt == "json":
+            from signal_map.graph import graph_to_dict
+
+            text = json.dumps(graph_to_dict(api.scan(repo_root)), indent=2)
+        else:
+            try:
+                text = api.report(repo_root, fmt)
+            except ValueError as error:
+                self.stderr.write(str(error))
+                raise SystemExit(2) from error
+
+        destination = options["out"]
+        if destination == "-":
+            # Explicit stdout always wins, even for html: a flag whose help text
+            # promises the terminal must not silently redirect to a file.
+            return self.stdout.write(text)
+        if destination is None:
+            # An HTML report with no destination goes to the configured path, because
+            # dumping a whole document into a terminal helps nobody. Read config from
+            # settings, not api._config(): a command reaching into another module's
+            # private helper is how a refactor there silently breaks this one.
+            config = getattr(settings, "SIGNAL_MAP_CONFIG", {})
+            configured = config.get("report_output") if fmt == "html" else None
+            if not configured:
+                return self.stdout.write(text)
+            destination = configured
+
+        path = pathlib.Path(repo_root) / destination
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        self.stdout.write(f"wrote {path}")
 
     def _summary(self, options):
         graph = api.scan(options["repo_root"])
