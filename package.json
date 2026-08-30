@@ -1,0 +1,13 @@
+{
+  "name": "seamcheck-parsers",
+  "private": true,
+  "description": "Build-time only. The published Python wheel ships the bundled parsers, not these.",
+  "scripts": {
+    "build": "./build_parsers.sh"
+  },
+  "devDependencies": {
+    "acorn": "8.16.0",
+    "esbuild": "0.28.1",
+    "postcss": "8.5.23"
+  }
+}

@@ -11,10 +11,15 @@
 # runtime; without it the ESM bundle dies with "Dynamic require of path is not supported".
 set -euo pipefail
 cd "$(dirname "$0")"
+
+# acorn and postcss have to be resolvable for esbuild to inline them. The published wheel
+# needs none of this - it carries the finished bundles - so they are devDependencies of
+# this repo, not runtime dependencies of the package.
+[ -d node_modules ] || npm ci --silent || npm install --silent
 BANNER="import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);"
 
 for pair in "js_tools/parse_js" "css_tools/parse_css"; do
-  npx --yes esbuild "seamcheck/${pair}.mjs" \
+  ./node_modules/.bin/esbuild "seamcheck/${pair}.mjs" \
     --bundle --platform=node --format=esm \
     --banner:js="$BANNER" \
     --outfile="seamcheck/${pair}.bundle.mjs"

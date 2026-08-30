@@ -30,7 +30,8 @@ jobs:
       # to resolve against. Rebuilt and diffed here so a stale bundle cannot ship.
       - name: Rebuild the parser bundles
         run: |
-          seamcheck/build_parsers.sh
+          npm ci
+          ./build_parsers.sh
           git diff --exit-code -- seamcheck/js_tools seamcheck/css_tools \
             || { echo "::error::bundles are stale - run seamcheck/build_parsers.sh and commit"; exit 1; }
 
