@@ -36,6 +36,9 @@ python manage.py dump_connectivity_map --check --format markdown   # digest AND 
 python manage.py dump_connectivity_map --format markdown     # digest for a chat or PR
 python manage.py dump_connectivity_map --format map          # visual, page-rooted
 python manage.py dump_connectivity_map --format map --since REF    # what changed
+python manage.py dump_connectivity_map --format console       # the 8-section review console
+python manage.py dump_connectivity_map --format console --serve    # open it from a phone on this wifi
+python manage.py dump_connectivity_map --format console --serve --tunnel   # ... or off it
 python manage.py dump_connectivity_map --format json         # the whole graph
 python manage.py dump_connectivity_map --explain <symbol-id> # one symbol's evidence
 python manage.py dump_connectivity_map --triage <symbol-id> --status approved --reason "..."

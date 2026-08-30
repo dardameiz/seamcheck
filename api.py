@@ -263,6 +263,7 @@ def _page_files(repo_root: str) -> dict[str, set[str]]:
 
 def _render_map(repo_root: str, ref: str) -> str:
     from signal_map.mapdata import build_map
+    from signal_map.pagenames import page_names
     from signal_map.renderers import map_html
 
     graph = scan(repo_root)
@@ -280,7 +281,8 @@ def _render_map(repo_root: str, ref: str) -> str:
         sha = "unknown"
     return map_html.render(
         build_map(graph, _page_files(repo_root), git_sha=sha,
-                  baseline=baseline, baseline_sha=baseline_sha if baseline else None)
+                  baseline=baseline, baseline_sha=baseline_sha if baseline else None,
+                  names=page_names(repo_root, _config(), graph))
     )
 
 

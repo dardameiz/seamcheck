@@ -54,3 +54,17 @@ class ServeOnceTests(SimpleTestCase):
         address = local_ip()
 
         self.assertRegex(address, r"^\d+\.\d+\.\d+\.\d+$")
+
+
+class PublicTunnelTests(SimpleTestCase):
+    def test_a_missing_tunnel_client_names_how_to_install_it(self):
+        from unittest import mock
+
+        from signal_map.serve import public_tunnel
+
+        with (
+            mock.patch("shutil.which", return_value=None),
+            self.assertRaises(RuntimeError) as caught,
+        ):
+            public_tunnel(1234)
+        self.assertIn("brew install cloudflared", str(caught.exception))

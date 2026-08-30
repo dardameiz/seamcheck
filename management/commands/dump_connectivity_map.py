@@ -24,6 +24,12 @@ class Command(BaseCommand):
         parser.add_argument("--reason", default="", help="Why this disposition.")
         parser.add_argument("--repo-root", default=".", help="Repo to read snapshots/triage from.")
         parser.add_argument(
+            "--tunnel", action="store_true",
+            help="With --serve, also open a temporary public HTTPS link via cloudflared, "
+                 "for a device that is not on this network. Anyone with the link can read "
+                 "the report; it dies with the command.",
+        )
+        parser.add_argument(
             "--serve", action="store_true",
             help="Serve the report to your local network so a phone can open it. "
                  "Nothing is uploaded; the server stops when you do.",
@@ -133,7 +139,7 @@ class Command(BaseCommand):
                 raise SystemExit(2) from error
 
         if options["serve"]:
-            return self._serve(text, fmt)
+            return self._serve(text, fmt, tunnel=options["tunnel"])
 
         destination = options["out"]
         if destination == "-":
@@ -177,19 +183,36 @@ class Command(BaseCommand):
         for status, count in sorted(counts.items()):
             self.stdout.write(f"  {status:<12} {count}")
 
-    def _serve(self, text, fmt):
+    def _serve(self, text, fmt, tunnel=False):
         """Hold the report open on the LAN until interrupted."""
-        from signal_map.serve import serve_once
+        from signal_map.serve import public_tunnel, serve_once
 
         if fmt == "json":
             raise CommandError("--serve renders a page; use --format map or html.")
 
         server, url = serve_once(text)
         self.stdout.write(f"Open on any device on this network:\n\n    {url}\n")
-        self.stdout.write("Nothing was uploaded. Press Ctrl-C to stop.")
+        proxy = None
+        if tunnel:
+            try:
+                proxy, public = public_tunnel(server.server_port)
+            except RuntimeError as error:
+                # A tunnel that will not open must not take the LAN server down with it.
+                self.stderr.write(str(error))
+            else:
+                self.stdout.write(
+                    f"Public link, readable by anyone who has it:\n\n"
+                    f"    {public}{url[url.index('/', 8):]}\n"
+                )
+        self.stdout.write(
+            "The report is served from this machine only, for as long as this command "
+            "runs. Press Ctrl-C to stop."
+        )
         try:
             server.serve_forever()
         except KeyboardInterrupt:
             self.stdout.write("\nstopped")
         finally:
             server.server_close()
+            if proxy is not None:
+                proxy.terminate()

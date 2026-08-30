@@ -110,3 +110,40 @@ class DiffModeTests(SimpleTestCase):
         built = self._built(Graph(symbols=[], edges=[]))
 
         self.assertEqual((built.git_sha, built.baseline_sha), ("new", "old"))
+
+
+class PageNamingTests(SimpleTestCase):
+    def test_a_page_carries_the_name_a_reader_recognises(self):
+        from signal_map.pagenames import PageName
+
+        built = build_map(
+            _graph(),
+            {"push-arena-main": {"a.js"}},
+            git_sha="sha",
+            names={
+                "push-arena-main": PageName(
+                    title="Push Arena", where="/push_arena/ - push_arena.html",
+                    entry="push-arena-main",
+                )
+            },
+        )
+        self.assertEqual(built.pages[0].title, "Push Arena")
+        self.assertEqual(built.pages[0].where, "/push_arena/ - push_arena.html")
+
+    def test_pages_are_ordered_by_that_name_not_by_bundle_filename(self):
+        from signal_map.pagenames import PageName
+
+        built = build_map(
+            _graph(),
+            {"zz-main": {"a.js"}, "aa-main": {"a.js"}},
+            git_sha="sha",
+            names={
+                "zz-main": PageName(title="Arena", where="", entry="zz-main"),
+                "aa-main": PageName(title="Store", where="", entry="aa-main"),
+            },
+        )
+        self.assertEqual([page.title for page in built.pages], ["Arena", "Store"])
+
+    def test_without_names_a_page_still_renders_under_its_bundle_filename(self):
+        built = build_map(_graph(), {"push-arena-main": {"a.js"}}, git_sha="sha")
+        self.assertEqual(built.pages[0].title, "push-arena-main")

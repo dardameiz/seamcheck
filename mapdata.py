@@ -14,6 +14,7 @@ import os
 from dataclasses import dataclass, field
 
 from signal_map.graph import Graph, Status, Symbol
+from signal_map.pagenames import PageName
 
 # Symbols that belong to a JS module and start a chain outward.
 _SEED_KINDS = frozenset({"js_call", "fetch_target", "dom_selector", "multi_writer_element"})
@@ -52,6 +53,10 @@ class PageMap:
     page: str
     nodes: list[MapNode]
     edges: list[MapEdge]
+    # What to call this on screen. Defaults to the bundle's own filename, so a map built
+    # without name resolution still renders rather than showing blanks.
+    title: str = ""
+    where: str = ""
 
 
 @dataclass
@@ -150,13 +155,20 @@ def build_map(
     baseline: Graph | None = None,
     baseline_sha: str | None = None,
     now: str | None = None,
+    names: dict[str, PageName] | None = None,
 ) -> ConnectivityMap:
     adjacency = build_adjacency(graph)
-    page_maps = [
-        build_page_map(page, files, graph, adjacency)
-        for page, files in sorted(pages.items())
-    ]
+    page_maps = []
+    for page, files in sorted(pages.items()):
+        page_map = build_page_map(page, files, graph, adjacency)
+        name = (names or {}).get(page)
+        page_map.title = name.title if name else page
+        page_map.where = name.where if name else ""
+        page_maps.append(page_map)
     page_maps = [page_map for page_map in page_maps if len(page_map.nodes) > 1]
+    # Grouped by the page a reader recognises, then by bundle inside it, so the sidebar
+    # reads as a site rather than as a build manifest.
+    page_maps.sort(key=lambda page_map: (page_map.title.lower(), page_map.page))
 
     changed: dict[str, str] = {}
     if baseline is not None:

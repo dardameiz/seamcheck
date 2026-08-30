@@ -51,6 +51,11 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:14px;
 .pg:hover { background:var(--bg); }
 .pg[aria-selected="true"] { background:var(--bg); border-left:3px solid var(--sig); font-weight:600; }
 .pg .n { color:var(--muted); font-size:11px; }
+.grp { padding:12px 14px 5px; border-bottom:1px solid var(--line); background:var(--bg); }
+.grp .t { font-size:13px; font-weight:700; }
+.grp .w { font-size:11px; color:var(--muted); margin-top:2px; word-break:break-all;
+          font-family:ui-monospace,Menlo,monospace; }
+.pg { padding-left:22px; }
 .detail { border-top:1px solid var(--line); padding:12px 14px; max-height:42%; overflow-y:auto; }
 .detail h2 { font-size:13px; margin:0 0 6px; word-break:break-all; }
 .detail .row { color:var(--muted); font-size:12px; margin-bottom:4px;
@@ -80,12 +85,26 @@ svg.drag { cursor:grabbing; }
 .ed { fill:none; stroke-width:1.2; opacity:.45; }
 .ed.faded { opacity:.05; }
 .col { font-size:10px; fill:var(--muted); text-transform:uppercase; letter-spacing:.08em; }
-.legend { position:absolute; bottom:10px; right:12px; background:var(--panel);
+.legend { pointer-events:none; position:absolute; bottom:10px; right:12px; background:var(--panel);
           border:1px solid var(--line); border-radius:7px; padding:8px 10px; font-size:11px;
           color:var(--muted); z-index:2; }
 .legend span { display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:5px; }
 .empty { position:absolute; inset:41px 0 0 0; display:flex; align-items:center;
          justify-content:center; color:var(--muted); }
+
+/* A phone has no room for a 290px rail beside the canvas: side by side leaves 100px of
+   map. Stack instead, and cap the list so the canvas keeps most of the screen. */
+@media (max-width: 760px) {
+  .shell { flex-direction:column; height:100dvh; }
+  .side { width:auto; border-right:0; border-bottom:1px solid var(--line); max-height:45dvh; }
+  .pages { max-height:26dvh; }
+  .detail { max-height:none; }
+  .main { flex:1; min-height:45dvh; }
+  .bar { flex-wrap:wrap; }
+  .crumb { max-width:100%; flex-basis:100%; }
+  svg { inset:70px 0 0 0; height:calc(100% - 70px); }
+  .legend { bottom:6px; right:6px; padding:5px 7px; font-size:10px; }
+}
 """
 
 _SCRIPT = r"""
@@ -107,9 +126,23 @@ const crumb = document.getElementById("crumb");
 const byId = new Map();
 PAGES.forEach(p => p.nodes.forEach(n => byId.set(n.id, n)));
 
+// One heading per page a person recognises; the bundles that page loads sit under it.
+// Several bundles share a page here (Push Arena loads nine), and nine identical rows
+// tell a reader nothing about where they are.
+let heading = null;
 PAGES.forEach((p, i) => {
+  const key = p.title + "\u0000" + p.where;
+  if (key !== heading) {
+    heading = key;
+    const h = document.createElement("div");
+    h.className = "grp";
+    h.innerHTML = `<div class="t">${esc(p.title)}</div>` +
+      (p.where ? `<div class="w">${esc(p.where)}</div>` : "");
+    list.appendChild(h);
+  }
   const el = document.createElement("div");
   el.className = "pg"; el.setAttribute("role", "option"); el.tabIndex = 0;
+  el.dataset.i = i;
   el.innerHTML = `<div>${esc(p.page)}</div><div class="n">${p.nodes.length} nodes</div>`;
   el.onclick = () => { current = i; focus = null; view = {x:0,y:0,k:1}; draw(); };
   el.onkeydown = e => { if (e.key === "Enter") el.click(); };
@@ -163,12 +196,24 @@ const hit = n => !query || (n.label + " " + n.file).toLowerCase().includes(query
 
 function draw() {
   const p = PAGES[current];
-  [...list.children].forEach((el, i) => el.setAttribute("aria-selected", i === current));
+  // Group headings share the list with the rows, so the row's own index travels on it.
+  list.querySelectorAll(".pg").forEach(el =>
+    el.setAttribute("aria-selected", Number(el.dataset.i) === current));
   if (!p) return;
-  crumb.textContent = focus ? `${p.page} › ${(byId.get(focus) || {}).label || ""}` : `${p.page} — pick a module`;
+  const here = p.where ? `${p.title} · ${p.where}` : p.title;
+  crumb.textContent = focus
+    ? `${here} › ${(byId.get(focus) || {}).label || ""}`
+    : `${here} — pick a module`;
   document.getElementById("up").hidden = !focus;
   const keep = visible(p);
   const {pos, columns} = layout(p, keep);
+  // A phone is narrower than two columns of this map, so the untouched view opens
+  // zoomed out far enough to see the whole chain. Only the first draw of a view fits:
+  // once someone pans or zooms, their view is theirs.
+  if (view.k === 1 && view.x === 0 && view.y === 0) {
+    const need = 40 + columns.length * 210 + 10, have = svg.clientWidth || 800;
+    if (need > have) view.k = Math.max(0.4, have / need);
+  }
   const out = [`<g transform="translate(${view.x},${view.y}) scale(${view.k})">`];
   columns.forEach(c => out.push(`<text class="col" x="${c.x}" y="44">${esc(c.label)}</text>`));
   p.edges.forEach(e => {
@@ -250,6 +295,8 @@ def _payload(connectivity_map: ConnectivityMap) -> str:
         "pages": [
             {
                 "page": page.page,
+                "title": page.title or page.page,
+                "where": page.where,
                 "nodes": [
                     {
                         "id": node.id, "label": node.label, "kind": node.kind,

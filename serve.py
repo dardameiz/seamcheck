@@ -11,8 +11,12 @@ so another device on the network cannot stumble into your codebase's structure.
 
 from __future__ import annotations
 
+import re
 import secrets
+import shutil
 import socket
+import subprocess
+import time
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -63,3 +67,40 @@ def serve_once(html: str, host: str = "0.0.0.0", port: int = 0) -> tuple[Threadi
     server = ThreadingHTTPServer((host, port), handler)
     shown = local_ip() if host in ("0.0.0.0", "") else host
     return server, f"http://{shown}:{server.server_port}{path}"
+
+
+_TUNNEL_URL_RE = re.compile(rb"https://[a-z0-9-]+\.trycloudflare\.com")
+
+
+def public_tunnel(port: int, timeout: float = 30.0) -> tuple[subprocess.Popen, str]:
+    """A temporary public HTTPS address for a local port, via a locally-run cloudflared.
+
+    For the phone that is not on this wifi. cloudflared is open source (Apache-2.0) and a
+    quick tunnel needs no account: it opens an outbound connection and Cloudflare hands
+    back a random hostname that lives as long as the process.
+
+    This is the one thing in Signal Map that leaves the machine. Anyone holding the full
+    link can read the report, so the address keeps the same unguessable path the LAN
+    server uses, and every other path on the tunnel answers 404.
+    """
+    if shutil.which("cloudflared") is None:
+        raise RuntimeError(
+            "cloudflared is not installed. It is the tunnel client (Apache-2.0):\n"
+            "    brew install cloudflared\n"
+            "    https://github.com/cloudflare/cloudflared"
+        )
+    process = subprocess.Popen(  # noqa: S603 - fixed argv, no shell, no user input
+        ["cloudflared", "tunnel", "--no-autoupdate", "--url", f"http://127.0.0.1:{port}"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        line = process.stderr.readline()
+        if not line:
+            break
+        match = _TUNNEL_URL_RE.search(line)
+        if match:
+            return process, match.group().decode()
+    process.terminate()
+    raise RuntimeError("cloudflared did not report a public address; no tunnel was opened.")

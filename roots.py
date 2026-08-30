@@ -13,21 +13,39 @@ import re
 # The key may be quoted or bare - `main: resolve(...)` is valid JS, and requiring
 # quotes silently skipped this project's largest entry point.
 _VITE_ENTRY_RE = re.compile(
-    r"(?:['\"][\w-]+['\"]|[A-Za-z_$][\w$]*)\s*:\s*\w+\(\s*__dirname\s*,\s*['\"]([^'\"]+)['\"]"
+    r"(?:['\"]([\w-]+)['\"]|([A-Za-z_$][\w$]*))\s*:\s*\w+\(\s*__dirname\s*,\s*['\"]([^'\"]+)['\"]"
 )
 _STATIC_JS_RE = re.compile(r"\{%\s*static_js\s+['\"]([^'\"]+\.js)['\"]")
 
 
-def vite_entries(vite_config: str) -> list[str]:
+def vite_entry_map(vite_config: str) -> dict[str, str]:
+    """Entry name -> file. The name is what a template asks for by `{% vite_asset %}`,
+    so it is the only handle that connects a bundle back to the page that loads it."""
     source = pathlib.Path(vite_config).read_text(encoding="utf-8")
-    return [path for path in _VITE_ENTRY_RE.findall(source) if path.endswith(".js")]
+    return {
+        quoted or bare: path
+        for quoted, bare, path in _VITE_ENTRY_RE.findall(source)
+        if path.endswith(".js")
+    }
+
+
+def vite_entries(vite_config: str) -> list[str]:
+    return list(vite_entry_map(vite_config).values())
+
+
+def static_js_by_template(templates_root: str) -> dict[str, set[str]]:
+    """Script reference -> the templates that load it, relative to the templates root."""
+    root = pathlib.Path(templates_root)
+    references: dict[str, set[str]] = {}
+    for template in root.rglob("*.html"):
+        source = template.read_text(encoding="utf-8", errors="replace")
+        for reference in _STATIC_JS_RE.findall(source):
+            references.setdefault(reference, set()).add(str(template.relative_to(root)))
+    return references
 
 
 def static_js_references(templates_root: str) -> set[str]:
-    references: set[str] = set()
-    for template in pathlib.Path(templates_root).rglob("*.html"):
-        references |= set(_STATIC_JS_RE.findall(template.read_text(encoding="utf-8", errors="replace")))
-    return references
+    return set(static_js_by_template(templates_root))
 
 
 def discover_js_roots(vite_config: str, templates_root: str, static_root: str) -> list[str]:
