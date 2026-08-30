@@ -107,17 +107,24 @@ def explain(graph: Graph, symbol_id: str) -> str:
     return "\n".join(line for line in lines if line != "")
 
 
-def diff_against(graph: Graph, ref: str, repo_root: str = ".") -> tuple[DiffResult | None, str]:
-    """Diff `graph` against the snapshot for `ref`, or say plainly that there isn't one."""
+def diff_against(graph: Graph, ref: str, repo_root: str = ".") -> tuple[DiffResult | None, str, str]:
+    """Diff `graph` against the snapshot for `ref`, or say plainly that there isn't one.
+
+    Returns `(result, sha, message)`. `sha` is the commit `ref` actually resolved to -
+    the baseline the diff describes, which is not necessarily HEAD - so a caller that
+    needs to name that commit (the report header, "NEW SINCE ...") never has to
+    re-resolve `ref` itself and risk naming the wrong commit. `sha` is `""` only when
+    `ref` itself could not be resolved at all.
+    """
     try:
         sha = current_git_sha(repo_root) if ref == "HEAD" else _rev_parse(ref, repo_root)
     except Exception as error:  # noqa: BLE001 - surfaced to the user, never swallowed
-        return None, f"No baseline: could not resolve `{ref}` ({error})."
+        return None, "", f"No baseline: could not resolve `{ref}` ({error})."
 
     baseline = load_snapshot(sha, repo_root)
     if baseline is None:
-        return None, f"No baseline snapshot stored for {sha[:12]} yet - nothing to diff against."
-    return diff_graphs(baseline, graph, load_triage(repo_root)), ""
+        return None, sha, f"No baseline snapshot stored for {sha[:12]} yet - nothing to diff against."
+    return diff_graphs(baseline, graph, load_triage(repo_root)), sha, ""
 
 
 def _rev_parse(ref: str, repo_root: str) -> str:
@@ -133,7 +140,7 @@ def check(repo_root: str = ".", graph: Graph | None = None) -> dict:
         graph = scan(repo_root)
     entries = load_triage(repo_root)
     graph = apply_triage(graph, entries)
-    result, message = diff_against(graph, "HEAD", repo_root)
+    result, _, message = diff_against(graph, "HEAD", repo_root)
 
     def _ids(symbols):
         return [{"id": s.id, "label": s.label, "kind": s.kind, "note": s.note} for s in symbols]
@@ -169,7 +176,7 @@ def report(
 
     if graph is None:
         graph = scan(repo_root)
-    diff, message = diff_against(graph, ref, repo_root)
+    diff, baseline_sha, message = diff_against(graph, ref, repo_root)
     try:
         sha = current_git_sha(repo_root)
     except Exception:  # noqa: BLE001 - a report is still useful outside a git checkout
@@ -180,7 +187,11 @@ def report(
         diff=diff,
         entries=load_triage(repo_root),
         git_sha=sha,
-        baseline_sha=None if diff is None else sha,
+        # baseline_sha names the commit the diff was actually taken against - the
+        # resolved `ref`, not `sha` (the commit just scanned). They coincide only when
+        # `ref == "HEAD"` and nothing changed since; conflating them is what made the
+        # header and the "NEW SINCE" heading print the same commit for a real --since.
+        baseline_sha=None if diff is None else baseline_sha,
         baseline_message=message,
     )
     return renderers[fmt](built)

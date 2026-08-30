@@ -34,11 +34,25 @@ class Command(BaseCommand):
         parser.add_argument("--out", default=None, help="Write to PATH instead of stdout ('-' for stdout).")
 
     def handle(self, *args, **options):
+        # --json is "--format json" under another name (kept for existing callers); make
+        # it walk the exact same path instead of a second, drifting copy of the dump.
+        if options["json"] and options["format"] is None:
+            options["format"] = "json"
+        if options["out"] and not options["format"]:
+            # --out is only ever read inside _format_report(), a few lines below. Any
+            # other path (bare --check, --since, the no-flags summary) silently ignores
+            # it - "wrote the report" that never happened is worse than an error.
+            raise CommandError("--out only applies together with --format (or --json).")
         if options["triage"]:
             return self._triage(options)
         if options["explain"]:
             return self.stdout.write(api.explain(api.scan(options["repo_root"]), options["explain"]))
-        if options["format"]:
+        if options["format"] is not None:
+            if not options["format"]:
+                # `--format ""` is falsy, so a bare `if options["format"]:` falls through
+                # to _summary(), which writes the whole (18 MB on a real project) map -
+                # silently, with no hint the flag was even seen. Empty is not "unset".
+                raise CommandError("--format was given an empty value; use terminal, markdown, html, or json.")
             # Scan once and share it: without this, --check --format pays for a full
             # scan twice (once for the digest, once for the exit code) to do the same
             # work. When --check isn't set, graph stays None and _format_report scans
@@ -51,10 +65,6 @@ class Command(BaseCommand):
             if options["check"]:
                 self._exit_on_check(options["repo_root"], graph)
             return
-        if options["json"]:
-            from signal_map.graph import graph_to_dict
-
-            return self.stdout.write(json.dumps(graph_to_dict(api.scan(options["repo_root"])), indent=2))
         if options["check"] or options["since"]:
             return self._check(options)
         return self._summary(options)
@@ -74,7 +84,7 @@ class Command(BaseCommand):
         repo_root = options["repo_root"]
         graph = api.scan(repo_root)
         if options["since"]:
-            result, message = api.diff_against(graph, options["since"], repo_root)
+            result, _, message = api.diff_against(graph, options["since"], repo_root)
             if message:
                 self.stdout.write(message)
                 return
