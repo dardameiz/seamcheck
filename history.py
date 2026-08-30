@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -86,33 +87,81 @@ def _commit_order(shas: list[str], repo_root: str) -> list[tuple[int, str, str, 
     return sorted(known)
 
 
+_LINE_SUFFIX = re.compile(r":\d+$")
+
+
+def _identity(symbol) -> str:
+    """What a symbol IS, with where it sits removed.
+
+    Most ids end in the line the symbol was found on. Inserting two lines above a block
+    therefore renames every symbol below it: one commit that added a CPS duration moved
+    115 untouched selectors from :143 to :145 and reported all 115 as removed AND added.
+    A diff that loud about a line shift hides the one real change inside it.
+    """
+    return _LINE_SUFFIX.sub("", symbol.id) if symbol.line else symbol.id
+
+
 def _changes(before: Graph, after: Graph) -> dict[str, str]:
-    was = {symbol.id: symbol.status for symbol in before.symbols}
-    now = {symbol.id: symbol.status for symbol in after.symbols}
-    changed = dict.fromkeys(now.keys() - was.keys(), "added")
+    was = {_identity(symbol): symbol.status for symbol in before.symbols}
+    now = {_identity(symbol): (symbol.status, symbol.id) for symbol in after.symbols}
+    changed: dict[str, str] = {}
+    for key, (status, symbol_id) in now.items():
+        if key not in was:
+            changed[symbol_id] = "added"
+        elif was[key] is not status:
+            changed[symbol_id] = "status"
+    # A removed symbol has no id in the current graph and is never drawn; its identity is
+    # all there is left to count it by.
     changed.update(dict.fromkeys(was.keys() - now.keys(), "removed"))
-    changed.update(
-        {sid: "status" for sid in now.keys() & was.keys() if was[sid] is not now[sid]}
-    )
     return changed
+
+
+def _parents(repo_root: str) -> dict[str, list[str]]:
+    """The whole commit graph's parent links, in one call."""
+    try:
+        lines = _git(["rev-list", "--parents", "--all"], repo_root).splitlines()
+    except subprocess.CalledProcessError:
+        return {}
+    return {parts[0]: parts[1:] for parts in (line.split() for line in lines) if parts}
+
+
+def _nearest_scanned_ancestor(sha: str, scanned: set[str], parents: dict[str, list[str]]) -> str | None:
+    """The closest ancestor of `sha` that was itself scanned.
+
+    A commit's baseline has to be something it descends from. Taking "the previous entry
+    in the list" compares a commit against whatever sorted before it, which on a repo with
+    more than one branch means comparing across a fork and calling the other branch's
+    absent work a change this commit made.
+    """
+    seen, queue = {sha}, list(parents.get(sha, []))
+    while queue:
+        candidate = queue.pop(0)
+        if candidate in scanned:
+            return candidate
+        if candidate not in seen:
+            seen.add(candidate)
+            queue.extend(parents.get(candidate, []))
+    return None
 
 
 def commit_series(repo_root: str = ".") -> list[CommitEntry]:
     """Every scanned commit, newest first, each carrying what it changed."""
     ordered = _commit_order(snapshot_shas(repo_root), repo_root)
+    scanned = {sha for _, sha, _, _ in ordered}
+    parents = _parents(repo_root)
+    graphs: dict[str, Graph] = {}
     series: list[CommitEntry] = []
-    previous: tuple[str, Graph] | None = None
     for _, sha, date, subject in ordered:
         graph = load_snapshot(sha, repo_root)
         if graph is None:
             continue
-        entry = CommitEntry(
+        graphs[sha] = graph
+        baseline = _nearest_scanned_ancestor(sha, scanned, parents)
+        series.append(CommitEntry(
             sha=sha, subject=subject, date=date, symbols=len(graph.symbols),
-            changed=_changes(previous[1], graph) if previous else {},
-            baseline_sha=previous[0] if previous else None,
-        )
-        series.append(entry)
-        previous = (sha, graph)
+            changed=_changes(graphs[baseline], graph) if baseline in graphs else {},
+            baseline_sha=baseline if baseline in graphs else None,
+        ))
     return list(reversed(series))
 
 

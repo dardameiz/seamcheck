@@ -11,9 +11,9 @@ from signal_map.history import commit_series, snapshot_shas
 from signal_map.snapshot import _SCANS_DIR
 
 
-def _symbol(id_, status=Status.CONNECTED):
+def _symbol(id_, status=Status.CONNECTED, line=1):
     return Symbol(
-        id=id_, kind="url", label=id_, sub="", file="v.py", line=1,
+        id=id_, kind="url", label=id_, sub="", file="v.py", line=line,
         status=status, snippet="", chain=[id_], note="",
     )
 
@@ -26,6 +26,9 @@ class _Repo:
         self._git("init", "-q")
         self._git("config", "user.email", "t@t")
         self._git("config", "user.name", "t")
+        # Snapshots live outside version control, as they do in a real repo. Tracked, a
+        # branch switch deletes the ones committed on the other branch.
+        (self.root / ".gitignore").write_text("OTHER/\n", encoding="utf-8")
 
     def _git(self, *args):
         return subprocess.run(
@@ -140,3 +143,42 @@ class OrderingTests(SimpleTestCase):
 
             self.assertEqual([entry.sha for entry in series], [second, first])
             self.assertEqual(series[0].changed, {"url:b": "added"})
+
+
+class LineShiftTests(SimpleTestCase):
+    def test_a_symbol_that_only_moved_down_the_file_is_not_a_change(self):
+        # Ids end in the line they were found on. One commit adding a CPS duration pushed
+        # 115 untouched selectors from :143 to :145 and reported all 115 removed AND
+        # added - noise loud enough to bury the one real change inside it.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _Repo(tmp)
+            repo.commit("one", Graph([_symbol("dom_selector:class:x:a.js:143", line=143)], []))
+            repo.commit("two", Graph([_symbol("dom_selector:class:x:a.js:145", line=145)], []))
+
+            self.assertEqual(commit_series(tmp)[0].changed, {})
+
+    def test_a_symbol_that_moved_and_changed_status_is_still_reported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _Repo(tmp)
+            repo.commit("one", Graph([_symbol("url:a:10", Status.CONNECTED, line=10)], []))
+            repo.commit("two", Graph([_symbol("url:a:12", Status.UNRESOLVED, line=12)], []))
+
+            self.assertEqual(commit_series(tmp)[0].changed, {"url:a:12": "status"})
+
+
+class BaselineAncestryTests(SimpleTestCase):
+    def test_a_commit_is_compared_against_an_ancestor_not_against_a_sibling(self):
+        # With two branches scanned, "the previous entry in the list" is whatever sorted
+        # before it - which called the other branch's absent work this commit's doing.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _Repo(tmp)
+            root = repo.commit("root", Graph([_symbol("url:a")], []))
+            repo._git("checkout", "-q", "-b", "side")
+            repo.commit("side work", Graph([_symbol("url:a"), _symbol("url:side")], []))
+            repo._git("checkout", "-q", "-")
+            main = repo.commit("main work", Graph([_symbol("url:a"), _symbol("url:main")], []))
+
+            entry = next(e for e in commit_series(tmp) if e.sha == main)
+
+            self.assertEqual(entry.baseline_sha, root)
+            self.assertEqual(entry.changed, {"url:main": "added"})
