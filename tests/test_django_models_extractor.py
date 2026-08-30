@@ -37,3 +37,30 @@ class GraphModelsParsingTests(SimpleTestCase):
         for symbol in self.symbols:
             self.assertEqual(symbol.status, Status.UNCERTAIN)
             self.assertNotEqual(symbol.note, "")
+
+
+class OptionalDependencyTests(SimpleTestCase):
+    def test_a_project_without_django_extensions_still_gets_a_scan(self):
+        # graph_models belongs to django-extensions, an optional dependency. Raising here
+        # took down every other extractor with it.
+        from unittest import mock
+
+        from signal_map.extractors.django_models_extractor import extract_django_models
+
+        failed = mock.Mock(returncode=1, stdout="", stderr="Unknown command: 'graph_models'")
+        with mock.patch("subprocess.run", return_value=failed):
+            self.assertEqual(extract_django_models(["app"]), [])
+
+    def test_it_says_out_loud_that_model_symbols_are_missing(self):
+        from unittest import mock
+
+        from signal_map.extractors.django_models_extractor import extract_django_models
+
+        failed = mock.Mock(returncode=1, stdout="", stderr="boom")
+        with (
+            mock.patch("subprocess.run", return_value=failed),
+            self.assertLogs("signal_map.extractors.django_models_extractor", "WARNING") as logs,
+        ):
+            extract_django_models(["app"])
+
+        self.assertIn("no model symbols", logs.output[0])
