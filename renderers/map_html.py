@@ -38,53 +38,38 @@ _CSS = """
           --sig:#4fb3c4; --ok:#56b98c; --crit:#e0788a; --warn:#d69b4c; --dim:#6e7885; }
 }
 * { box-sizing:border-box; }
-body { margin:0; background:var(--bg); color:var(--ink); font-size:14px;
+/* The canvas is the point. Everything else is a strip above it, and the whole document
+   is exactly one screen tall so nothing scrolls the map out of view. */
+body { margin:0; background:var(--bg); color:var(--ink); font-size:14px; overflow:hidden;
+       height:100dvh; display:flex; flex-direction:column;
        font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
-.shell { display:flex; height:100vh; }
-.side { width:290px; flex:none; border-right:1px solid var(--line); background:var(--panel);
-        display:flex; flex-direction:column; overflow:hidden; }
-.side h1 { font-size:16px; margin:0; padding:14px 14px 4px; }
-.meta { padding:0 14px 10px; color:var(--muted); font-size:12px;
-        font-family:ui-monospace,SFMono-Regular,Menlo,monospace; word-break:break-all; }
-.commits { padding:10px 14px; border-top:1px solid var(--line); }
-.commits label { display:block; font-size:10px; text-transform:uppercase;
-                 letter-spacing:.08em; color:var(--muted); margin-bottom:4px; }
-.commits select { width:100%; padding:8px 9px; font-size:13px; border-radius:7px;
+.top { flex:none; background:var(--panel); border-bottom:1px solid var(--line); }
+.brand { display:flex; align-items:baseline; gap:9px; padding:8px 12px 6px; }
+.brand b { font-size:14px; }
+.brand .meta { color:var(--muted); font-size:11px; overflow:hidden; white-space:nowrap;
+               text-overflow:ellipsis; font-family:ui-monospace,Menlo,monospace; }
+
+/* Two filters, side by side: what changed on the left, where to look on the right. */
+.filters { display:flex; gap:8px; padding:0 12px 8px; }
+.filters label { flex:1 1 0; min-width:0; display:block; }
+.filters span { display:block; font-size:9.5px; text-transform:uppercase;
+                letter-spacing:.09em; color:var(--muted); margin-bottom:3px; }
+.filters select { width:100%; padding:9px 8px; font-size:13px; border-radius:8px;
                   border:1px solid var(--line); background:var(--bg); color:var(--ink); }
-.cmnote { font-size:11.5px; color:var(--muted); margin-top:5px; }
-.pages { overflow-y:auto; flex:1; border-top:1px solid var(--line); }
-.pg { padding:9px 14px; cursor:pointer; border-bottom:1px solid var(--line); font-size:13px; }
-.pg:hover { background:var(--bg); }
-.pg[aria-selected="true"] { background:var(--bg); border-left:3px solid var(--sig); font-weight:600; }
-.pg .n { color:var(--muted); font-size:11px; }
-.pg.quiet { opacity:.4; }
-.grp { padding:12px 14px 5px; border-bottom:1px solid var(--line); background:var(--bg); }
-.grp .t { font-size:13px; font-weight:700; }
-.grp .w { font-size:11px; color:var(--muted); margin-top:2px; word-break:break-all;
-          font-family:ui-monospace,Menlo,monospace; }
-.pg { padding-left:22px; }
-.detail { border-top:1px solid var(--line); padding:12px 14px; max-height:42%; overflow-y:auto; }
-.detail h2 { font-size:13px; margin:0 0 6px; word-break:break-all; }
-.detail .row { color:var(--muted); font-size:12px; margin-bottom:4px;
-               font-family:ui-monospace,Menlo,monospace; word-break:break-all; }
-.detail pre { background:var(--bg); border:1px solid var(--line); border-radius:6px;
-              padding:8px; font-size:11.5px; overflow-x:auto; margin:8px 0 0; }
-.detail .note { font-size:12.5px; color:var(--muted); margin-top:8px; font-family:inherit; }
-.main { flex:1; position:relative; overflow:hidden; }
-.bar { position:absolute; top:0; left:0; right:0; padding:8px 12px; display:flex; gap:8px;
-       align-items:center; background:var(--panel); border-bottom:1px solid var(--line); z-index:2; }
-.crumb { font-size:12.5px; color:var(--muted); white-space:nowrap; overflow:hidden;
-         text-overflow:ellipsis; max-width:40%; }
-.bar input { flex:1; padding:6px 9px; font-size:13px; border:1px solid var(--line);
-             border-radius:6px; background:var(--bg); color:var(--ink); }
-.bar button { padding:6px 10px; font-size:12px; border:1px solid var(--line); border-radius:6px;
-              background:var(--bg); color:var(--ink); cursor:pointer; }
-/* An <svg> without an explicit height falls back to the replaced-element default of
-   150px, silently clipping everything below it. */
-/* Without touch-action the browser claims every drag as a page scroll and the pan,
-   the pinch and often the tap that follows never reach this script. */
-svg { position:absolute; inset:41px 0 0 0; width:100%; height:calc(100% - 41px);
-      cursor:grab; display:block; touch-action:none; }
+.crumbrow { display:flex; align-items:center; gap:7px; padding:0 12px 8px; }
+.crumbrow button { flex:none; padding:7px 10px; font-size:12px; border-radius:8px;
+                   border:1px solid var(--line); background:var(--bg); color:var(--ink);
+                   cursor:pointer; }
+#crumb { flex:1 1 auto; min-width:0; font-size:12px; color:var(--muted);
+         white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+#q { flex:0 1 130px; min-width:78px; padding:7px 9px; font-size:13px; border-radius:8px;
+     border:1px solid var(--line); background:var(--bg); color:var(--ink); }
+.note { padding:0 12px 8px; font-size:11.5px; color:var(--muted); }
+.note:empty { display:none; }
+
+.main { flex:1 1 auto; position:relative; min-height:0; }
+svg { position:absolute; inset:0; width:100%; height:100%; display:block;
+      cursor:grab; touch-action:none; }
 svg.drag { cursor:grabbing; }
 .nd rect { stroke-width:1.5; }
 .nd text { font-size:11px; fill:var(--ink); pointer-events:none;
@@ -94,29 +79,38 @@ svg.drag { cursor:grabbing; }
 .ed { fill:none; stroke-width:1.2; opacity:.45; }
 .ed.faded { opacity:.05; }
 .col { font-size:10px; fill:var(--muted); text-transform:uppercase; letter-spacing:.08em; }
-.zoom { position:absolute; left:10px; bottom:10px; display:flex; gap:6px; z-index:2; }
-.zoom button { width:38px; height:38px; font-size:15px; line-height:1; border-radius:9px;
-               border:1px solid var(--line); background:var(--panel); color:var(--ink);
-               cursor:pointer; }
-.legend { pointer-events:none; position:absolute; bottom:10px; right:12px; background:var(--panel);
-          border:1px solid var(--line); border-radius:7px; padding:8px 10px; font-size:11px;
-          color:var(--muted); z-index:2; }
-.legend span { display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:5px; }
-.empty { position:absolute; inset:41px 0 0 0; display:flex; align-items:center;
-         justify-content:center; color:var(--muted); }
 
-/* A phone has no room for a 290px rail beside the canvas: side by side leaves 100px of
-   map. Stack instead, and cap the list so the canvas keeps most of the screen. */
-@media (max-width: 760px) {
-  .shell { flex-direction:column; height:100dvh; }
-  .side { width:auto; border-right:0; border-bottom:1px solid var(--line); max-height:45dvh; }
-  .pages { max-height:26dvh; }
-  .detail { max-height:none; }
-  .main { flex:1; min-height:45dvh; }
-  .bar { flex-wrap:wrap; }
-  .crumb { max-width:100%; flex-basis:100%; }
-  svg { inset:70px 0 0 0; height:calc(100% - 70px); }
-  .legend { bottom:6px; right:6px; padding:5px 7px; font-size:10px; }
+.zoom { position:absolute; left:10px; bottom:10px; display:flex; gap:6px; z-index:2; }
+.zoom button, .key { width:40px; height:40px; font-size:15px; line-height:1;
+                     border-radius:10px; border:1px solid var(--line);
+                     background:var(--panel); color:var(--ink); cursor:pointer; }
+.key { position:absolute; right:10px; bottom:10px; z-index:2; }
+/* Pinned over the canvas, the legend sat on top of the nodes it explains. It opens now
+   only when asked, and closes by tapping anywhere. */
+.legend { position:absolute; right:10px; bottom:58px; background:var(--panel);
+          border:1px solid var(--line); border-radius:9px; padding:9px 11px;
+          font-size:11.5px; color:var(--muted); z-index:3; pointer-events:none; }
+.legend span { display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:6px; }
+
+/* Evidence arrives as a sheet over the canvas, not as a permanent rail stealing height. */
+.sheet { position:absolute; left:0; right:0; bottom:0; z-index:4; background:var(--panel);
+         border-top:1px solid var(--line); padding:12px 14px 14px; max-height:52%;
+         overflow-y:auto; box-shadow:0 -6px 24px -18px rgba(0,0,0,.6); }
+.sheet h2 { font-size:13px; margin:0 26px 6px 0; word-break:break-all; }
+.sheet .row { color:var(--muted); font-size:12px; margin-bottom:4px;
+              font-family:ui-monospace,Menlo,monospace; word-break:break-all; }
+.sheet .note { padding:0; margin-top:8px; font-family:inherit; }
+.sheet .x { position:absolute; top:8px; right:10px; width:30px; height:30px;
+            border-radius:8px; border:1px solid var(--line); background:var(--bg);
+            color:var(--ink); cursor:pointer; }
+.blank { position:absolute; inset:0; display:flex; align-items:center; padding:0 22px;
+         color:var(--muted); font-size:13px; }
+
+@media (min-width: 761px) {
+  .brand, .filters, .crumbrow { padding-left:16px; padding-right:16px; }
+  .filters { max-width:820px; }
+  .sheet { left:auto; right:0; width:380px; top:0; bottom:auto; max-height:100%;
+           border-top:0; border-left:1px solid var(--line); }
 }
 """
 
@@ -137,34 +131,37 @@ const esc = v => String(v == null ? "" : v).replace(/[&<>"']/g,
 let current = 0, focus = null, view = {x:0, y:0, k:1}, query = "";
 
 const svg = document.getElementById("cv");
-const detail = document.getElementById("detail");
-const list = document.getElementById("pages");
+const sheet = document.getElementById("detail");
+const dbody = document.getElementById("dbody");
+const pages = document.getElementById("pg");
 const crumb = document.getElementById("crumb");
 const byId = new Map();
 PAGES.forEach(p => p.nodes.forEach(n => byId.set(n.id, n)));
 
-// One heading per page a person recognises; the bundles that page loads sit under it.
-// Several bundles share a page here (Push Arena loads nine), and nine identical rows
-// tell a reader nothing about where they are.
-let heading = null;
-PAGES.forEach((p, i) => {
-  const key = p.title + "\u0000" + p.where;
-  if (key !== heading) {
-    heading = key;
-    const h = document.createElement("div");
-    h.className = "grp";
-    h.innerHTML = `<div class="t">${esc(p.title)}</div>` +
-      (p.where ? `<div class="w">${esc(p.where)}</div>` : "");
-    list.appendChild(h);
-  }
-  const el = document.createElement("div");
-  el.className = "pg"; el.setAttribute("role", "option"); el.tabIndex = 0;
-  el.dataset.i = i;
-  el.innerHTML = `<div>${esc(p.page)}</div><div class="n">${p.nodes.length} nodes</div>`;
-  el.onclick = () => { current = i; focus = null; view = {x:0,y:0,k:1}; draw(); };
-  el.onkeydown = e => { if (e.key === "Enter") el.click(); };
-  list.appendChild(el);
-});
+// The pages a reader recognises, each holding the bundles it loads. A scrolling rail of
+// 34 rows cost more than half a phone screen; an optgroup says the same thing in one
+// control and gives every pixel of it back to the canvas.
+function fillPages(counts) {
+  let group = null, heading = null, out = [];
+  PAGES.forEach((p, i) => {
+    const key = p.title + "\u0000" + p.where;
+    if (key !== heading) {
+      if (group) out.push(group + "</optgroup>");
+      heading = key;
+      group = `<optgroup label="${esc(p.title)}${p.where ? " · " + esc(p.where) : ""}">`;
+    }
+    const tail = counts ? `${counts[i]} changed` : `${p.nodes.length} nodes`;
+    group += `<option value="${i}">${esc(p.page)} — ${tail}</option>`;
+  });
+  if (group) out.push(group + "</optgroup>");
+  pages.innerHTML = out.join("");
+  pages.value = String(current);
+}
+
+pages.onchange = e => {
+  current = Number(e.target.value); focus = null; view = {x:0, y:0, k:1};
+  closeSheet(); draw();
+};
 
 // Which nodes to draw. Without a focus a page shows only its modules - one page here
 // has 839 symbols of a single kind, which stacked into a column 28,000px tall and was
@@ -218,12 +215,20 @@ function layout(p, keep) {
 
 const hit = n => !query || (n.label + " " + n.file).toLowerCase().includes(query);
 
+// How many rows the deepest column holds, for the fit.
+function rowsDeep(keep, pos) {
+  const perColumn = new Map();
+  keep.forEach(id => {
+    const q = pos.get(id); if (!q) return;
+    perColumn.set(q.x, (perColumn.get(q.x) || 0) + 1);
+  });
+  return Math.max(1, ...perColumn.values());
+}
+
 function draw() {
   const p = PAGES[current];
-  // Group headings share the list with the rows, so the row's own index travels on it.
-  list.querySelectorAll(".pg").forEach(el =>
-    el.setAttribute("aria-selected", Number(el.dataset.i) === current));
   if (!p) return;
+  pages.value = String(current);
   const here = p.where ? `${p.title} · ${p.where}` : p.title;
   crumb.textContent = focus
     ? `${here} › ${(byId.get(focus) || {}).label || ""}`
@@ -237,12 +242,19 @@ function draw() {
   }
   const keep = visible(p);
   const {pos, columns} = layout(p, keep);
-  // A phone is narrower than two columns of this map, so the untouched view opens
-  // zoomed out far enough to see the whole chain. Only the first draw of a view fits:
-  // once someone pans or zooms, their view is theirs.
+  // A phone is narrower than two columns of this map, so an untouched view opens showing
+  // the whole chain, nudged clear of the left edge. Only the first draw of a view fits:
+  // once someone pans or zooms, the view is theirs.
   if (view.k === 1 && view.x === 0 && view.y === 0) {
-    const need = 40 + columns.length * 210 + 10, have = svg.clientWidth || 800;
-    if (need > have) view.k = Math.max(0.4, have / need);
+    const need = 40 + columns.length * 210 + 10;
+    const haveW = svg.clientWidth || 800, haveH = svg.clientHeight || 600;
+    if (need > haveW) view.k = Math.max(0.35, haveW / need);
+    // Tall columns stay pannable rather than being shrunk to nothing; short ones get
+    // centred, because a handful of nodes pinned to the top corner reads as a bug.
+    // Short pages get a small top margin, not half a screen of nothing: centring 16
+    // rows in an 800px canvas buried the map in dead space.
+    const tall = 62 + rowsDeep(keep, pos) * 30;
+    if (tall * view.k < haveH) view.y = Math.min(48, (haveH - tall * view.k) / 2);
   }
   const out = [`<g transform="translate(${view.x},${view.y}) scale(${view.k})">`];
   columns.forEach(c => out.push(`<text class="col" x="${c.x}" y="44">${esc(c.label)}</text>`));
@@ -282,14 +294,18 @@ svg.addEventListener("click", e => {
   if (n && n.kind === "module") { focus = g.dataset.id; view = {x:0,y:0,k:1}; draw(); }
 });
 
+function closeSheet() { sheet.hidden = true; }
+
 function show(id) {
   const n = byId.get(id); if (!n) return;
   const ch = CHANGED[id];
-  detail.innerHTML = `<h2>${esc(n.label)}</h2>
+  dbody.innerHTML = `<h2>${esc(n.label)}</h2>
     <div class="row">${esc(n.kind)} · ${esc(n.status)}${ch ? " · " + esc(ch) : ""}</div>
     ${n.file ? `<div class="row">${esc(n.file)}${n.line ? ":" + n.line : ""}</div>` : ""}
     ${n.note ? `<div class="note">${esc(n.note)}</div>` : ""}`;
+  sheet.hidden = false;
 }
+document.getElementById("dx").onclick = closeSheet;
 
 // Pointer events, not mouse events: one code path covers a mouse, a finger and a pen.
 // Listening for `mousedown` alone left a phone with no pan and no zoom at all, and the
@@ -299,7 +315,13 @@ let drag = null, moved = false, pinch = null;
 
 const zoomTo = k => { view.k = Math.min(3, Math.max(0.2, k)); draw(); };
 
+let lastTap = 0;
 svg.addEventListener("pointerdown", e => {
+  // Double-tap zooms. A phone has no wheel, and reaching the corner buttons mid-read
+  // costs a thumb-shift; this is the gesture people already try.
+  const now = Date.now();
+  if (ptrs.size === 0 && now - lastTap < 320) { zoomTo(view.k * 1.6); lastTap = 0; }
+  else lastTap = now;
   ptrs.set(e.pointerId, {x: e.clientX, y: e.clientY});
   if (ptrs.size === 2) {
     const [a, b] = [...ptrs.values()];
@@ -349,7 +371,6 @@ document.getElementById("q").addEventListener("input", e => {
 });
 // --- the commit picker -------------------------------------------------------------
 const picker = document.getElementById("cm"), note = document.getElementById("cmnote");
-const pageRows = () => [...list.querySelectorAll(".pg")];
 
 function fillPicker() {
   const opts = [`<option value="">Everything in this scan</option>`];
@@ -384,21 +405,24 @@ function selectCommit(index) {
       : `${n.added} added · ${n.removed} removed · ${n.status} changed status, ` +
         `vs ${c.baseline.slice(0, 8)}`;
   }
-  // A page with nothing from this commit in it is not somewhere to look.
-  PAGES.forEach((p, i) => {
-    const touched = only ? p.nodes.filter(n => CHANGED[n.id]).length : null;
-    const row = pageRows().find(el => Number(el.dataset.i) === i);
-    if (!row) return;
-    row.querySelector(".n").textContent =
-      touched === null ? `${p.nodes.length} nodes` : `${touched} changed`;
-    row.classList.toggle("quiet", touched === 0);
-  });
+  // Every page says how much of this commit is in it, so the picker itself shows where
+  // to look instead of making a reader open each page to find out.
+  fillPages(only ? PAGES.map(p => p.nodes.filter(n => CHANGED[n.id]).length) : null);
   focus = null; view = {x:0, y:0, k:1};
+  closeSheet();
   draw();
 }
 
 picker.onchange = e => selectCommit(e.target.value === "" ? -1 : Number(e.target.value));
 fillPicker();
+fillPages(null);
+
+// --- the colour key, out of the canvas's way until asked for -------------------------
+const legendBox = document.getElementById("legend");
+document.getElementById("lg").onclick = e => {
+  e.stopPropagation(); legendBox.hidden = !legendBox.hidden;
+};
+document.addEventListener("pointerdown", () => { legendBox.hidden = true; });
 
 document.getElementById("up").onclick = () => { focus = null; view = {x:0,y:0,k:1}; draw(); };
 draw();
@@ -456,27 +480,32 @@ def render(connectivity_map: ConnectivityMap) -> str:
     return "\n".join([
         "<!doctype html>",
         '<html lang="en"><head><meta charset="utf-8">',
-        '<meta name="viewport" content="width=device-width, initial-scale=1">',
+        '<meta name="viewport" content="width=device-width, initial-scale=1, '
+        'viewport-fit=cover">',
         f"<title>Signal Map — {_esc(connectivity_map.git_sha[:12])}</title>",
         f"<style>{_CSS}</style></head><body>",
-        '<div class="shell"><aside class="side">',
-        "<h1>Signal Map</h1>",
-        f'<div class="meta">{_esc(connectivity_map.git_sha[:12])} · {_esc(mode)}<br>'
-        f"{_esc(connectivity_map.generated_at)}</div>",
-        '<div class="commits"><label for="cm">Commit</label>'
-        '<select id="cm"></select><div class="cmnote" id="cmnote"></div></div>',
-        '<div class="pages" id="pages" role="listbox" aria-label="Pages"></div>',
-        '<div class="detail" id="detail">Select a node to see its evidence.</div>',
-        "</aside><main class=\"main\">",
-        '<div class="bar"><button id="up" type="button" hidden>\u2190 Back</button>'
-        '<span id="crumb" class="crumb"></span>'
-        '<input id="q" type="search" placeholder="Filter this view"></div>',
+        '<header class="top">',
+        f'<div class="brand"><b>Signal Map</b>'
+        f'<span class="meta">{_esc(connectivity_map.git_sha[:12])} · {_esc(mode)}</span></div>',
+        '<div class="filters">'
+        '<label><span>Commit</span><select id="cm"></select></label>'
+        '<label><span>Page</span><select id="pg"></select></label></div>',
+        '<div class="crumbrow"><button id="up" type="button" hidden>\u2190</button>'
+        '<span id="crumb"></span>'
+        '<input id="q" type="search" placeholder="Filter"></div>',
+        '<div class="note" id="cmnote"></div>',
+        "</header>",
+        '<main class="main">',
         '<svg id="cv"></svg>',
         '<div class="zoom"><button id="zo" type="button" aria-label="Zoom out">\u2212</button>'
         '<button id="zi" type="button" aria-label="Zoom in">+</button>'
         '<button id="zf" type="button" aria-label="Fit to screen">\u2316</button></div>',
-        f'<div class="legend">{legend}</div>',
-        "</main></div>",
+        '<button class="key" id="lg" type="button" aria-label="Colour key">?</button>',
+        f'<div class="legend" id="legend" hidden>{legend}</div>',
+        '<aside class="sheet" id="detail" hidden>'
+        '<button class="x" id="dx" type="button" aria-label="Close">\u00d7</button>'
+        '<div id="dbody"></div></aside>',
+        "</main>",
         f"<script>const MAPDATA={_payload(connectivity_map)};</script>",
         f"<script>{_SCRIPT}</script>",
         "</body></html>",

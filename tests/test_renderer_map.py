@@ -122,3 +122,44 @@ class CommitPickerTests(SimpleTestCase):
         out = map_html.render(_map())
 
         self.assertIn("--backfill", out)
+
+
+class MobileLayoutTests(SimpleTestCase):
+    """A phone spent 1250 of 1600 pixels on fixed chrome and 150 on the map."""
+
+    def test_the_two_filters_are_the_only_navigation(self):
+        out = map_html.render(_map())
+
+        # Commit on the left, page on the right, side by side in one strip.
+        self.assertIn('<div class="filters">', out)
+        self.assertIn('<select id="cm">', out)
+        self.assertIn('<select id="pg">', out)
+
+    def test_pages_are_a_grouped_select_not_a_scrolling_rail(self):
+        out = map_html.render(_map())
+
+        self.assertIn("<optgroup", out)
+        self.assertNotIn('id="pages"', out)
+        self.assertNotIn('class="pg"', out)
+
+    def test_the_document_is_exactly_one_screen_and_the_canvas_takes_the_rest(self):
+        out = map_html.render(_map())
+
+        self.assertIn("height:100dvh", out)
+        self.assertIn("overflow:hidden", out)
+        self.assertIn(".main { flex:1 1 auto;", out)
+
+    def test_evidence_arrives_as_a_dismissable_sheet_not_a_permanent_panel(self):
+        out = map_html.render(_map())
+
+        self.assertIn('<aside class="sheet" id="detail" hidden>', out)
+        self.assertIn('id="dx"', out)
+
+    def test_the_colour_key_does_not_sit_on_top_of_the_nodes_it_explains(self):
+        out = map_html.render(_map())
+
+        self.assertIn('<div class="legend" id="legend" hidden>', out)
+        self.assertIn('id="lg"', out)
+
+    def test_double_tap_zooms_because_a_phone_has_no_wheel(self):
+        self.assertIn("lastTap", map_html.render(_map()))
