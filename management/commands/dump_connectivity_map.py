@@ -24,6 +24,11 @@ class Command(BaseCommand):
         parser.add_argument("--reason", default="", help="Why this disposition.")
         parser.add_argument("--repo-root", default=".", help="Repo to read snapshots/triage from.")
         parser.add_argument(
+            "--serve", action="store_true",
+            help="Serve the report to your local network so a phone can open it. "
+                 "Nothing is uploaded; the server stops when you do.",
+        )
+        parser.add_argument(
             "--format", default=None,
             # No choices=: Django's CommandParser.error() raises CommandError (not
             # SystemExit) for call_command() invocations, so argparse-level validation
@@ -126,6 +131,9 @@ class Command(BaseCommand):
                 self.stderr.write(str(error))
                 raise SystemExit(2) from error
 
+        if options["serve"]:
+            return self._serve(text, fmt)
+
         destination = options["out"]
         if destination == "-":
             # Explicit stdout always wins, even for html: a flag whose help text
@@ -167,3 +175,20 @@ class Command(BaseCommand):
         self.stdout.write(f"{len(graph.symbols)} symbols, {len(graph.edges)} edges -> {path}")
         for status, count in sorted(counts.items()):
             self.stdout.write(f"  {status:<12} {count}")
+
+    def _serve(self, text, fmt):
+        """Hold the report open on the LAN until interrupted."""
+        from signal_map.serve import serve_once
+
+        if fmt == "json":
+            raise CommandError("--serve renders a page; use --format map or html.")
+
+        server, url = serve_once(text)
+        self.stdout.write(f"Open on any device on this network:\n\n    {url}\n")
+        self.stdout.write("Nothing was uploaded. Press Ctrl-C to stop.")
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            self.stdout.write("\nstopped")
+        finally:
+            server.server_close()

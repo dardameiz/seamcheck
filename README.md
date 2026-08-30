@@ -81,6 +81,8 @@ python manage.py dump_connectivity_map                    # scan, write the map,
 python manage.py dump_connectivity_map --json             # the graph, as JSON
 python manage.py dump_connectivity_map --check            # diff vs the last snapshot; exit 1 on findings
 python manage.py dump_connectivity_map --since main       # diff against another commit's snapshot
+python manage.py dump_connectivity_map --format map            # the visual connectivity map
+python manage.py dump_connectivity_map --format map --since REF  # what changed between commits
 python manage.py dump_connectivity_map --explain <symbol-id>
 python manage.py dump_connectivity_map --triage <symbol-id> --status approved --reason "..."
 ```
@@ -91,8 +93,30 @@ python manage.py dump_connectivity_map --format html       # one self-contained 
 python manage.py dump_connectivity_map --format markdown --out FINDINGS.md
 ```
 
-The HTML report is a single file with no network requests — publish it wherever you like.
-Signal Map never uploads anything.
+The HTML report and the map are single files with no network requests — publish them
+wherever you like. Signal Map never uploads anything.
+
+### Reading it on a phone
+
+The report is self-contained, so getting it onto a phone is a file-transfer problem, not a
+hosting one. Any of these work, and none of them send your code anywhere:
+
+```bash
+python manage.py dump_connectivity_map --format map --serve
+# Open on any device on this network:
+#     http://192.168.1.38:57071/GLb_D7GyG_Bk
+```
+
+`--serve` holds the page open on your local network until you press Ctrl-C. Nothing is
+uploaded, nothing is written to disk, and the URL carries a random token so another device
+cannot stumble into it. The response is sent `no-store` and `noindex`.
+
+Or skip the server entirely: write the file with `--out`, then AirDrop it, drop it in a
+synced folder, or attach it to a message. It opens standalone on any device, offline,
+forever — that is the whole point of the single-file design.
+
+If you want it permanently reachable, publish the file to your own hosting. That step is
+deliberately yours: a static-analysis tool should never hold upload credentials.
 
 `--check` is CI-ready: it exits 1 only on `unresolved`/`unused` findings that are untriaged
 or explicitly confirmed. It never fails a build over `uncertain`.
