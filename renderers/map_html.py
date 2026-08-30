@@ -46,11 +46,18 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:14px;
 .side h1 { font-size:16px; margin:0; padding:14px 14px 4px; }
 .meta { padding:0 14px 10px; color:var(--muted); font-size:12px;
         font-family:ui-monospace,SFMono-Regular,Menlo,monospace; word-break:break-all; }
+.commits { padding:10px 14px; border-top:1px solid var(--line); }
+.commits label { display:block; font-size:10px; text-transform:uppercase;
+                 letter-spacing:.08em; color:var(--muted); margin-bottom:4px; }
+.commits select { width:100%; padding:8px 9px; font-size:13px; border-radius:7px;
+                  border:1px solid var(--line); background:var(--bg); color:var(--ink); }
+.cmnote { font-size:11.5px; color:var(--muted); margin-top:5px; }
 .pages { overflow-y:auto; flex:1; border-top:1px solid var(--line); }
 .pg { padding:9px 14px; cursor:pointer; border-bottom:1px solid var(--line); font-size:13px; }
 .pg:hover { background:var(--bg); }
 .pg[aria-selected="true"] { background:var(--bg); border-left:3px solid var(--sig); font-weight:600; }
 .pg .n { color:var(--muted); font-size:11px; }
+.pg.quiet { opacity:.4; }
 .grp { padding:12px 14px 5px; border-bottom:1px solid var(--line); background:var(--bg); }
 .grp .t { font-size:13px; font-weight:700; }
 .grp .w { font-size:11px; color:var(--muted); margin-top:2px; word-break:break-all;
@@ -74,8 +81,10 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:14px;
               background:var(--bg); color:var(--ink); cursor:pointer; }
 /* An <svg> without an explicit height falls back to the replaced-element default of
    150px, silently clipping everything below it. */
+/* Without touch-action the browser claims every drag as a page scroll and the pan,
+   the pinch and often the tap that follows never reach this script. */
 svg { position:absolute; inset:41px 0 0 0; width:100%; height:calc(100% - 41px);
-      cursor:grab; display:block; }
+      cursor:grab; display:block; touch-action:none; }
 svg.drag { cursor:grabbing; }
 .nd rect { stroke-width:1.5; }
 .nd text { font-size:11px; fill:var(--ink); pointer-events:none;
@@ -85,6 +94,10 @@ svg.drag { cursor:grabbing; }
 .ed { fill:none; stroke-width:1.2; opacity:.45; }
 .ed.faded { opacity:.05; }
 .col { font-size:10px; fill:var(--muted); text-transform:uppercase; letter-spacing:.08em; }
+.zoom { position:absolute; left:10px; bottom:10px; display:flex; gap:6px; z-index:2; }
+.zoom button { width:38px; height:38px; font-size:15px; line-height:1; border-radius:9px;
+               border:1px solid var(--line); background:var(--panel); color:var(--ink);
+               cursor:pointer; }
 .legend { pointer-events:none; position:absolute; bottom:10px; right:12px; background:var(--panel);
           border:1px solid var(--line); border-radius:7px; padding:8px 10px; font-size:11px;
           color:var(--muted); z-index:2; }
@@ -110,7 +123,11 @@ svg.drag { cursor:grabbing; }
 _SCRIPT = r"""
 const S = {connected:"var(--ok)", unresolved:"var(--crit)", unused:"var(--warn)", uncertain:"var(--dim)"};
 const CH = {added:"var(--ok)", removed:"var(--crit)", status:"var(--warn)"};
-const COLS = MAPDATA.columns, PAGES = MAPDATA.pages, CHANGED = MAPDATA.changed;
+const COLS = MAPDATA.columns, PAGES = MAPDATA.pages, COMMITS = MAPDATA.commits || [];
+// Which changed-set is in force. Starts as the whole-run diff, and a commit selection
+// replaces it - so "what changed" always means the thing the reader picked, never a
+// blend of a commit and a branch.
+let CHANGED = MAPDATA.changed, only = false;
 const ORDER = new Map(COLS.map((c, i) => [c[0], i]));
 // Labels are raw project source: 163 of this project's URL patterns contain
 // <path:object_id> and friends, which the parser eats as bogus elements, leaving a
@@ -152,7 +169,14 @@ PAGES.forEach((p, i) => {
 // Which nodes to draw. Without a focus a page shows only its modules - one page here
 // has 839 symbols of a single kind, which stacked into a column 28,000px tall and was
 // not explorable by any amount of scrolling. Clicking a module opens just its subgraph.
+// A commit selection narrows every page to the nodes that commit touched, plus the
+// page node itself so the column still has a root to hang from.
+function changedIn(p) {
+  return new Set(p.nodes.filter(n => CHANGED[n.id] || n.kind === "page").map(n => n.id));
+}
+
 function visible(p) {
+  if (only) return changedIn(p);
   const adj = new Map();
   p.edges.forEach(e => {
     if (!adj.has(e.source)) adj.set(e.source, []);
@@ -205,6 +229,12 @@ function draw() {
     ? `${here} › ${(byId.get(focus) || {}).label || ""}`
     : `${here} — pick a module`;
   document.getElementById("up").hidden = !focus;
+  // A commit that touched only files the scan does not read has an empty changed set.
+  // Drawing that as a bare page node reads as a broken map rather than as an answer.
+  if (only && !Object.keys(CHANGED).length) {
+    svg.innerHTML = `<text x="20" y="40" class="col">nothing the scan reads changed in this commit</text>`;
+    return;
+  }
   const keep = visible(p);
   const {pos, columns} = layout(p, keep);
   // A phone is narrower than two columns of this map, so the untouched view opens
@@ -227,7 +257,11 @@ function draw() {
     const q = pos.get(n.id); if (!q) return;
     const ch = CHANGED[n.id];
     const label = n.label.length > 20 ? n.label.slice(0, 19) + "…" : n.label;
+    // The drawn box is 20px tall and the view opens scaled down, so on a phone the
+    // visible target can be 8px. The transparent rect below it fills the row pitch.
     out.push(`<g class="nd${hit(n) ? "" : " faded"}" data-id="${n.id}">
+      <rect x="${q.x - 5}" y="${q.y - 5}" width="160" height="30" fill="transparent"
+            pointer-events="all"/>
       <rect x="${q.x}" y="${q.y}" width="150" height="20" rx="5" fill="var(--panel)"
             stroke="${ch ? CH[ch] : (S[n.status] || "var(--dim)")}" stroke-width="${ch ? 3 : 1.5}"/>
       <text x="${q.x + 7}" y="${q.y + 14}">${esc(label)}</text></g>`);
@@ -257,28 +291,115 @@ function show(id) {
     ${n.note ? `<div class="note">${esc(n.note)}</div>` : ""}`;
 }
 
-let drag = null, moved = false;
-svg.addEventListener("mousedown", e => {
+// Pointer events, not mouse events: one code path covers a mouse, a finger and a pen.
+// Listening for `mousedown` alone left a phone with no pan and no zoom at all, and the
+// pointer is never captured - capture would retarget the click away from the node.
+const ptrs = new Map();
+let drag = null, moved = false, pinch = null;
+
+const zoomTo = k => { view.k = Math.min(3, Math.max(0.2, k)); draw(); };
+
+svg.addEventListener("pointerdown", e => {
+  ptrs.set(e.pointerId, {x: e.clientX, y: e.clientY});
+  if (ptrs.size === 2) {
+    const [a, b] = [...ptrs.values()];
+    pinch = {d: Math.hypot(a.x - b.x, a.y - b.y), k: view.k};
+    drag = null; moved = true;  // two fingers are a gesture, never a tap
+    return;
+  }
   drag = {x: e.clientX - view.x, y: e.clientY - view.y, sx: e.clientX, sy: e.clientY};
   moved = false;
 });
-window.addEventListener("mouseup", () => { drag = null; svg.classList.remove("drag"); });
-window.addEventListener("mousemove", e => {
+window.addEventListener("pointermove", e => {
+  if (!ptrs.has(e.pointerId)) return;
+  ptrs.set(e.pointerId, {x: e.clientX, y: e.clientY});
+  if (pinch && ptrs.size === 2) {
+    const [a, b] = [...ptrs.values()];
+    const d = Math.hypot(a.x - b.x, a.y - b.y);
+    if (pinch.d > 0) zoomTo(pinch.k * d / pinch.d);
+    return;
+  }
   if (!drag) return;
-  // A few pixels of hand-shake between press and release is a click, not a pan.
-  if (!moved && Math.abs(e.clientX - drag.sx) + Math.abs(e.clientY - drag.sy) < 4) return;
+  // A few pixels between press and release is a tap, not a pan. A finger wobbles more
+  // than a mouse, so the threshold is wider than a mouse alone would need.
+  if (!moved && Math.abs(e.clientX - drag.sx) + Math.abs(e.clientY - drag.sy) < 6) return;
   moved = true;
   svg.classList.add("drag");
   view.x = e.clientX - drag.x; view.y = e.clientY - drag.y; draw();
 });
+const release = e => {
+  ptrs.delete(e.pointerId);
+  if (ptrs.size < 2) pinch = null;
+  if (ptrs.size === 0) { drag = null; svg.classList.remove("drag"); }
+};
+window.addEventListener("pointerup", release);
+window.addEventListener("pointercancel", release);
+
 svg.addEventListener("wheel", e => {
   e.preventDefault();
-  view.k = Math.min(3, Math.max(0.2, view.k * (e.deltaY < 0 ? 1.1 : 0.9)));
-  draw();
+  zoomTo(view.k * (e.deltaY < 0 ? 1.1 : 0.9));
 }, {passive: false});
+
+// A pinch needs two fingers and some dexterity; these need one thumb.
+document.getElementById("zi").onclick = () => zoomTo(view.k * 1.25);
+document.getElementById("zo").onclick = () => zoomTo(view.k / 1.25);
+document.getElementById("zf").onclick = () => { view = {x:0, y:0, k:1}; draw(); };
 document.getElementById("q").addEventListener("input", e => {
   query = e.target.value.trim().toLowerCase(); draw();
 });
+// --- the commit picker -------------------------------------------------------------
+const picker = document.getElementById("cm"), note = document.getElementById("cmnote");
+const pageRows = () => [...list.querySelectorAll(".pg")];
+
+function fillPicker() {
+  const opts = [`<option value="">Everything in this scan</option>`];
+  COMMITS.forEach((c, i) => opts.push(
+    `<option value="${i}">${esc(c.sha.slice(0, 8))} · ${esc(c.subject)}</option>`));
+  picker.innerHTML = opts.join("");
+  if (!COMMITS.length) {
+    picker.disabled = true;
+    note.textContent = "Only this commit has been scanned. Run --backfill to build history.";
+  }
+}
+
+function countsFor(changed) {
+  const n = {added: 0, removed: 0, status: 0};
+  Object.values(changed).forEach(kind => { n[kind] = (n[kind] || 0) + 1; });
+  return n;
+}
+
+function selectCommit(index) {
+  const c = COMMITS[index];
+  if (!c) {
+    CHANGED = MAPDATA.changed; only = false;
+    note.textContent = "";
+  } else {
+    CHANGED = c.changed; only = true;
+    const n = countsFor(c.changed);
+    const total = n.added + n.removed + n.status;
+    note.textContent = !c.baseline
+      ? "Earliest scanned commit — nothing before it to compare against."
+      : total === 0
+      ? `No scanned symbol changed since ${c.baseline.slice(0, 8)}.`
+      : `${n.added} added · ${n.removed} removed · ${n.status} changed status, ` +
+        `vs ${c.baseline.slice(0, 8)}`;
+  }
+  // A page with nothing from this commit in it is not somewhere to look.
+  PAGES.forEach((p, i) => {
+    const touched = only ? p.nodes.filter(n => CHANGED[n.id]).length : null;
+    const row = pageRows().find(el => Number(el.dataset.i) === i);
+    if (!row) return;
+    row.querySelector(".n").textContent =
+      touched === null ? `${p.nodes.length} nodes` : `${touched} changed`;
+    row.classList.toggle("quiet", touched === 0);
+  });
+  focus = null; view = {x:0, y:0, k:1};
+  draw();
+}
+
+picker.onchange = e => selectCommit(e.target.value === "" ? -1 : Number(e.target.value));
+fillPicker();
+
 document.getElementById("up").onclick = () => { focus = null; view = {x:0,y:0,k:1}; draw(); };
 draw();
 """
@@ -292,6 +413,7 @@ def _payload(connectivity_map: ConnectivityMap) -> str:
     data = {
         "columns": _COLUMNS,
         "changed": connectivity_map.changed,
+        "commits": connectivity_map.commits,
         "pages": [
             {
                 "page": page.page,
@@ -341,6 +463,8 @@ def render(connectivity_map: ConnectivityMap) -> str:
         "<h1>Signal Map</h1>",
         f'<div class="meta">{_esc(connectivity_map.git_sha[:12])} · {_esc(mode)}<br>'
         f"{_esc(connectivity_map.generated_at)}</div>",
+        '<div class="commits"><label for="cm">Commit</label>'
+        '<select id="cm"></select><div class="cmnote" id="cmnote"></div></div>',
         '<div class="pages" id="pages" role="listbox" aria-label="Pages"></div>',
         '<div class="detail" id="detail">Select a node to see its evidence.</div>',
         "</aside><main class=\"main\">",
@@ -348,6 +472,9 @@ def render(connectivity_map: ConnectivityMap) -> str:
         '<span id="crumb" class="crumb"></span>'
         '<input id="q" type="search" placeholder="Filter this view"></div>',
         '<svg id="cv"></svg>',
+        '<div class="zoom"><button id="zo" type="button" aria-label="Zoom out">\u2212</button>'
+        '<button id="zi" type="button" aria-label="Zoom in">+</button>'
+        '<button id="zf" type="button" aria-label="Fit to screen">\u2316</button></div>',
         f'<div class="legend">{legend}</div>',
         "</main></div>",
         f"<script>const MAPDATA={_payload(connectivity_map)};</script>",

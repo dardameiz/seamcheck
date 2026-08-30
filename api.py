@@ -10,7 +10,7 @@ import pathlib
 from django.conf import settings
 
 from signal_map.diff import DiffResult, diff_graphs
-from signal_map.graph import Graph, Status
+from signal_map.graph import Graph, Status, relativise
 from signal_map.pipeline import run_scan
 from signal_map.roots import discover_css_files, discover_js_roots, tailwind_classes
 from signal_map.snapshot import current_git_sha, load_snapshot, save_snapshot
@@ -72,7 +72,7 @@ def scan(repo_root: str = ".") -> Graph:
     )
     build_output = config.get("tailwind_build_output")
 
-    return run_scan(
+    return relativise(run_scan(
         urlconf_module=config["urlconf_module"],
         js_entry_files=js_entry_files,
         js_project_root=js_project_root,
@@ -85,7 +85,7 @@ def scan(repo_root: str = ".") -> Graph:
         tailwind_build_classes=(
             tailwind_classes(os.path.join(repo_root, build_output)) if build_output else set()
         ),
-    )
+    ), repo_root)
 
 
 def explain(graph: Graph, symbol_id: str) -> str:
@@ -262,6 +262,7 @@ def _page_files(repo_root: str) -> dict[str, set[str]]:
 
 
 def _render_map(repo_root: str, ref: str) -> str:
+    from signal_map.history import commit_series
     from signal_map.mapdata import build_map
     from signal_map.pagenames import page_names
     from signal_map.renderers import map_html
@@ -282,7 +283,13 @@ def _render_map(repo_root: str, ref: str) -> str:
     return map_html.render(
         build_map(graph, _page_files(repo_root), git_sha=sha,
                   baseline=baseline, baseline_sha=baseline_sha if baseline else None,
-                  names=page_names(repo_root, _config(), graph))
+                  names=page_names(repo_root, _config(), graph),
+                  commits=[
+                      {"sha": entry.sha, "subject": entry.subject, "date": entry.date,
+                       "symbols": entry.symbols, "changed": entry.changed,
+                       "baseline": entry.baseline_sha}
+                      for entry in commit_series(repo_root)
+                  ])
     )
 
 

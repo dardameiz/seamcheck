@@ -24,6 +24,12 @@ class Command(BaseCommand):
         parser.add_argument("--reason", default="", help="Why this disposition.")
         parser.add_argument("--repo-root", default=".", help="Repo to read snapshots/triage from.")
         parser.add_argument(
+            "--backfill", type=int, metavar="N", default=None,
+            help="Scan the last N commits into snapshots, so the map's commit picker has "
+                 "history to show. Each commit is scanned in its own temporary worktree; "
+                 "roughly 30s per commit.",
+        )
+        parser.add_argument(
             "--tunnel", action="store_true",
             help="With --serve, also open a temporary public HTTPS link via cloudflared, "
                  "for a device that is not on this network. Anyone with the link can read "
@@ -59,6 +65,9 @@ class Command(BaseCommand):
             return self._triage(options)
         if options["explain"]:
             return self.stdout.write(api.explain(api.scan(options["repo_root"]), options["explain"]))
+
+        if options["backfill"] is not None:
+            return self._backfill(options["repo_root"], options["backfill"])
         if options["format"] is not None:
             if not options["format"]:
                 # `--format ""` is falsy, so a bare `if options["format"]:` falls through
@@ -182,6 +191,17 @@ class Command(BaseCommand):
         self.stdout.write(f"{len(graph.symbols)} symbols, {len(graph.edges)} edges -> {path}")
         for status, count in sorted(counts.items()):
             self.stdout.write(f"  {status:<12} {count}")
+
+    def _backfill(self, repo_root, count):
+        """Fill in the commit history the map's picker reads."""
+        from signal_map.history import backfill
+
+        scanned = backfill(repo_root, count)
+        if not scanned:
+            return self.stdout.write(f"Nothing to scan: the last {count} commits already have snapshots.")
+        for sha in scanned:
+            self.stdout.write(f"scanned {sha[:12]}")
+        self.stdout.write(f"{len(scanned)} commit(s) added to the history.")
 
     def _serve(self, text, fmt, tunnel=False):
         """Hold the report open on the LAN until interrupted."""

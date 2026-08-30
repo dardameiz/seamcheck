@@ -47,3 +47,78 @@ class MapRenderTests(SimpleTestCase):
         out = map_html.render(_map(baseline_sha="0000111222333", changed={"url:x": "added"}))
 
         self.assertIn('"url:x": "added"', out.replace('"url:x":"added"', '"url:x": "added"'))
+
+
+class TouchTests(SimpleTestCase):
+    """A phone was left with no pan, no zoom, and an 8px tap target."""
+
+    def test_the_canvas_claims_touch_gestures_from_the_browser(self):
+        # Without this the browser treats every drag as a page scroll and the pan, the
+        # pinch and often the tap that follows never reach the script.
+        self.assertIn("touch-action:none", map_html.render(_map()))
+
+    def test_input_is_handled_as_pointers_not_as_mouse_only(self):
+        out = map_html.render(_map())
+
+        for handler in ("pointerdown", "pointermove", "pointerup", "pointercancel"):
+            self.assertIn(handler, out)
+        self.assertNotIn('addEventListener("mousedown"', out)
+        self.assertNotIn('addEventListener("mousemove"', out)
+
+    def test_a_node_carries_a_tap_target_larger_than_the_box_it_draws(self):
+        out = map_html.render(_map())
+
+        # The drawn box is 20px tall and the view opens scaled down; on a phone that is
+        # roughly 8px of target. The transparent rect fills the whole row pitch.
+        self.assertIn('height="30" fill="transparent"', out)
+        self.assertIn('pointer-events="all"', out)
+
+    def test_zoom_is_reachable_without_a_wheel_or_two_fingers(self):
+        out = map_html.render(_map())
+
+        for control in ('id="zi"', 'id="zo"', 'id="zf"'):
+            self.assertIn(control, out)
+
+
+class CommitPickerTests(SimpleTestCase):
+    def _with_commits(self):
+        return _map(commits=[
+            {"sha": "a" * 40, "subject": "fix: <script>", "date": "2026-01-01",
+             "symbols": 10, "changed": {"url:x": "added"}, "baseline": "b" * 40},
+        ])
+
+    def test_a_commit_is_offered_by_its_subject_not_only_its_sha(self):
+        out = map_html.render(self._with_commits())
+
+        self.assertIn('id="cm"', out)
+        self.assertIn("fix:", out)
+
+    def test_a_commit_subject_is_escaped_before_it_reaches_innerHTML(self):
+        # A subject is project text. Unescaped, one containing markup closes the option
+        # early and swallows the rest of the list - the same defect the node labels had.
+        out = map_html.render(self._with_commits())
+
+        self.assertIn("${esc(c.subject)}", out)
+
+    def test_a_commit_subject_cannot_close_the_script_tag(self):
+        built = _map(commits=[
+            {"sha": "a" * 40, "subject": "</script><b>hi</b>", "date": "2026-01-01",
+             "symbols": 1, "changed": {}, "baseline": None},
+        ])
+
+        self.assertNotIn("</script><b>", map_html.render(built))
+
+    def test_selecting_a_commit_narrows_the_view_to_what_it_changed(self):
+        out = map_html.render(self._with_commits())
+
+        self.assertIn("if (only) return changedIn(p)", out)
+
+    def test_a_commit_that_changed_nothing_says_so_rather_than_drawing_a_blank(self):
+        out = map_html.render(self._with_commits())
+
+        self.assertIn("nothing the scan reads changed in this commit", out)
+
+    def test_with_no_history_the_picker_says_how_to_build_some(self):
+        out = map_html.render(_map())
+
+        self.assertIn("--backfill", out)

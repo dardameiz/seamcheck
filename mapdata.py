@@ -65,6 +65,9 @@ class ConnectivityMap:
     generated_at: str
     pages: list[PageMap]
     baseline_sha: str | None = None
+    # One entry per scanned commit, newest first, each with its own changed set, so a
+    # reader can ask what a single commit did rather than what the branch did.
+    commits: list[dict] = field(default_factory=list)
     # node id -> "added" | "removed" | "status", populated only in diff mode.
     changed: dict[str, str] = field(default_factory=dict)
 
@@ -156,6 +159,7 @@ def build_map(
     baseline_sha: str | None = None,
     now: str | None = None,
     names: dict[str, PageName] | None = None,
+    commits: list[dict] | None = None,
 ) -> ConnectivityMap:
     adjacency = build_adjacency(graph)
     page_maps = []
@@ -187,5 +191,6 @@ def build_map(
         generated_at=now or dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
         pages=page_maps,
         baseline_sha=baseline_sha,
+        commits=commits or [],
         changed=changed,
     )
