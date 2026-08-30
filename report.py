@@ -79,6 +79,25 @@ def _title_for(kind: str) -> str:
     return _GROUP_TITLES.get(kind, kind.replace("_", " ").capitalize())
 
 
+def _dedupe_by_id(symbols: list[Symbol]) -> list[Symbol]:
+    """First occurrence wins, order otherwise preserved.
+
+    new_multi_writer, new_unresolved, and new_unused are concatenated below with no
+    guarantee they are disjoint - a multi-writer symbol carries Status.UNRESOLVED, so it
+    already arrives via new_unresolved too, and the day new_multi_writer is actually
+    populated (it isn't yet - see diff.py) every such symbol would otherwise be listed
+    twice, breaking "a finding appears exactly once".
+    """
+    seen: set[str] = set()
+    deduped: list[Symbol] = []
+    for symbol in symbols:
+        if symbol.id in seen:
+            continue
+        seen.add(symbol.id)
+        deduped.append(symbol)
+    return deduped
+
+
 def _group_status(symbols: list[Symbol]) -> Status:
     """The worst status present, not whichever symbol happens to sort first.
 
@@ -104,9 +123,8 @@ def build_report(
     resolved: list[Symbol] = []
     invalidated: list[dict] = []
     if diff is not None:
-        new_findings = sorted(
-            diff.new_multi_writer + diff.new_unresolved + diff.new_unused, key=_sort_key
-        )
+        combined = diff.new_multi_writer + diff.new_unresolved + diff.new_unused
+        new_findings = sorted(_dedupe_by_id(combined), key=_sort_key)
         resolved = list(diff.resolved)
         invalidated = list(diff.triage_invalidated)
 

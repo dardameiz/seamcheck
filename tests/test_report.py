@@ -80,6 +80,22 @@ class ContentTests(SimpleTestCase):
         grouped = [s.id for group in report.groups for s in group.symbols]
         self.assertEqual(grouped, ["old"])
 
+    def test_a_symbol_present_in_two_new_lists_is_not_double_counted(self):
+        # new_multi_writer, new_unresolved, and new_unused are concatenated with no
+        # dedupe upstream - a multi-writer symbol carries Status.UNRESOLVED, so it
+        # already arrives via new_unresolved too. The day new_multi_writer is actually
+        # populated (diff_graphs never fills it today), every such symbol would
+        # otherwise be listed twice, breaking "a finding appears exactly once".
+        dup = _symbol("dup", kind="multi_writer_element")
+        diff = DiffResult(
+            new_unresolved=[dup], new_unused=[], resolved=[],
+            triage_invalidated=[], new_multi_writer=[dup],
+        )
+
+        report = _report([dup], diff=diff)
+
+        self.assertEqual([s.id for s in report.new_findings], ["dup"])
+
     def test_group_titles_are_human_readable(self):
         report = _report([_symbol("t", kind="css_token_def", status=Status.UNUSED)])
 
