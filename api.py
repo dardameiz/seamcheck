@@ -171,6 +171,8 @@ def report(
         "markdown": markdown_renderer.render,
         "html": html_renderer.render,
     }
+    if fmt == "map":
+        return _render_map(repo_root, ref)
     if fmt not in renderers:
         raise ValueError(f"Unknown format {fmt!r}. Use one of: {', '.join(sorted(renderers))}.")
 
@@ -234,3 +236,46 @@ def write_map(graph: Graph, repo_root: str = ".") -> str:
     path.write_text(json.dumps(graph_to_dict(graph), indent=2), encoding="utf-8")
     save_snapshot(graph, current_git_sha(repo_root), repo_root)
     return str(path)
+
+
+def _page_files(repo_root: str) -> dict[str, set[str]]:
+    """Which JS files each page entry reaches. Computed only for the map: the import
+    walk costs ~13s and the CI path has no use for page attribution."""
+    import os as _os
+
+    from signal_map.extractors.js_extractor import discover_js_files
+    from signal_map.roots import discover_js_roots
+
+    config = _config()
+    roots = discover_js_roots(
+        vite_config=_os.path.join(repo_root, "vite.config.js"),
+        templates_root=_os.path.join(repo_root, config["templates_root"]),
+        static_root=_os.path.join(repo_root, "pointless", "static"),
+    )
+    return {
+        _os.path.splitext(_os.path.basename(root))[0]: set(discover_js_files([root], repo_root))
+        for root in roots
+    }
+
+
+def _render_map(repo_root: str, ref: str) -> str:
+    from signal_map.mapdata import build_map
+    from signal_map.renderers import map_html
+
+    graph = scan(repo_root)
+    baseline = None
+    baseline_sha = None
+    if ref and ref != "HEAD":
+        try:
+            baseline_sha = _rev_parse(ref, repo_root)
+            baseline = load_snapshot(baseline_sha, repo_root)
+        except Exception:  # noqa: BLE001 - a missing baseline degrades to current mode
+            baseline, baseline_sha = None, None
+    try:
+        sha = current_git_sha(repo_root)
+    except Exception:  # noqa: BLE001
+        sha = "unknown"
+    return map_html.render(
+        build_map(graph, _page_files(repo_root), git_sha=sha,
+                  baseline=baseline, baseline_sha=baseline_sha if baseline else None)
+    )
