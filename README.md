@@ -85,6 +85,15 @@ python manage.py dump_connectivity_map --explain <symbol-id>
 python manage.py dump_connectivity_map --triage <symbol-id> --status approved --reason "..."
 ```
 
+```bash
+python manage.py dump_connectivity_map --format markdown   # digest for a chat or a PR comment
+python manage.py dump_connectivity_map --format html       # one self-contained file
+python manage.py dump_connectivity_map --format markdown --out FINDINGS.md
+```
+
+The HTML report is a single file with no network requests — publish it wherever you like.
+Signal Map never uploads anything.
+
 `--check` is CI-ready: it exits 1 only on `unresolved`/`unused` findings that are untriaged
 or explicitly confirmed. It never fails a build over `uncertain`.
 
@@ -108,7 +117,7 @@ finding and have it stay silent through a real change.
 python -m signal_map.mcp_server
 ```
 
-Exposes `signal_map_check`, `signal_map_explain` and `signal_map_triage` so an agent can
+Exposes `signal_map_check`, `signal_map_explain`, `signal_map_triage` and `signal_map_report` so an agent can
 check its own work before claiming a task is done.
 
 ## Limitations

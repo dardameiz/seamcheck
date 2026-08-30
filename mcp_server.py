@@ -27,5 +27,11 @@ def signal_map_triage(symbol_id: str, status: str, repo_root: str = ".", reason:
     return api.triage(symbol_id, status, repo_root, reason)
 
 
+@mcp.tool()
+def signal_map_report(fmt: str = "markdown", repo_root: str = ".") -> str:
+    """Render the findings digest: terminal, markdown or html."""
+    return api.report(repo_root, fmt)
+
+
 if __name__ == "__main__":
     mcp.run()
