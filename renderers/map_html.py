@@ -31,11 +31,24 @@ _COLUMNS = [
 ]
 
 _CSS = """
-:root { --bg:#faf9f6; --panel:#fff; --ink:#14171c; --muted:#5d6673; --line:#e1e0db;
-        --sig:#1f7a8c; --ok:#2e7d5b; --crit:#a93b4b; --warn:#a8681b; --dim:#98a1ae; }
+:root {
+  /* A developer tool should look like the thing it reads. Cool neutrals rather than warm
+     paper, one saturated accent, and four status hues that stay distinguishable when a
+     node is 4px tall at full-page zoom - which is where most of this map is read. */
+  --bg:#f7f8fa; --panel:#ffffff; --sunk:#eef0f4;
+  --ink:#0f1319; --muted:#5a6473; --line:#dfe3ea;
+  --sig:#0b6bcb;
+  --ok:#1a7f4b; --crit:#c0362c; --warn:#9a6410; --dim:#8b95a5;
+  --ok-fill:#e6f4ec; --crit-fill:#fbeae8; --warn-fill:#fdf1de; --dim-fill:#eef0f4;
+}
 @media (prefers-color-scheme: dark) {
-  :root { --bg:#101317; --panel:#191d23; --ink:#e8ebef; --muted:#98a1ae; --line:#2a2f37;
-          --sig:#4fb3c4; --ok:#56b98c; --crit:#e0788a; --warn:#d69b4c; --dim:#6e7885; }
+  :root {
+    --bg:#0d1117; --panel:#151b24; --sunk:#0a0e14;
+    --ink:#dde4ee; --muted:#8b97a8; --line:#252d38;
+    --sig:#4aa3ff;
+    --ok:#3fb27f; --crit:#f0736a; --warn:#d69a3c; --dim:#6f7b8c;
+    --ok-fill:#10281e; --crit-fill:#2c1618; --warn-fill:#2a2011; --dim-fill:#161c24;
+  }
 }
 * { box-sizing:border-box; }
 /* An author `display` beats the UA rule that [hidden] relies on, so el.hidden = true read
@@ -43,9 +56,13 @@ _CSS = """
 [hidden] { display:none !important; }
 /* The canvas is the point. Everything else is a strip above it, and the whole document
    is exactly one screen tall so nothing scrolls the map out of view. */
-body { margin:0; background:var(--bg); color:var(--ink); font-size:14px; overflow:hidden;
-       height:100dvh;
+body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overflow:hidden;
+       height:100dvh; -webkit-font-smoothing:antialiased;
        font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+/* Every value the scan read is shown in the font it was written in. */
+.mono, #crumb, .meta, .hf, .hl, .row .t, .row .w, .tree, .fl, .covn,
+.filters select, #q, .badge, .pill { font-family:ui-monospace,SFMono-Regular,Menlo,
+       "Cascadia Mono","Roboto Mono",monospace; }
 .shell { display:flex; height:100%; }
 .content { flex:1 1 auto; min-width:0; display:flex; flex-direction:column; }
 /* The rail is the desktop's navigation. A phone has no room for it and uses the VIEW
@@ -62,16 +79,16 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:14px; overflo
 .filters label { flex:1 1 0; min-width:0; display:block; }
 .filters span { display:block; font-size:9.5px; text-transform:uppercase;
                 letter-spacing:.09em; color:var(--muted); margin-bottom:3px; }
-.filters select { width:100%; padding:9px 8px; font-size:13px; border-radius:8px;
-                  border:1px solid var(--line); background:var(--bg); color:var(--ink); }
+.filters select { width:100%; padding:8px; font-size:12.5px; border-radius:7px;
+                  border:1px solid var(--line); background:var(--panel); color:var(--ink); }
 .crumbrow { display:flex; align-items:center; gap:7px; padding:0 12px 8px; }
 .crumbrow button { flex:none; padding:7px 10px; font-size:12px; border-radius:8px;
                    border:1px solid var(--line); background:var(--bg); color:var(--ink);
                    cursor:pointer; }
 #crumb { flex:1 1 auto; min-width:0; font-size:12px; color:var(--muted);
          white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-#q { flex:0 1 130px; min-width:78px; padding:7px 9px; font-size:13px; border-radius:8px;
-     border:1px solid var(--line); background:var(--bg); color:var(--ink); }
+#q { flex:0 1 150px; min-width:78px; padding:6px 9px; font-size:12.5px; border-radius:7px;
+     border:1px solid var(--line); background:var(--panel); color:var(--ink); }
 /* Always on screen. A reader should never have to hunt for what a colour claims, and the
    four statuses are the whole contract this tool makes. */
 .legendbar { display:flex; flex-wrap:wrap; gap:4px 14px; padding:0 12px 9px; font-size:11px; }
@@ -83,8 +100,7 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:14px; overflo
 .legendbar .unresolved i { border-color:var(--crit); }
 .legendbar .unused i { border-color:var(--warn); }
 .legendbar .uncertain i { border-color:var(--dim); }
-.legendbar .filled i { border-color:var(--crit);
-                 background:color-mix(in srgb, var(--crit) 22%, var(--panel)); }
+.legendbar .filled i { border-color:var(--crit); background:var(--crit-fill); }
 .note { padding:0 12px 8px; font-size:11.5px; color:var(--muted); }
 .note:empty { display:none; }
 /* A deleted symbol is in no current page, so no canvas can show it. Naming it here is
@@ -103,19 +119,20 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:14px; overflo
 .gone .ch span { color:var(--muted); }
 .gone { max-height:26dvh; overflow-y:auto; }
 
-.main { flex:1 1 auto; position:relative; min-height:0; }
+.main { flex:1 1 auto; position:relative; min-height:0; background:var(--sunk); }
 svg { position:absolute; inset:0; width:100%; height:100%; display:block;
       cursor:grab; touch-action:none; }
 svg.drag { cursor:grabbing; }
 .nd rect { stroke-width:1.5; }
-.nd text { font-size:11px; fill:var(--ink); pointer-events:none;
-           font-family:ui-monospace,Menlo,monospace; }
+.nd text { font-size:10.5px; fill:var(--ink); pointer-events:none; letter-spacing:-.1px;
+           font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
 .nd { cursor:pointer; }
 .nd.faded { opacity:.10; }
 .nd.lit rect { stroke-width:3.5; }
-.ed { fill:none; stroke-width:1.2; opacity:.45; }
+.ed { fill:none; stroke-width:1.1; opacity:.38; }
 .ed.faded { opacity:.05; }
-.col { font-size:10px; fill:var(--muted); text-transform:uppercase; letter-spacing:.08em; }
+.col { font-size:9.5px; fill:var(--muted); text-transform:uppercase; letter-spacing:.1em;
+       font-family:ui-monospace,Menlo,monospace; }
 
 .zoom { position:absolute; left:10px; bottom:10px; display:flex; gap:6px; z-index:2; }
 .zoom button, .key { width:40px; height:40px; font-size:15px; line-height:1;
@@ -147,7 +164,7 @@ svg.drag { cursor:grabbing; }
 .hop.at { border-left-color:var(--sig); }
 .hop .hk { font-size:9.5px; text-transform:uppercase; letter-spacing:.07em; color:var(--muted); }
 .hop .hl { font-size:12.5px; font-family:ui-monospace,Menlo,monospace; word-break:break-all; }
-.hop.at { background:color-mix(in srgb, var(--sig) 7%, transparent);
+.hop.at { background:var(--sunk);
           border-radius:0 7px 7px 0; }
 .hop.at .hl { font-weight:700; color:var(--sig); }
 .hop .hf { font-size:11px; color:var(--muted); word-break:break-all;
@@ -166,8 +183,10 @@ svg.drag { cursor:grabbing; }
 .codehead button { margin-left:auto; flex:none; width:30px; height:30px; border-radius:8px;
                    border:1px solid var(--line); background:var(--bg); color:var(--ink);
                    cursor:pointer; }
-#codebody { margin:0; padding:14px; overflow:auto; font-size:12px; line-height:1.65;
-            font-family:ui-monospace,Menlo,monospace; white-space:pre; }
+#codebody { margin:0; padding:14px 0; overflow:auto; font-size:12px; line-height:1.7;
+            background:var(--sunk); color:var(--ink); white-space:pre;
+            font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+#codebody { tab-size:4; }
 
 .sheet .x { position:absolute; top:8px; right:10px; width:30px; height:30px;
             border-radius:8px; border:1px solid var(--line); background:var(--bg);
@@ -188,13 +207,17 @@ svg.drag { cursor:grabbing; }
 .row .w { color:var(--muted); font-size:11.5px; word-break:break-all;
           font-family:ui-monospace,Menlo,monospace; }
 .row .n { color:var(--muted); font-size:12px; margin-top:4px; }
-.badge, .pill { display:inline-block; font-size:10px; text-transform:uppercase;
-                letter-spacing:.05em; border:1px solid var(--line); border-radius:20px;
-                padding:1px 8px; margin-right:6px; }
-.badge.connected, .pill.connected { color:var(--ok); }
-.badge.unresolved, .pill.unresolved { color:var(--crit); }
-.badge.unused, .pill.unused { color:var(--warn); }
-.badge.uncertain, .pill.uncertain { color:var(--dim); }
+.badge, .pill { display:inline-block; font-size:9.5px; text-transform:uppercase;
+                letter-spacing:.06em; border:1px solid transparent; border-radius:5px;
+                padding:1px 6px; margin-right:6px; font-weight:600; }
+.badge.connected, .pill.connected { color:var(--ok); background:var(--ok-fill);
+                                    border-color:var(--ok); }
+.badge.unresolved, .pill.unresolved { color:var(--crit); background:var(--crit-fill);
+                                      border-color:var(--crit); }
+.badge.unused, .pill.unused { color:var(--warn); background:var(--warn-fill);
+                              border-color:var(--warn); }
+.badge.uncertain, .pill.uncertain { color:var(--dim); background:var(--dim-fill);
+                                    border-color:var(--dim); }
 .cards { display:flex; gap:10px; flex-wrap:wrap; }
 .card { flex:1 1 210px; background:var(--panel); border:1px solid var(--line);
         border-radius:11px; padding:12px 13px; }
@@ -224,16 +247,18 @@ svg.drag { cursor:grabbing; }
   .brand, .filters, .crumbrow { padding-left:16px; padding-right:16px; }
   .filters { max-width:820px; }
   .onlymob { display:none; }
-  .rail { display:flex; flex-direction:column; width:236px; flex:none; overflow-y:auto;
+  .rail { display:flex; flex-direction:column; width:230px; flex:none; overflow-y:auto;
           background:var(--panel); border-right:1px solid var(--line); }
-  .railhead { font-size:14px; font-weight:700; padding:14px 16px 10px; }
+  .railhead { font-size:10px; font-weight:600; padding:14px 14px 9px; color:var(--muted);
+              text-transform:uppercase; letter-spacing:.11em;
+              font-family:ui-monospace,Menlo,monospace; }
   .nv { display:flex; justify-content:space-between; align-items:center; gap:8px;
-        padding:9px 16px; cursor:pointer; border-top:1px solid var(--line);
-        font-size:13px; }
-  .nv:hover { background:var(--bg); }
-  .nv[aria-current="true"] { background:var(--bg); box-shadow:inset 3px 0 0 var(--sig);
-                             font-weight:600; }
-  .nv .c { color:var(--muted); font-size:11px; font-variant-numeric:tabular-nums; }
+        padding:7px 14px; cursor:pointer; font-size:12.5px; }
+  .nv:hover { background:var(--sunk); }
+  .nv[aria-current="true"] { background:var(--sunk); box-shadow:inset 2px 0 0 var(--sig);
+                             color:var(--sig); font-weight:600; }
+  .nv .c { color:var(--muted); font-size:11px; font-variant-numeric:tabular-nums;
+           font-family:ui-monospace,Menlo,monospace; }
   .sheet { left:auto; right:0; width:380px; top:0; bottom:auto; max-height:100%;
            border-top:0; border-left:1px solid var(--line); }
 }
@@ -241,6 +266,10 @@ svg.drag { cursor:grabbing; }
 
 _SCRIPT = r"""
 const S = {connected:"var(--ok)", unresolved:"var(--crit)", unused:"var(--warn)", uncertain:"var(--dim)"};
+// A tuned fill per status, not a computed tint: color-mix against the panel produced a
+// grey mush in dark mode, where the panel is nearly black.
+const F = {connected:"var(--ok-fill)", unresolved:"var(--crit-fill)",
+           unused:"var(--warn-fill)", uncertain:"var(--dim-fill)"};
 const CH = {added:"var(--ok)", removed:"var(--crit)", status:"var(--warn)"};
 const COLS = MAPDATA.columns, PAGES = MAPDATA.pages, COMMITS = MAPDATA.commits || [];
 // Which changed-set is in force. Starts as the whole-run diff, and a commit selection
@@ -490,7 +519,7 @@ function draw() {
       <rect x="${q.x - 5}" y="${q.y - 5}" width="160" height="30" fill="transparent"
             pointer-events="all"/>
       <rect x="${q.x}" y="${q.y}" width="150" height="20" rx="5"
-            fill="${alone ? `color-mix(in srgb, ${stroke} 22%, var(--panel))` : "var(--panel)"}"
+            fill="${alone ? (F[n.status] || "var(--panel)") : "var(--panel)"}"
             stroke="${stroke}" stroke-width="${ch ? 3 : 1.5}"/>
       ${withLabels ? `<text x="${q.x + 7}" y="${q.y + 14}">${esc(label)}</text>` : ""}</g>`);
   });

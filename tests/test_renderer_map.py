@@ -337,11 +337,13 @@ class BigCanvasTests(SimpleTestCase):
         self.assertIn("listToggle.hidden = !hasLens", out)
 
     def test_unresolved_and_unused_are_filled_not_just_outlined(self):
-        # At the zoom where a whole page fits, labels are gone and an outline among
-        # 1,366 outlines carries nothing.
+        # At the zoom where a whole page fits, labels are gone and an outline among 1,366
+        # outlines carries nothing. The fill is a tuned token per status, not a tint mixed
+        # against the panel - which is nearly black in dark mode and mixed to grey mush.
         out = map_html.render(_map())
 
-        self.assertIn("color-mix(in srgb, ${stroke} 22%, var(--panel))", out)
+        self.assertIn('F[n.status] || "var(--panel)"', out)
+        self.assertIn("--crit-fill", out)
 
     def test_labels_are_dropped_when_they_would_be_unreadable(self):
         out = map_html.render(_map())
@@ -446,3 +448,25 @@ class FileTreeViewTests(SimpleTestCase):
         out = map_html.render(_map(), files=self._files())
 
         self.assertIn('depth < 2 || needle ? " open" : ""', out)
+
+
+class PaletteTests(SimpleTestCase):
+    def test_both_themes_define_every_colour_they_use(self):
+        # A colour defined only inside the dark block renders as nothing in light, and
+        # the other way round - the classic unreadable-page bug.
+        out = map_html.render(_map())
+        tokens = ("--bg", "--panel", "--sunk", "--ink", "--muted", "--line", "--sig",
+                  "--ok", "--crit", "--warn", "--dim",
+                  "--ok-fill", "--crit-fill", "--warn-fill", "--dim-fill")
+        light = out[out.index(":root {"):out.index("@media (prefers-color-scheme: dark)")]
+        dark = out[out.index("@media (prefers-color-scheme: dark)"):out.index("* { box-sizing")]
+
+        for token in tokens:
+            self.assertIn(f"{token}:", light, f"{token} missing from the light palette")
+            self.assertIn(f"{token}:", dark, f"{token} missing from the dark palette")
+
+    def test_no_colour_is_mixed_against_the_panel_at_runtime(self):
+        # A nearly-black dark panel mixed to grey mush; each status carries its own fill
+        # token instead. Matching the bare word also matched the comment explaining it -
+        # the call is what matters, so the call is what is asserted.
+        self.assertNotIn("color-mix(", map_html.render(_map()))
