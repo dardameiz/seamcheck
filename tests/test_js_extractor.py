@@ -17,12 +17,19 @@ class JsExtractorTests(SimpleTestCase):
         self.assertIn("/api/get-thing/", self.targets)
         self.assertIn("/api/does-not-exist/", self.targets)
 
-    def test_dynamic_fetch_argument_is_uncertain_not_matched(self):
+    def test_dynamic_fetch_keeps_the_known_prefix_and_claims_nothing_more(self):
+        # `fetch(`/api/items/${id}/`)` used to produce no target at all, so the endpoint
+        # read as one nothing calls. The prefix is real evidence and is recorded; which
+        # route it reaches is not, so the symbol stays uncertain and says why.
         dynamic = [s for s in self.symbols if s.kind == "js_call" and "callDynamic" in s.chain]
 
         self.assertEqual(len(dynamic), 1)
         self.assertEqual(dynamic[0].status, Status.UNCERTAIN)
-        self.assertFalse(any("items" in label for label in self.targets))
+        self.assertIn("<runtime value>", dynamic[0].snippet)
+
+        prefix = [s for s in self.symbols if s.kind == "fetch_target" and s.label == "/api/items/"]
+        self.assertEqual([s.status for s in prefix], [Status.UNCERTAIN])
+        self.assertIn("not proven", prefix[0].note)
 
     def test_follows_static_imports_from_the_entry(self):
         files_seen = {s.file for s in self.symbols if s.kind == "js_call"}
@@ -48,8 +55,10 @@ class JsExtractorTests(SimpleTestCase):
         # `import gsap from 'gsap'` and a .css import must not be walked into or crash.
         self.assertTrue(all(f.endswith(".js") for f in {s.file for s in self.symbols}))
 
-    def test_every_literal_target_has_an_edge_from_its_call(self):
-        call_ids = {s.id for s in self.symbols if s.kind == "js_call" and s.status == Status.CONNECTED}
+    def test_every_target_has_an_edge_from_its_call(self):
+        # Includes the uncertain ones: a prefix-only target is still reached from a call,
+        # and dropping its edge left the call looking like it went nowhere.
+        call_ids = {s.id for s in self.symbols if s.kind == "js_call"}
         target_ids = {s.id for s in self.symbols if s.kind == "fetch_target"}
 
         for edge in self.edges:

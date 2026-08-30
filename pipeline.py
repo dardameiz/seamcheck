@@ -24,7 +24,11 @@ from signal_map.extractors.dom_js_extractor import (
     extract_js_css_tokens,
 )
 from signal_map.extractors.entry_points_extractor import extract_entry_points
-from signal_map.extractors.js_extractor import discover_js_files, extract_js
+from signal_map.extractors.js_extractor import (
+    discover_js_files,
+    extract_js,
+    extract_template_js,
+)
 from signal_map.extractors.template_scanner import scan_templates
 from signal_map.field_matcher import match_json_response_fields
 from signal_map.graph import Edge, Graph, Status, Symbol
@@ -119,6 +123,13 @@ def run_scan(
         django_symbols = django_symbols + extract_django_models(app_labels)
 
     js_symbols, js_edges = extract_js(js_entry_files, js_project_root)
+    # JavaScript a template writes inline is still JavaScript. This project keeps 200 KB
+    # of it, calling five endpoints that no .js file mentions - which a scan of .js files
+    # alone reported as endpoints nothing calls.
+    inline_symbols, inline_edges = extract_template_js(template_files or [])
+    known = {symbol.id for symbol in js_symbols}
+    js_symbols += [symbol for symbol in inline_symbols if symbol.id not in known]
+    js_edges += inline_edges
     match_edges = match_js_to_django(django_symbols, js_symbols)
     entry_point_symbols = extract_entry_points(entry_point_files or set())
 
