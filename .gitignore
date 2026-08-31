@@ -11,3 +11,6 @@ node_modules/
 
 # Screenshot scratch. docs/images/ IS committed - the README needs them.
 docs/mockups/_build/
+
+# Cloned third-party repositories used to validate accuracy. Never committed.
+corpus/

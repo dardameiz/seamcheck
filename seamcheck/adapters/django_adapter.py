@@ -30,15 +30,22 @@ class DjangoAdapter:
     name = "django"
 
     def detect(self, repo_root: str, config: dict) -> float:
-        """Confidence by artefact. `manage.py` beside a settings module is unambiguous."""
+        """Confidence by artefact. `manage.py` beside a settings module is unambiguous.
+
+        A supplied `urlconf_module` outranks everything found on disk, because it does not
+        come from a guess: autoconfig reads it from `settings.ROOT_URLCONF`, and a project
+        that HAS a ROOT_URLCONF is a Django project by definition. Weighting it as one
+        signal among several let a directory of vendored FastAPI code outscore the real
+        answer - which is exactly the failure mode a monorepo produces.
+        """
+        if config.get("urlconf_module"):
+            return 0.95
         root = pathlib.Path(repo_root)
         score = 0.0
         if (root / "manage.py").is_file():
             score += 0.6
-        if config.get("urlconf_module"):
-            score += 0.3
         if any(root.glob("*/settings.py")) or (root / "settings.py").is_file():
-            score += 0.1
+            score += 0.2
         if not score and any(root.glob("*/urls.py")):
             score = 0.4
         return round(min(score, 1.0), 3)
