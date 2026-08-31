@@ -24,14 +24,30 @@ _TEMPLATE_EXPRESSION_RE = re.compile(r"\{[{%].*?[%}]\}|\$\{[^}]*\}")
 # A class token is written by a human or a utility framework. Anything carrying JS
 # punctuation came from a script block, not from markup.
 _NOT_A_CLASS_RE = re.compile(r"""[${}()'"^,;]|^\W+$""")
+# Substituted for a template expression instead of a space, so a name BUILT around one is
+# still recognisable as a fragment afterwards. Replacing with a space made
+# `class="flag-icon flag-icon-{{ code }}"` yield the literal token `flag-icon-`, a class
+# that exists in no stylesheet because it exists nowhere - the real class is
+# `flag-icon-us`. 38 findings on the project measured were prefixes of names like this.
+# \x00 cannot occur in markup and cannot be split on, so the fragment carries the mark.
+_EXPRESSION_MARK = "\x00"
 
 
 def _tokens(attribute: str, value: str) -> list[str]:
-    cleaned = _TEMPLATE_EXPRESSION_RE.sub(" ", value)
+    cleaned = _TEMPLATE_EXPRESSION_RE.sub(_EXPRESSION_MARK, value)
     if attribute == "class":
-        return [token for token in cleaned.split() if not _NOT_A_CLASS_RE.search(token)]
+        return [
+            token
+            for token in cleaned.split()
+            # A token touching an expression is half a name assembled at runtime. Dropped
+            # rather than reported: the whole name is unknowable, so nothing about it can
+            # be checked, and a prefix is not a class anyone wrote.
+            if _EXPRESSION_MARK not in token and not _NOT_A_CLASS_RE.search(token)
+        ]
     cleaned = cleaned.strip()
-    return [cleaned] if cleaned else []
+    if not cleaned or _EXPRESSION_MARK in cleaned:
+        return []
+    return [cleaned]
 
 
 def _line_of(text: str, offset: int) -> int:

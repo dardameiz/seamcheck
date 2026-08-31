@@ -118,52 +118,76 @@ def _writing_call_ids(ast_root: dict) -> set[int]:
     return writing
 
 
-def extract_dom_selectors(js_files: list[str]) -> list[Symbol]:
+def _dom_selectors_in(path: str, ast_root: dict, line_offset: int = 0) -> list[Symbol]:
+    """Every DOM query in one parsed unit, whether that unit was a file or a <script>."""
+    symbols: list[Symbol] = []
+    writing = _writing_call_ids(ast_root)
+    basename = os.path.basename(path)
+
+    for node, enclosing in _walk(ast_root):
+        if node.get("type") != "CallExpression":
+            continue
+        callee = node.get("callee") or {}
+        callee_name = (callee.get("property") or {}).get("name")
+        if callee_name not in _SELECTOR_CALLEES:
+            continue
+
+        arguments = node.get("arguments") or []
+        first = arguments[0] if arguments else {}
+        raw_line = ((node.get("loc") or {}).get("start") or {}).get("line")
+        line = (raw_line + line_offset) if raw_line else raw_line
+        access = "write" if id(node) in writing else "read"
+        chain = [basename, enclosing] if enclosing else [basename]
+
+        if first.get("type") != "Literal" or not isinstance(first.get("value"), str):
+            symbols.append(
+                Symbol(
+                    id=f"dom_selector:dynamic:{path}:{line}", kind="dom_selector",
+                    label="<dynamic>", sub=f"dynamic:{access}", file=path, line=line,
+                    status=Status.UNCERTAIN, snippet=f"{callee_name}(<built at runtime>)",
+                    chain=chain,
+                    note="Selector built at runtime -- cannot be tied to a template element.",
+                )
+            )
+            continue
+
+        raw = first["value"]
+        for sub, label in _selector_tokens(callee_name, raw):
+            symbols.append(
+                Symbol(
+                    id=f"dom_selector:{sub}:{label}:{path}:{line}", kind="dom_selector",
+                    label=label, sub=f"{sub}:{access}", file=path, line=line,
+                    status=Status.UNCERTAIN, snippet=f"{callee_name}('{raw}')",
+                    chain=chain, note="",
+                )
+            )
+    return symbols
+
+
+def extract_dom_selectors(js_files: list[str], template_files: list[str] | None = None) -> list[Symbol]:
+    """DOM queries, from .js files AND from the JavaScript templates write inline.
+
+    Inline <script> used to be invisible here. It is not a rounding error: the project this
+    was measured on keeps 202 KB of it, and every getElementById inside it was unread - so
+    148 template elements that JavaScript demonstrably uses were reported as elements
+    nothing reaches, 17% of everything the scan claimed.
+    """
+    from seamcheck.extractors.js_extractor import parse_inline_blocks
+
     symbols: list[Symbol] = []
     for path, ast_root in _parse_files([f for f in js_files if os.path.isfile(f)]).items():
-        writing = _writing_call_ids(ast_root)
-        basename = os.path.basename(path)
-
-        for node, enclosing in _walk(ast_root):
-            if node.get("type") != "CallExpression":
-                continue
-            callee = node.get("callee") or {}
-            callee_name = (callee.get("property") or {}).get("name")
-            if callee_name not in _SELECTOR_CALLEES:
-                continue
-
-            arguments = node.get("arguments") or []
-            first = arguments[0] if arguments else {}
-            line = ((node.get("loc") or {}).get("start") or {}).get("line")
-            access = "write" if id(node) in writing else "read"
-            chain = [basename, enclosing] if enclosing else [basename]
-
-            if first.get("type") != "Literal" or not isinstance(first.get("value"), str):
-                symbols.append(
-                    Symbol(
-                        id=f"dom_selector:dynamic:{path}:{line}", kind="dom_selector",
-                        label="<dynamic>", sub=f"dynamic:{access}", file=path, line=line,
-                        status=Status.UNCERTAIN, snippet=f"{callee_name}(<built at runtime>)",
-                        chain=chain,
-                        note="Selector built at runtime -- cannot be tied to a template element.",
-                    )
-                )
-                continue
-
-            raw = first["value"]
-            for sub, label in _selector_tokens(callee_name, raw):
-                symbols.append(
-                    Symbol(
-                        id=f"dom_selector:{sub}:{label}:{path}:{line}", kind="dom_selector",
-                        label=label, sub=f"{sub}:{access}", file=path, line=line,
-                        status=Status.UNCERTAIN, snippet=f"{callee_name}('{raw}')",
-                        chain=chain, note="",
-                    )
-                )
+        symbols += _dom_selectors_in(path, ast_root)
+    for template, ast_root, offset in parse_inline_blocks(template_files or []):
+        symbols += _dom_selectors_in(template, ast_root, line_offset=offset)
     return symbols
 
 
 _SET_PROPERTY = "setProperty"
+# The other half of the CSS-OM. setProperty WRITES a token; getPropertyValue READS one, and
+# reading is a use - so a property defined in CSS and consumed only from JavaScript was
+# reported as a token nothing reads. Four of them on the project this was measured against,
+# every one working correctly.
+_GET_PROPERTY = "getPropertyValue"
 # CSS-in-JS: a stylesheet built as a string and injected still consumes tokens, and a
 # CSS-only scan cannot see it. Without this, a token set by JS and read by JS-embedded
 # CSS is reported unused while working perfectly.
@@ -173,21 +197,38 @@ _SET_PROPERTY = "setProperty"
 _VAR_USE_RE = re.compile(r"var\(\s*(--[\w-]+)\s*(,)?")
 
 
-def extract_js_css_tokens(js_files: list[str]) -> list[Symbol]:
-    """CSS custom properties JavaScript defines at runtime via style.setProperty.
+def extract_js_css_tokens(
+    js_files: list[str], template_files: list[str] | None = None
+) -> list[Symbol]:
+    """CSS custom properties JavaScript reaches through the CSS-OM, either way.
 
-    A token defined only here looks undefined to a CSS-only scan: measured on this
-    project, 64 of 128 `var(--x)` references with no CSS definition were set this way.
-    Reporting those as broken references is a false claim about working code.
+    `setProperty` defines one at runtime; a token defined only that way looks undefined to
+    a CSS-only scan - 64 of 128 `var(--x)` references with no CSS definition were set this
+    way on the project measured. `getPropertyValue` reads one, which is a use, and without
+    it a property defined in CSS and consumed only from JavaScript reads as a token nothing
+    reads. Both are false claims about working code.
     """
+    from seamcheck.extractors.js_extractor import parse_inline_blocks
+
     symbols: list[Symbol] = []
     seen: set[str] = set()
 
-    for path, ast_root in _parse_files([f for f in js_files if os.path.isfile(f)]).items():
+    units = [
+        (path, ast_root, 0)
+        for path, ast_root in _parse_files([f for f in js_files if os.path.isfile(f)]).items()
+    ]
+    units += list(parse_inline_blocks(template_files or []))
+
+    for path, ast_root, line_offset in units:
+        def _line(node, _offset=line_offset):
+            raw = ((node.get("loc") or {}).get("start") or {}).get("line")
+            return (raw + _offset) if raw else raw
+
         for node, enclosing in _walk(ast_root):
             if node.get("type") != "CallExpression":
                 continue
-            if ((node.get("callee") or {}).get("property") or {}).get("name") != _SET_PROPERTY:
+            callee_name = ((node.get("callee") or {}).get("property") or {}).get("name")
+            if callee_name not in (_SET_PROPERTY, _GET_PROPERTY):
                 continue
 
             arguments = node.get("arguments") or []
@@ -200,18 +241,22 @@ def extract_js_css_tokens(js_files: list[str]) -> list[Symbol]:
             if not name.startswith("--"):
                 continue
 
-            symbol_id = f"css_token_def:token:{name}"
+            reading = callee_name == _GET_PROPERTY
+            kind = "css_token_use" if reading else "css_token_def"
+            symbol_id = f"{kind}:token:{name}"
             if symbol_id in seen:
                 continue
             seen.add(symbol_id)
             basename = os.path.basename(path)
             symbols.append(
                 Symbol(
-                    id=symbol_id, kind="css_token_def", label=name, sub="token", file=path,
-                    line=((node.get("loc") or {}).get("start") or {}).get("line"),
-                    status=Status.UNCERTAIN, snippet=f"setProperty('{name}', ...)",
+                    id=symbol_id, kind=kind, label=name, sub="token", file=path,
+                    line=_line(node),
+                    status=Status.UNCERTAIN,
+                    snippet=f"{callee_name}('{name}'{'' if reading else ', ...'})",
                     chain=[basename, enclosing] if enclosing else [basename],
-                    note="Defined at runtime by JavaScript, not in any stylesheet.",
+                    note="Read from JavaScript through the CSS-OM." if reading
+                    else "Defined at runtime by JavaScript, not in any stylesheet.",
                 )
             )
 
@@ -228,7 +273,7 @@ def extract_js_css_tokens(js_files: list[str]) -> list[Symbol]:
                     symbols.append(
                         Symbol(
                             id=symbol_id, kind="css_token_use", label=name, sub=sub,
-                            file=path, line=((node.get("loc") or {}).get("start") or {}).get("line"),
+                            file=path, line=_line(node),
                             status=Status.UNCERTAIN,
                             snippet=f"var({name}, ...)" if comma else f"var({name})",
                             chain=[os.path.basename(path), name],

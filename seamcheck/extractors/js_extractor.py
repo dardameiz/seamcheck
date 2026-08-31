@@ -6,6 +6,7 @@ import json
 import os
 import pathlib
 import re
+import shutil
 import tempfile
 
 from seamcheck.graph import Edge, Status, Symbol
@@ -355,10 +356,7 @@ def extract_template_js(template_files: list[str]) -> tuple[list[Symbol], list[E
     symbols: list[Symbol] = []
     edges: list[Edge] = []
     seen_target_ids: set[str] = set()
-    for template, source, offset in inline_script_blocks(template_files):
-        ast = parse_js_source(source)
-        if not ast.get("type"):
-            continue  # not parseable as JavaScript; nothing is claimed about it
+    for template, ast, offset in parse_inline_blocks(template_files):
         found, found_edges = _http_symbols(ast, template, seen_target_ids, line_offset=offset)
         symbols += found
         edges += found_edges
@@ -376,3 +374,33 @@ def parse_js_source(source: str) -> dict:
         return _parse_files([temporary_path]).get(temporary_path, {})
     finally:
         os.unlink(temporary_path)
+
+
+def parse_inline_blocks(template_files: list[str]) -> list[tuple[str, dict, int]]:
+    """(template, ast, line offset) for every inline <script>, in ONE parser invocation.
+
+    Batched deliberately. Parsing blocks one at a time costs a node process each, and a
+    real project has hundreds of them - on the one this was measured against, 202 KB of
+    inline JavaScript across 158 templates. The offset is carried because a symbol's id
+    contains its line, and a line number relative to the start of a <script> block points
+    at the wrong place in the file a reader is about to open.
+    """
+    blocks = list(inline_script_blocks(template_files))
+    if not blocks:
+        return []
+    directory = tempfile.mkdtemp(prefix="seamcheck-inline-")
+    paths = []
+    try:
+        for index, (_, source, _) in enumerate(blocks):
+            path = os.path.join(directory, f"{index}.js")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(source)
+            paths.append(path)
+        parsed = _parse_files(paths)
+    finally:
+        shutil.rmtree(directory, ignore_errors=True)
+    return [
+        (template, parsed.get(path) or {}, offset)
+        for path, (template, _, offset) in zip(paths, blocks, strict=True)
+        if (parsed.get(path) or {}).get("type")
+    ]

@@ -174,7 +174,12 @@ def run_scan(
     js_files = discover_js_files(js_entry_files, js_project_root) if template_files else []
     # Classes applied at runtime are evidence a CSS rule is live; without them the
     # scan reported 5,318 selectors with no evidence either way.
-    dom_selectors = extract_dom_selectors(js_files) + extract_js_class_usages(js_files)
+    # template_files too: the JavaScript a template writes inline queries the DOM like any
+    # other JavaScript, and reading only .js files made 202 KB of it invisible.
+    dom_selectors = (
+        extract_dom_selectors(js_files, template_files or [])
+        + extract_js_class_usages(js_files)
+    )
     progress.step("reading stylesheets")
     css_symbols = extract_css(css_files or [])
     # A <style> block in a template is a stylesheet. Reading only .css files reported
@@ -196,7 +201,7 @@ def run_scan(
         )
         # Tokens JavaScript sets at runtime are real definitions; without them half of
         # this project's "undefined var()" findings were false.
-        js_tokens = extract_js_css_tokens(js_files)
+        js_tokens = extract_js_css_tokens(js_files, template_files or [])
         symbols += js_tokens
         edges += match_css_tokens(
             [s for s in css_symbols + js_tokens if s.kind == "css_token_def"],
