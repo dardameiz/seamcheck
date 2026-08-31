@@ -38,12 +38,40 @@ def _as_pattern(path: str) -> re.Pattern | None:
         return None
 
 
+class UrlIndex:
+    """Routes, arranged so a concrete path can be resolved to the one Django would pick.
+
+    Shared rather than rebuilt: fetch() calls, `{% url %}` tags, `<a href>` links and
+    `redirect()` calls all have to answer the same question, and two copies of "which route
+    serves this path" is two copies to get wrong.
+    """
+
+    def __init__(self, urls: list[Symbol]):
+        self.urls = urls
+        self.by_path = {_normalize(s.label): s for s in urls}
+        # URLconf order, so the first route that accepts a path wins - the same one Django
+        # would dispatch to.
+        self.parameterised = [
+            (pattern, s) for s in urls if (pattern := _as_pattern(_normalize(s.label)))
+        ]
+
+    def resolve(self, path: str) -> Symbol | None:
+        """The route that serves `path`, exactly or through its converters."""
+        normalised = _normalize(path)
+        found = self.by_path.get(normalised)
+        if found is not None:
+            return found
+        return next((s for pattern, s in self.parameterised if pattern.match(normalised)), None)
+
+    def by_suffix(self, path: str) -> list[Symbol]:
+        """Routes whose path ends with `path` - for a reference with no leading slash."""
+        normalised = _normalize(path)
+        return [s for s in self.urls if _normalize(s.label).endswith("/" + normalised)]
+
+
 def match_js_to_django(django_symbols: list[Symbol], js_symbols: list[Symbol]) -> list[Edge]:
     urls = [s for s in django_symbols if s.kind == "url"]
-    url_by_path = {_normalize(s.label): s for s in urls}
-    # URLconf order, so the first route that accepts a path wins - the same one Django
-    # would dispatch to.
-    parameterised = [(pattern, s) for s in urls if (pattern := _as_pattern(_normalize(s.label)))]
+    index = UrlIndex(urls)
 
     edges: list[Edge] = []
     for target in js_symbols:
@@ -51,9 +79,7 @@ def match_js_to_django(django_symbols: list[Symbol], js_symbols: list[Symbol]) -
             continue
         path = _normalize(target.label)
 
-        matched_url = url_by_path.get(path)
-        if matched_url is None:
-            matched_url = next((s for pattern, s in parameterised if pattern.match(path)), None)
+        matched_url = index.resolve(path)
 
         if matched_url is None and not target.label.startswith("/"):
             # A fetch without a leading slash resolves against whatever page is open, so
@@ -61,7 +87,7 @@ def match_js_to_django(django_symbols: list[Symbol], js_symbols: list[Symbol]) -
             # `api/add-user/`, which lives at asd/pointless/challengesdashboard/api/add-user/
             # - reported as an endpoint that does not exist. Matched by suffix instead,
             # and only when exactly one route can be meant.
-            candidates = [s for s in urls if _normalize(s.label).endswith("/" + path)]
+            candidates = index.by_suffix(path)
             if len(candidates) == 1:
                 matched_url = candidates[0]
             elif candidates:

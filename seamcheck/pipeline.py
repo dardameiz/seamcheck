@@ -16,7 +16,7 @@ from seamcheck.dom_matcher import (
 )
 from seamcheck.extractors.asgi_extractor import extract_asgi_routes
 from seamcheck.extractors.css_extractor import extract_css, extract_template_css
-from seamcheck.extractors.django_extractor import extract_django_urls_views
+from seamcheck.extractors.django_extractor import extract_django_urls_views, route_name_index
 from seamcheck.extractors.django_models_extractor import extract_django_models
 from seamcheck.extractors.dom_js_extractor import (
     extract_dom_selectors,
@@ -30,6 +30,7 @@ from seamcheck.extractors.js_extractor import (
     extract_template_js,
 )
 from seamcheck.extractors.template_scanner import scan_templates
+from seamcheck.extractors.url_reference_extractor import extract_url_references
 from seamcheck.field_matcher import match_json_response_fields
 from seamcheck.graph import Edge, Graph, Status, Symbol
 from seamcheck.matcher import match_js_to_django
@@ -49,6 +50,7 @@ SCAN_PHASES = (
     "JavaScript in templates",
     "matching calls to endpoints",
     "Python entry points",
+    "references to routes",
     "response fields",
     "template elements",
     "selectors used by JavaScript",
@@ -164,9 +166,19 @@ def run_scan(
     entry_point_symbols = extract_entry_points(entry_point_files or set())
 
     symbols = django_symbols + js_symbols + entry_point_symbols
+    edges = routing_edges + js_edges + match_edges
+    progress.step("references to routes")
+    # Every other way the project points at its own routes. Without this, only a fetch()
+    # counted as reaching a route, so every server-rendered page read as unmeasured.
+    reference_symbols, reference_edges = extract_url_references(
+        template_files or [], sorted(entry_point_files or []),
+        route_name_index(urlconf_module), django_symbols,
+    )
+    symbols += reference_symbols
+    edges += reference_edges
+
     progress.step("response fields")
     symbols += _field_symbols(symbols, routing_edges, match_edges)
-    edges = routing_edges + js_edges + match_edges
 
     progress.step("template elements")
     dom_attrs = scan_templates(template_files or [])

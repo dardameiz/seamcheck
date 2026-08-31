@@ -15,7 +15,11 @@ _OWNED_KINDS = frozenset({"view", "url", "js_call", "fetch_target"})
 # symbol has to read it back or every one of them reports "uncertain" forever.
 # CONNECTED wins: an element JS writes but CSS never styles is still in use.
 _EDGE_STATUS_KINDS = frozenset(
-    {"dom_attr", "dom_selector", "css_selector", "css_token_def", "css_token_use"}
+    {"dom_attr", "dom_selector", "css_selector", "css_token_def", "css_token_use",
+     # A `{% url 'gone' %}` that resolves to nothing is NoReverseMatch at render time - a
+     # 500 on a real page, and one of the most valuable things this tool can find. It has
+     # to read its verdict off its edge like the DOM kinds do, or it reports nothing.
+     "url_reference"}
 )
 
 # A CSS rule is matched against querySelector() calls and template class= attributes.
@@ -29,10 +33,21 @@ _UNPROVEN_UNUSED_NOTE = (
     "evidence the rule is dead."
 )
 
+# `{% url %}`, reverse(), redirect(), <a href>, form actions and HTMX attributes are all
+# read now (url_reference_extractor), which moved 81 of one project's routes and 72 of its
+# views out of `uncertain` and into evidenced. It does NOT license claiming the remainder
+# dead, and that was tried and measured: flipping "no reference" to `unused` reported
+# robots.txt, sitemap.xml, llms.txt and admin/ as unused code. A crawler, a browser address
+# bar and Django's own admin are all real callers that appear in no source file.
+#
+# So the status stays `uncertain` and the note carries what changed: it now names every
+# reference kind that WAS searched, which is a far more useful thing to hand a reader than
+# an admission that the tool had not looked.
 _NO_CALLER_EVIDENCE_NOTE = (
-    "No fetch() call resolves here. Not claimed unused: page URLs are reached by browser "
-    "navigation, {% url %} tags and <a href>, and Core Pipeline has no extractor for those "
-    "yet (DOM Wiring plan). Absence of evidence is not evidence of absence."
+    "Searched and not found: fetch() calls, {% url %} tags, reverse(), redirect(), "
+    "<a href>, form actions and HTMX attributes. Not claimed unused - a route can be "
+    "reached by a crawler, a typed address, an external service or a mobile client, and "
+    "none of those appear in any source file."
 )
 
 
@@ -65,13 +80,18 @@ def classify(symbols: list[Symbol], edges: list[Edge]) -> list[Symbol]:
             if (by_id.get(edge.from_id) or Symbol("", "", "", "", "", None, Status.UNUSED, "", [], "")).kind == kind
         ]
 
-    # Pass 1: a URL is used when a fetch target resolves to it. A url -> view edge is
-    # routing, not usage, so it is deliberately not counted here.
+    # Pass 1: a URL is used when something resolves to it. A url -> view edge is routing,
+    # not usage, so it is deliberately not counted here.
+    #
+    # Both caller kinds count. A fetch() is one way a route is reached and was the only one
+    # this ever read; a `{% url %}` tag, a reverse(), a redirect(), an <a href>, a form
+    # action or an HTMX attribute is exactly as much evidence, and reading only fetch() left
+    # every server-rendered page in the project unmeasured.
     url_status: dict[str, Status] = {}
     for symbol in symbols:
         if symbol.kind != "url":
             continue
-        callers = _sources(symbol.id, "fetch_target")
+        callers = _sources(symbol.id, "fetch_target") + _sources(symbol.id, "url_reference")
         url_status[symbol.id] = (
             Status.CONNECTED
             if any(edge.status == Status.CONNECTED for edge in callers)
