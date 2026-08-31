@@ -74,16 +74,28 @@ REPOS = [
         "why": "a very large Express monorepo - the hardest shape to detect correctly",
     },
     {
+        "name": "dub",
+        "url": "https://github.com/dubinc/dub",
+        "adapter": "nextjs",
+        "why": "a real Next.js App Router product - route groups and dynamic segments",
+    },
+    {
+        "name": "documenso",
+        "url": "https://github.com/documenso/documenso",
+        "adapter": "nextjs",
+        "why": "a Next.js monorepo - apps/ workspaces, the harder detection shape",
+    },
+    {
         "name": "excalidraw",
         "url": "https://github.com/excalidraw/excalidraw",
-        "adapter": "none",
-        "why": "a large React + TypeScript front end - the TypeScript gate, not a backend",
+        "adapter": "nextjs",
+        "why": "React+TS; its only Next app is an EXAMPLE - the detection edge case",
     },
     {
         "name": "nestjs-realworld",
         "url": "https://github.com/lujakob/nestjs-realworld-example-app",
-        "adapter": "none",
-        "why": "NestJS: TypeScript decorators, the shape a Node backend adapter must read",
+        "adapter": "django",
+        "why": "NestJS - no adapter yet, so nothing should confidently claim it",
     },
     {
         "name": "nodebb",
@@ -149,7 +161,11 @@ def scan_one(repo: dict) -> dict:
         # Count source files in the language the adapter actually reads. Counting only
         # *.py made every JavaScript repo look like it had zero source and tripped the
         # implausibility gate on a correct scan - the gate was measuring the harness.
-        patterns = ("*.py",) if row["detected"] in ("django", "fastapi") else ("*.js", "*.mjs")
+        patterns = {
+            "django": ("*.py",), "fastapi": ("*.py",),
+            "express": ("*.js", "*.mjs", "*.cjs", "*.ts"),
+            "nextjs": ("*.ts", "*.tsx", "*.js", "*.jsx"),
+        }.get(row["detected"], ("*.py", "*.js", "*.ts"))
         row["files"] = sum(
             1 for pattern in patterns for path in target.rglob(pattern)
             if "node_modules" not in path.parts

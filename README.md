@@ -35,7 +35,7 @@ No guessing, and no "supports Python" hand-waving — a framework is either read
 | **Django** | Python | ✅ **routes, views, models, ASGI, `{% url %}`, `reverse()`** — two modes: ask Django (exact), or parse `urls.py` as text so a cloned repo scans with nothing installed (**95% of declared routes**) |
 | **FastAPI** | Python | ✅ **routes and handlers** — decorators, `APIRouter` prefixes, `include_router` nesting, sub-app `mount()`, and prefixes held in settings. Validated on three cloned repos incl. a 717-file production app |
 | **Express · Fastify** | JavaScript | ✅ **routes and handlers** — `app.get()`, `Router()`, `use()` mounts composed through CommonJS `require`/`module.exports`, factory exports, re-exports, and Fastify's `register(plugin, {prefix})`. Validated on three cloned repos incl. a 2,895-file monorepo |
-| Next.js | TypeScript | ⏳ planned — its routes are the **filesystem**, so no parser is needed, but its files are `.ts` (see below) |
+| **Next.js** | TypeScript | ✅ **routes** — App Router and Pages Router, route groups `(marketing)`, dynamic and catch-all segments, parallel/private folders correctly excluded, and **monorepos** (`apps/web/`). Measured exact on two real products: **705/705** and **26/26** routes |
 | Laravel | PHP | ⏳ planned — `routes/web.php` is a flat list, and **Blade templates already work** |
 | Rails | Ruby | ⏳ planned — `config/routes.rb` is a DSL; ERB needs one regex |
 
@@ -354,8 +354,8 @@ the URL carries a random token so nothing on your network stumbles into it.
 
 Written down because a tool that hides its blind spots is worse than no tool:
 
-- **Three backends: Django, FastAPI and Express/Fastify.** A Rails or Laravel project gets
-  the JS/CSS/DOM half and no routes — and with no route list, every `fetch` is reported
+- **Four backends: Django, FastAPI, Express/Fastify and Next.js.** NestJS, Rails or Laravel
+  gets the JS/CSS/DOM half and no routes — and with no route list, every `fetch` is reported
   unresolved, so the scan says that out loud rather than showing a confident wrong answer.
 - **A project that routes through its own helper gets few routes.** Two of the six repos
   validated against do this. The scan reports the route list as incomplete, and says why,

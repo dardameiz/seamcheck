@@ -1,8 +1,9 @@
 """A file the parser cannot read must never vanish quietly.
 
 The scan runs entirely inside `quiet()`, which disables WARNING-level logging so the host
-project's start-up noise stays out of the output. Before these tests, a parse failure was dropped by `if "ast" in record` with no else
-branch, so a codebase whose files the parser could not read produced almost no JavaScript
+project's start-up noise stays out of the output. Before these tests, a parse failure was
+dropped by `if "ast" in record` with no else branch, so a codebase whose files the parser
+could not read produced almost no JavaScript
 symbols and still reported success. Missing evidence read as a pass, which is the one thing
 this tool must never do.
 
