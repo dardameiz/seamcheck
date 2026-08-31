@@ -12,11 +12,18 @@ from seamcheck.adapters.base import ServerAdapter, ServerScan
 from seamcheck.adapters.django_adapter import DjangoAdapter
 from seamcheck.adapters.express_adapter import ExpressAdapter
 from seamcheck.adapters.fastapi_adapter import FastAPIAdapter
+from seamcheck.adapters.nestjs_adapter import NestJSAdapter
 from seamcheck.adapters.nextjs_adapter import NextJSAdapter
 
 # Ordered for stable tie-breaking: an exact tie picks the earlier entry, so the ordering
 # here is a deliberate preference and not an accident of dictionary iteration.
-ADAPTERS: tuple[ServerAdapter, ...] = (DjangoAdapter(), FastAPIAdapter(), NextJSAdapter(), ExpressAdapter())
+ADAPTERS: tuple[ServerAdapter, ...] = (
+    DjangoAdapter(),
+    FastAPIAdapter(),
+    NestJSAdapter(),
+    NextJSAdapter(),
+    ExpressAdapter(),
+)
 
 
 def available() -> tuple[str, ...]:
