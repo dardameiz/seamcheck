@@ -133,6 +133,16 @@ def main() -> int:
             page.wait_for_timeout(700)
             shot("chain")
 
+            # 3b. "Show only this chain" - everything else gone, so the LINES are the
+            # subject. The faded view shows the chain in context; this one shows what the
+            # chain IS: four nodes and three edges, browser to the thing that is not there.
+            page.evaluate("""() => {
+              const b = document.getElementById('iso');
+              if (b) b.click();
+            }""")
+            page.wait_for_timeout(900)
+            shot("chain-only")
+
             # 4. Findings, each saying what it means and what to check.
             page.evaluate("""() => {
               const vw = document.getElementById('vw');

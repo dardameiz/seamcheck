@@ -47,10 +47,14 @@ source behind it and the file:line that opens in your editor.
 
 ![Clicking an unresolved endpoint shows the chain that reaches it](docs/images/chain.png)
 
-That one is real, and it is the class of bug this exists for: the JS fetches
-`/api/wishlist/toggle/`, the URLconf serves `/api/wishlist/`, and nothing fails until a
-user clicks the button. No test covers it, because there is nothing to test — the code is
-syntactically perfect and points at nothing.
+Or drop everything that isn't the chain, and the finding is four boxes and three lines:
+
+![Show only this chain](docs/images/chain-only.png)
+
+That one is real, and it is the class of bug this exists for: `catalogue.js` calls
+`toggleWishlist`, which fetches `/api/wishlist/toggle/`, and the URLconf serves
+`/api/wishlist/`. Nothing fails until a user clicks the button. No test covers it, because
+there is nothing to test — the code is syntactically perfect and points at nothing.
 
 Every row says **what the scan observed** and **what is usually actually true**, because
 `unresolved · css_token_use · button_badges.css:3` is precise and tells a newcomer
