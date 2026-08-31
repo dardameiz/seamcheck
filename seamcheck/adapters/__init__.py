@@ -12,6 +12,7 @@ from seamcheck.adapters.base import ServerAdapter, ServerScan
 from seamcheck.adapters.django_adapter import DjangoAdapter
 from seamcheck.adapters.express_adapter import ExpressAdapter
 from seamcheck.adapters.fastapi_adapter import FastAPIAdapter
+from seamcheck.adapters.flask_adapter import FlaskAdapter
 from seamcheck.adapters.nestjs_adapter import NestJSAdapter
 from seamcheck.adapters.nextjs_adapter import NextJSAdapter
 
@@ -20,6 +21,7 @@ from seamcheck.adapters.nextjs_adapter import NextJSAdapter
 ADAPTERS: tuple[ServerAdapter, ...] = (
     DjangoAdapter(),
     FastAPIAdapter(),
+    FlaskAdapter(),
     NestJSAdapter(),
     NextJSAdapter(),
     ExpressAdapter(),

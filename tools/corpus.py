@@ -87,6 +87,24 @@ REPOS = [
         "why": "large FastAPI backend with a Svelte front end",
     },
     {
+        "name": "redash",
+        "url": "https://github.com/getredash/redash",
+        "adapter": "flask",
+        "why": "a large production Flask app - blueprints and Flask-RESTful resources",
+    },
+    {
+        "name": "ctfd",
+        "url": "https://github.com/CTFd/CTFd",
+        "adapter": "flask",
+        "why": "Flask with many blueprints registered from a factory function",
+    },
+    {
+        "name": "flaskbb",
+        "url": "https://github.com/flaskbb/flaskbb",
+        "adapter": "flask",
+        "why": "Flask the conventional way - the layout a tutorial produces",
+    },
+    {
         "name": "full-stack-fastapi-template",
         "url": "https://github.com/fastapi/full-stack-fastapi-template",
         "adapter": "fastapi",

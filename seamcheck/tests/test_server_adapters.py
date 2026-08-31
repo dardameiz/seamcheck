@@ -37,7 +37,8 @@ class AdapterRegistry(unittest.TestCase):
                 self.assertTrue(adapter.name)
 
     def test_a_django_repo_is_detected(self):
-        root = _repo(**{"manage.py": "", "myproject__settings.py": "", "myproject__urls.py": ""})
+        root = _repo(**{"manage.py": "import os\nos.environ['DJANGO_SETTINGS_MODULE'] = 'p.settings'\n",
+                        "myproject__settings.py": "", "myproject__urls.py": ""})
         adapter, confidence = select(root, {})
         self.assertEqual(adapter.name, "django")
         self.assertGreater(confidence, 0.5)
@@ -63,8 +64,14 @@ class DjangoAdapterBehaviour(unittest.TestCase):
     def setUp(self):
         self.adapter = DjangoAdapter()
 
-    def test_manage_py_alone_is_suggestive(self):
-        self.assertGreater(self.adapter.detect(_repo(**{"manage.py": ""}), {}), 0.0)
+    def test_a_django_manage_py_is_suggestive(self):
+        root = _repo(**{"manage.py": "os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'p')"})
+        self.assertGreater(self.adapter.detect(root, {}), 0.0)
+
+    def test_a_manage_py_that_is_not_djangos_counts_for_nothing(self):
+        """CTFd ships one that imports flask.cli. The filename is a convention, not proof."""
+        root = _repo(**{"manage.py": "from flask.cli import FlaskGroup\napp = create_app()\n"})
+        self.assertEqual(self.adapter.detect(root, {}), 0.0)
 
     def test_a_bare_directory_scores_zero(self):
         self.assertEqual(self.adapter.detect(_repo(**{"README.md": ""}), {}), 0.0)
@@ -73,7 +80,8 @@ class DjangoAdapterBehaviour(unittest.TestCase):
         self.assertGreater(self.adapter.detect(_repo(**{"app__urls.py": ""}), {}), 0.0)
 
     def test_confidence_never_exceeds_one(self):
-        root = _repo(**{"manage.py": "", "myproject__settings.py": "", "myproject__urls.py": ""})
+        root = _repo(**{"manage.py": "DJANGO_SETTINGS_MODULE", "myproject__settings.py": "",
+                        "myproject__urls.py": ""})
         self.assertLessEqual(self.adapter.detect(root, {"urlconf_module": "myproject.urls"}), 1.0)
 
     def test_no_urlconf_yields_an_empty_scan_rather_than_raising(self):

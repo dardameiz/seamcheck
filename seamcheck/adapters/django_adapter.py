@@ -48,8 +48,18 @@ class DjangoAdapter:
         if root_urlconf(repo_root):
             return 0.9
         score = 0.0
-        if (root / "manage.py").is_file():
-            score += 0.6
+        # `manage.py` is not a Django artefact, it is a CONVENTION - Flask-Script, Flask
+        # CLI wrappers and countless project scripts use the name. CTFd's imports
+        # flask.cli, and treating the filename as evidence made a Flask app read as
+        # Django. The file has to actually mention Django.
+        manage = root / "manage.py"
+        if manage.is_file():
+            try:
+                text = manage.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                text = ""
+            if "DJANGO_SETTINGS_MODULE" in text or "django" in text.lower():
+                score += 0.6
         if any(root.glob("*/settings.py")) or (root / "settings.py").is_file():
             score += 0.2
         if not score and any(root.glob("*/urls.py")):
