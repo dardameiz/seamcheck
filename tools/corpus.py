@@ -61,6 +61,24 @@ REPOS = [
         "adapter": "fastapi",
         "why": "the RealWorld spec - a different idiom again, routers by feature",
     },
+    {
+        "name": "parse-server",
+        "url": "https://github.com/parse-community/parse-server",
+        "adapter": "express",
+        "why": "a large production Express app, JavaScript rather than TypeScript",
+    },
+    {
+        "name": "ghost",
+        "url": "https://github.com/TryGhost/Ghost",
+        "adapter": "express",
+        "why": "a very large Express monorepo - the hardest shape to detect correctly",
+    },
+    {
+        "name": "nodebb",
+        "url": "https://github.com/NodeBB/NodeBB",
+        "adapter": "express",
+        "why": "Express with routes registered through helper functions, not decorators",
+    },
 ]
 
 
@@ -116,7 +134,14 @@ def scan_one(repo: dict) -> dict:
         row["gate2"] = "ok" if row["routes"] else "NO ROUTES"
         counts = collections.Counter(s.status.value for s in server.symbols)
         row["by_status"] = dict(counts)
-        row["files"] = sum(1 for _ in target.rglob("*.py"))
+        # Count source files in the language the adapter actually reads. Counting only
+        # *.py made every JavaScript repo look like it had zero source and tripped the
+        # implausibility gate on a correct scan - the gate was measuring the harness.
+        patterns = ("*.py",) if row["detected"] in ("django", "fastapi") else ("*.js", "*.mjs")
+        row["files"] = sum(
+            1 for pattern in patterns for path in target.rglob(pattern)
+            if "node_modules" not in path.parts
+        )
         row["gate4"] = "ok" if row["routes"] < max(row["files"] * 20, 100) else "IMPLAUSIBLE"
     except Exception as error:  # noqa: BLE001 - a crash IS the result of gate 1
         row["gate1"] = f"CRASH: {type(error).__name__}: {str(error)[:90]}"

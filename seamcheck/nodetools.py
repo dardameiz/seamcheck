@@ -41,6 +41,10 @@ def report(what: str, message: str, *args) -> None:
         return
     _reported.add(what)
     logger.warning(message, *args)
+    # Only write our own line when logging cannot: the CLI runs inside quiet(), which
+    # disables WARNING, and printing unconditionally would say everything twice under -v.
+    if logging.root.manager.disable < logging.WARNING:
+        return
     try:
         print("seamcheck: " + (message % args if args else message), file=sys.stderr)
     except (TypeError, ValueError):  # a malformed format string must not kill the scan

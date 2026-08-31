@@ -10,11 +10,12 @@ from __future__ import annotations
 
 from seamcheck.adapters.base import ServerAdapter, ServerScan
 from seamcheck.adapters.django_adapter import DjangoAdapter
+from seamcheck.adapters.express_adapter import ExpressAdapter
 from seamcheck.adapters.fastapi_adapter import FastAPIAdapter
 
 # Ordered for stable tie-breaking: an exact tie picks the earlier entry, so the ordering
 # here is a deliberate preference and not an accident of dictionary iteration.
-ADAPTERS: tuple[ServerAdapter, ...] = (DjangoAdapter(), FastAPIAdapter())
+ADAPTERS: tuple[ServerAdapter, ...] = (DjangoAdapter(), FastAPIAdapter(), ExpressAdapter())
 
 
 def available() -> tuple[str, ...]:
