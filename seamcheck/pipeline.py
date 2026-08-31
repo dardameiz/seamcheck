@@ -33,8 +33,29 @@ from seamcheck.extractors.template_scanner import scan_templates
 from seamcheck.field_matcher import match_json_response_fields
 from seamcheck.graph import Edge, Graph, Status, Symbol
 from seamcheck.matcher import match_js_to_django
+from seamcheck.progress import Progress, null
 
 _FUNCTION_NODES = (ast.FunctionDef, ast.AsyncFunctionDef)
+
+# Every phase run_scan walks, in order, so a caller can size a progress bar before the
+# first one starts. Steps are reported even when their input is empty - a phase that
+# had nothing to do still happened, and a bar whose total changes as it runs is worse
+# than one that moves in uneven jumps. test_progress pins this list against reality.
+SCAN_PHASES = (
+    "URLs and views",
+    "ASGI routes",
+    "models",
+    "JavaScript modules",
+    "JavaScript in templates",
+    "matching calls to endpoints",
+    "Python entry points",
+    "response fields",
+    "template elements",
+    "selectors used by JavaScript",
+    "reading stylesheets",
+    "matching DOM, CSS and tokens",
+    "classifying",
+)
 
 
 def _function_source(file_path: str, function_name: str) -> str:
@@ -112,36 +133,49 @@ def run_scan(
     template_files: list[str] | None = None,
     css_files: list[str] | None = None,
     tailwind_build_classes: set[str] | None = None,
+    progress: Progress | None = None,
 ) -> Graph:
+    progress = progress or null()
+    progress.step("URLs and views")
     django_symbols, routing_edges = extract_django_urls_views(urlconf_module, first_party_prefixes)
+    progress.step("ASGI routes")
     if asgi_file:
         django_symbols = django_symbols + extract_asgi_routes(asgi_file)
 
+    progress.step("models")
     if app_labels:
         # Model symbols were extracted and tested from the start but never reached the
         # graph, so the Django-internals view had no models in it at all.
         django_symbols = django_symbols + extract_django_models(app_labels)
 
+    progress.step("JavaScript modules")
     js_symbols, js_edges = extract_js(js_entry_files, js_project_root)
     # JavaScript a template writes inline is still JavaScript. This project keeps 200 KB
     # of it, calling five endpoints that no .js file mentions - which a scan of .js files
     # alone reported as endpoints nothing calls.
+    progress.step("JavaScript in templates")
     inline_symbols, inline_edges = extract_template_js(template_files or [])
     known = {symbol.id for symbol in js_symbols}
     js_symbols += [symbol for symbol in inline_symbols if symbol.id not in known]
     js_edges += inline_edges
+    progress.step("matching calls to endpoints")
     match_edges = match_js_to_django(django_symbols, js_symbols)
+    progress.step("Python entry points")
     entry_point_symbols = extract_entry_points(entry_point_files or set())
 
     symbols = django_symbols + js_symbols + entry_point_symbols
+    progress.step("response fields")
     symbols += _field_symbols(symbols, routing_edges, match_edges)
     edges = routing_edges + js_edges + match_edges
 
+    progress.step("template elements")
     dom_attrs = scan_templates(template_files or [])
+    progress.step("selectors used by JavaScript")
     js_files = discover_js_files(js_entry_files, js_project_root) if template_files else []
     # Classes applied at runtime are evidence a CSS rule is live; without them the
     # scan reported 5,318 selectors with no evidence either way.
     dom_selectors = extract_dom_selectors(js_files) + extract_js_class_usages(js_files)
+    progress.step("reading stylesheets")
     css_symbols = extract_css(css_files or [])
     # A <style> block in a template is a stylesheet. Reading only .css files reported
     # every element styled that way as one nothing reaches - this project keeps 1,016
@@ -151,6 +185,7 @@ def run_scan(
     by_id.update({symbol.id: symbol for symbol in css_symbols})
     css_symbols = list(by_id.values())
 
+    progress.step("matching DOM, CSS and tokens")
     if dom_attrs or dom_selectors or css_symbols:
         selectors = [s for s in css_symbols if s.kind == "css_selector"]
         symbols += dom_attrs + dom_selectors + css_symbols
@@ -168,6 +203,7 @@ def run_scan(
             [s for s in css_symbols + js_tokens if s.kind == "css_token_use"],
         )
 
+    progress.step("classifying")
     graph = Graph(symbols=classify(symbols, edges), edges=edges)
     return _with_feature_labels(graph, dom_attrs)
 

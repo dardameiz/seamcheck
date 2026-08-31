@@ -11,7 +11,8 @@ from django.conf import settings
 
 from seamcheck.diff import DiffResult, diff_graphs
 from seamcheck.graph import Graph, Status, relativise
-from seamcheck.pipeline import run_scan
+from seamcheck.pipeline import SCAN_PHASES, run_scan
+from seamcheck.progress import Progress, null
 from seamcheck.roots import discover_css_files, discover_js_roots, tailwind_classes
 from seamcheck.snapshot import current_git_sha, load_snapshot, save_snapshot
 from seamcheck.triage import (
@@ -29,15 +30,28 @@ def _config() -> dict:
     return getattr(settings, "SEAMCHECK_CONFIG", {})
 
 
+def _static_root(config: dict, repo_root: str) -> str:
+    """Where a template's `{% static_js 'a/b.js' %}` reference resolves from.
+
+    Was this project's own "pointless/static", written out twice - which meant every
+    other project silently resolved nothing and reported every endpoint those scripts
+    call as uncalled. Configurable, with Django's own convention as the fallback.
+    """
+    return os.path.join(repo_root, config.get("static_root", "static"))
+
+
+def _discover_roots(config: dict, repo_root: str) -> list[str]:
+    return discover_js_roots(
+        vite_config=os.path.join(repo_root, config.get("vite_config", "vite.config.js")),
+        templates_root=os.path.join(repo_root, config["templates_root"]),
+        static_root=_static_root(config, repo_root),
+    )
+
+
 def _js_roots(config: dict, repo_root: str) -> tuple[list[str], str]:
     if "js_entry_files" in config:
         return list(config["js_entry_files"]), config.get("js_project_root", repo_root)
-    roots = discover_js_roots(
-        vite_config=os.path.join(repo_root, "vite.config.js"),
-        templates_root=os.path.join(repo_root, config["templates_root"]),
-        static_root=os.path.join(repo_root, "pointless", "static"),
-    )
-    return roots, repo_root
+    return _discover_roots(config, repo_root), repo_root
 
 
 def _entry_point_files(config: dict, repo_root: str) -> set[str]:
@@ -51,25 +65,44 @@ def _entry_point_files(config: dict, repo_root: str) -> set[str]:
     }
 
 
-def scan(repo_root: str = ".") -> Graph:
+# What `scan()` walks before run_scan() does: finding the JS entry points, listing the
+# templates, listing the stylesheets, reading the Tailwind build output. Named here so a
+# caller can size a bar for the whole job rather than for the second half of it.
+PREFLIGHT_PHASES = (
+    "JavaScript entry points", "listing templates", "listing stylesheets", "Tailwind output",
+)
+# The total a `scan()` progress bar should be built with.
+SCAN_STEPS = len(PREFLIGHT_PHASES) + len(SCAN_PHASES)
+# `map` re-reads the JS import graph for page attribution, walks the snapshots for the
+# commit picker, builds the review sections and renders the document.
+MAP_PHASES = ("building the report", "page attribution", "commit history", "rendering")
+MAP_STEPS = SCAN_STEPS + len(MAP_PHASES)
+
+
+def scan(repo_root: str = ".", progress: Progress | None = None) -> Graph:
+    progress = progress or null()
+    progress.step("JavaScript entry points")
     config = _config()
     js_entry_files, js_project_root = _js_roots(config, repo_root)
     asgi_module = config.get("asgi_module")
     asgi_file = (
         os.path.join(repo_root, asgi_module.replace(".", os.sep) + ".py") if asgi_module else None
     )
+    progress.step("listing templates")
     templates_root = config.get("templates_root")
     template_files = (
         [str(p) for p in pathlib.Path(repo_root, templates_root).rglob("*.html")]
         if templates_root and os.path.isdir(os.path.join(repo_root, templates_root))
         else []
     )
+    progress.step("listing stylesheets")
     css_root = config.get("css_source_root")
     css_files = (
         discover_css_files(os.path.join(repo_root, css_root))
         if css_root and os.path.isdir(os.path.join(repo_root, css_root))
         else []
     )
+    progress.step("Tailwind output")
     build_output = config.get("tailwind_build_output")
 
     return relativise(run_scan(
@@ -85,6 +118,7 @@ def scan(repo_root: str = ".") -> Graph:
         tailwind_build_classes=(
             tailwind_classes(os.path.join(repo_root, build_output)) if build_output else set()
         ),
+        progress=progress,
     ), repo_root)
 
 
@@ -159,7 +193,8 @@ def check(repo_root: str = ".", graph: Graph | None = None) -> dict:
 
 
 def report(
-    repo_root: str = ".", fmt: str = "terminal", ref: str = "HEAD", graph: Graph | None = None
+    repo_root: str = ".", fmt: str = "terminal", ref: str = "HEAD", graph: Graph | None = None,
+    progress: Progress | None = None,
 ) -> str:
     """Render the report. One model, chosen serializer - ordering lives in report.py."""
     from seamcheck.renderers import html as html_renderer
@@ -173,16 +208,16 @@ def report(
         "html": html_renderer.render,
     }
     if fmt == "map":
-        return _render_map(repo_root, ref)
+        return _render_map(repo_root, ref, progress)
     if fmt == "console":
         # The review sections live inside the map now: one document, one link, one render
         # of the same scan. Kept as an alias so an existing caller does not break.
-        return _render_map(repo_root, ref)
+        return _render_map(repo_root, ref, progress)
     if fmt not in renderers and fmt not in ("map", "console"):
         raise ValueError(f"Unknown format {fmt!r}. Use one of: {', '.join(sorted(renderers))}.")
 
     if graph is None:
-        graph = scan(repo_root)
+        graph = scan(repo_root, progress)
     diff, baseline_sha, message = diff_against(graph, ref, repo_root)
     try:
         sha = current_git_sha(repo_root)
@@ -246,24 +281,16 @@ def write_map(graph: Graph, repo_root: str = ".") -> str:
 def _page_files(repo_root: str) -> dict[str, set[str]]:
     """Which JS files each page entry reaches. Computed only for the map: the import
     walk costs ~13s and the CI path has no use for page attribution."""
-    import os as _os
-
     from seamcheck.extractors.js_extractor import discover_js_files
-    from seamcheck.roots import discover_js_roots
 
-    config = _config()
-    roots = discover_js_roots(
-        vite_config=_os.path.join(repo_root, "vite.config.js"),
-        templates_root=_os.path.join(repo_root, config["templates_root"]),
-        static_root=_os.path.join(repo_root, "pointless", "static"),
-    )
     return {
-        _os.path.splitext(_os.path.basename(root))[0]: set(discover_js_files([root], repo_root))
-        for root in roots
+        os.path.splitext(os.path.basename(root))[0]: set(discover_js_files([root], repo_root))
+        for root in _discover_roots(_config(), repo_root)
     }
 
 
-def _render_map(repo_root: str, ref: str) -> str:
+def _render_map(repo_root: str, ref: str, progress: Progress | None = None) -> str:
+    progress = progress or null()
     js_entry_files, _ = _js_roots(_config(), repo_root)
     from seamcheck.console import build_console
     from seamcheck.filetree import build_file_tree
@@ -273,7 +300,7 @@ def _render_map(repo_root: str, ref: str) -> str:
     from seamcheck.renderers import map_html
     from seamcheck.report import build_report
 
-    graph = scan(repo_root)
+    graph = scan(repo_root, progress)
     baseline = None
     baseline_sha = None
     if ref and ref != "HEAD":
@@ -289,12 +316,18 @@ def _render_map(repo_root: str, ref: str) -> str:
     # One document: the map and the review sections describe the same scan, and a second
     # render of the same graph bought a second link and nothing else.
     diff, baseline_message_sha, message = diff_against(graph, ref, repo_root)
+    progress.step("building the report")
     console = build_console(graph, build_report(
         graph=graph, diff=diff, entries=load_triage(repo_root), git_sha=sha,
         baseline_sha=baseline_message_sha, baseline_message=message,
     ))
+    progress.step("page attribution")
+    page_files = _page_files(repo_root)
+    progress.step("commit history")
+    commits = commit_series(repo_root)
+    progress.step("rendering")
     return map_html.render(
-        build_map(graph, _page_files(repo_root), git_sha=sha,
+        build_map(graph, page_files, git_sha=sha,
                   baseline=baseline, baseline_sha=baseline_sha if baseline else None,
                   names=page_names(repo_root, _config(), graph),
                   commits=[
@@ -304,7 +337,7 @@ def _render_map(repo_root: str, ref: str) -> str:
                        # Capped: a large refactor can change thousands, and a browser
                        # needs the first screenful, not the whole set.
                        "changes": entry.changes[:300], "change_total": len(entry.changes)}
-                      for entry in commit_series(repo_root)
+                      for entry in commits
                   ]),
         console=console,
         files=[
@@ -312,4 +345,6 @@ def _render_map(repo_root: str, ref: str) -> str:
              "declarations": record.declarations, "known": record.known}
             for record in build_file_tree(graph, js_entry_files)
         ],
+        repo_root=os.path.abspath(repo_root),
+        editor=_config().get("editor"),
     )

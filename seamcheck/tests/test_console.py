@@ -43,19 +43,19 @@ class ConsoleShapeTests(SimpleTestCase):
     def test_it_has_every_section_the_spec_names(self):
         keys = [s.key for s in self.console.sections]
 
-        for expected in ("changes", "boundary", "dom", "django", "integrations", "health", "findings"):
+        for expected in ("changes", "boundary", "dom", "django", "css", "findings"):
             self.assertIn(expected, keys)
 
     def test_backend_and_frontend_are_counted_separately(self):
         self.assertEqual(sum(self.console.backend.values()), 3)
         self.assertEqual(sum(self.console.frontend.values()), 2)
 
-    def test_a_section_with_no_extractor_says_so_rather_than_looking_empty(self):
-        # A blind spot you can see beats a nav item that quietly went missing.
-        integrations = next(s for s in self.console.sections if s.key == "integrations")
-
-        self.assertTrue(integrations.unavailable)
-        self.assertEqual(integrations.rows, [])
+    def test_no_section_opens_onto_an_apology(self):
+        # Integrations and File Health used to ship as nav items that said "not
+        # implemented yet". A reader who clicks one twice stops trusting the rest, so a
+        # section now exists only once something feeds it. The Integrations blind spot
+        # is stated on the opening panel instead, next to the counts it distorts.
+        self.assertEqual([s.key for s in self.console.sections if s.unavailable], [])
 
     def test_findings_lists_worst_first(self):
         findings = next(s for s in self.console.sections if s.key == "findings")

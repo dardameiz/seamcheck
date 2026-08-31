@@ -1,8 +1,14 @@
 """The console's information architecture: the sections a person browses.
 
-The spec's eight pages, as data. Sections whose extractor does not exist yet are still
-present and say so — a blind spot you can see is worth more than a nav item that quietly
-went missing, which is the same reason Scan Coverage exists.
+Only sections an extractor actually feeds. Two placeholders used to sit in this list -
+Integrations and File Health - on the reasoning that a blind spot you can see beats one
+that quietly went missing. In practice a nav item that opens onto "Not implemented yet"
+reads as a broken tool, and a reader who clicks it twice stops trusting the ones that do
+work.
+
+The blind spot itself is not lost: it is stated on the opening panel, next to the counts
+it distorts, which is where it changes how a number is read. See `BLIND_SPOTS` in
+seamcheck.meaning - one sentence, one place, shown where it matters.
 """
 
 from __future__ import annotations
@@ -116,20 +122,6 @@ def build_console(graph: Graph, report: Report) -> Console:
             "css", "CSS & Tokens",
             "Stylesheet rules and design tokens, against what actually references them.",
             rows=_rows(graph, ("css_selector", "css_token_def", "css_token_use"), findings_only=True),
-        ),
-        Section(
-            "integrations", "Integrations",
-            "Celery tasks, Redis keys, WebSocket handlers and Stripe hooks.",
-            unavailable=(
-                "No extractor traces these yet, so anything reached only through Celery, "
-                "Redis, a WebSocket or Stripe is invisible to every other section too. "
-                "Treat this as a known blind spot, not as an absence of problems."
-            ),
-        ),
-        Section(
-            "health", "File Health",
-            "Per-file size and cohesion — files that have grown too large or do too many things.",
-            unavailable="Not implemented yet. Nothing here is a judgement about your files.",
         ),
         Section(
             "findings", "Findings",

@@ -3,12 +3,24 @@
 from __future__ import annotations
 
 import json
+import os
 import pathlib
+import sys
 
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
 from seamcheck import api
+from seamcheck.progress import Progress
+
+# Formats whose output is a whole document rather than a few lines. Printing one to a
+# terminal is a wall of markup and a lost scrollback, so each has a default destination
+# on disk and says where it went.
+_DOCUMENTS = {
+    "html": ("report_output", "docs/maps/connectivity-report.html"),
+    "map": ("map_output", "docs/maps/connectivity-map.html"),
+    "console": ("map_output", "docs/maps/connectivity-map.html"),
+}
 
 
 class Command(BaseCommand):
@@ -54,6 +66,23 @@ class Command(BaseCommand):
                  "json emits the whole graph, as --json does.",
         )
         parser.add_argument("--out", default=None, help="Write to PATH instead of stdout ('-' for stdout).")
+        parser.add_argument(
+            "--open", action="store_true", dest="open_it",
+            help="Open the written file in your browser when it is done.",
+        )
+        parser.add_argument(
+            "--no-progress", action="store_true",
+            help="Never draw the progress bar (it is off already when output is redirected).",
+        )
+
+    def _progress(self, options, total: int) -> Progress:
+        """One bar for the whole run, or a silent one.
+
+        Written to stderr so `seamcheck json > graph.json` still yields clean JSON, and
+        drawn only on a terminal - a progress bar in a CI log is 400 carriage returns.
+        """
+        off = options.get("no_progress") or os.environ.get("SEAMCHECK_NO_PROGRESS")
+        return Progress(total, stream=sys.stderr, enabled=False if off else None)
 
     def handle(self, *args, **options):
         # --json is "--format json" under another name (kept for existing callers); make
@@ -68,7 +97,10 @@ class Command(BaseCommand):
         if options["triage"]:
             return self._triage(options)
         if options["explain"]:
-            return self.stdout.write(api.explain(api.scan(options["repo_root"]), options["explain"]))
+            bar = self._progress(options, api.SCAN_STEPS)
+            graph = api.scan(options["repo_root"], bar)
+            bar.finish()
+            return self.stdout.write(api.explain(graph, options["explain"]))
 
         if options["backfill"] is not None:
             return self._backfill(
@@ -84,8 +116,11 @@ class Command(BaseCommand):
             # scan twice (once for the digest, once for the exit code) to do the same
             # work. When --check isn't set, graph stays None and _format_report scans
             # for itself, unchanged from the --format-alone path.
-            graph = api.scan(options["repo_root"]) if options["check"] else None
-            self._format_report(options, graph)
+            bar = self._progress(
+                options, api.MAP_STEPS if options["format"] in ("map", "console") else api.SCAN_STEPS
+            )
+            graph = api.scan(options["repo_root"], bar) if options["check"] else None
+            self._format_report(options, graph, bar)
             # --check composes with --format: the CI use case is "post this digest as a
             # comment, fail the build" - so the digest must land before the exit, or a
             # failing build ships with nothing to read.
@@ -109,7 +144,9 @@ class Command(BaseCommand):
 
     def _check(self, options):
         repo_root = options["repo_root"]
-        graph = api.scan(repo_root)
+        bar = self._progress(options, api.SCAN_STEPS)
+        graph = api.scan(repo_root, bar)
+        bar.finish()
         if options["since"]:
             result, _, message = api.diff_against(graph, options["since"], repo_root)
             if message:
@@ -150,76 +187,129 @@ class Command(BaseCommand):
         for item in result.triage_invalidated:
             self.stdout.write(f"triage invalidated: {item['symbol_id']} - {item['note']}")
 
-    def _format_report(self, options, graph=None):
+    def _format_report(self, options, graph=None, bar=None):
         fmt = options["format"]
         repo_root = options["repo_root"]
+        bar = bar or self._progress(options, 0)
 
         if fmt == "json":
             from seamcheck.graph import graph_to_dict
 
-            text = json.dumps(graph_to_dict(graph if graph is not None else api.scan(repo_root)), indent=2)
+            if graph is None:
+                graph = api.scan(repo_root, bar)
+            text = json.dumps(graph_to_dict(graph), indent=2)
         else:
             try:
-                text = api.report(repo_root, fmt, ref=options["since"] or "HEAD", graph=graph)
+                text = api.report(
+                    repo_root, fmt, ref=options["since"] or "HEAD", graph=graph, progress=bar
+                )
             except ValueError as error:
+                bar.finish()
                 self.stderr.write(str(error))
                 raise SystemExit(2) from error
+        bar.finish()
 
         if options["serve"]:
             return self._serve(text, fmt, tunnel=options["tunnel"])
 
         destination = options["out"]
         if destination == "-":
-            # Explicit stdout always wins, even for html: a flag whose help text
+            # Explicit stdout always wins, even for a document: a flag whose help text
             # promises the terminal must not silently redirect to a file.
             return self.stdout.write(text)
         if destination is None:
-            if fmt != "html":
+            if fmt not in _DOCUMENTS:
                 return self.stdout.write(text)
-            # An HTML report with no destination goes to the configured path, because
-            # dumping a whole document into a terminal helps nobody. Read config from
-            # settings, not api._config(): a command reaching into another module's
-            # private helper is how a refactor there silently breaks this one.
+            # A whole document with no destination goes to a file, because `seamcheck map`
+            # used to answer with 3.8 MB of markup down the terminal - which reads as the
+            # command being broken. Read config from settings, not api._config(): a command
+            # reaching into another module's private helper is how a refactor there
+            # silently breaks this one.
             config = getattr(settings, "SEAMCHECK_CONFIG", {})
-            configured = config.get("report_output")
-            if not configured:
-                # Falling through to stdout here would be the exact ~1MB-dump-to-a-
-                # terminal outcome this branch exists to prevent - fail cleanly instead.
-                raise CommandError(
-                    "--format html has no destination: pass --out PATH, or --out - to "
-                    "print the document to stdout."
-                )
-            destination = configured
+            key, fallback = _DOCUMENTS[fmt]
+            destination = config.get(key) or fallback
 
         path = pathlib.Path(repo_root) / destination
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
-        self.stdout.write(f"wrote {path}")
+        self._wrote(path, text, open_it=options.get("open_it"))
+
+    def _wrote(self, path, text: str, open_it: bool = False):
+        """Say where it went, and give something clickable.
+
+        A bare "wrote docs/maps/connectivity-map.html" leaves the reader to work out how to
+        open it. Most terminals turn a file:// URL into a link, so print one.
+        """
+        absolute = path.resolve()
+        size = len(text.encode("utf-8")) / 1_000_000
+        self.stdout.write(f"wrote {path}  ({size:.1f} MB)")
+        self.stdout.write(f"open  {absolute.as_uri()}")
+        if not open_it:
+            return
+        import webbrowser
+
+        # A browser that will not open must not read as the render having failed.
+        if not webbrowser.open(absolute.as_uri()):
+            self.stderr.write("could not open a browser; the link above still works.")
 
     def _exit_on_check(self, repo_root, graph=None):
         if not api.check(repo_root, graph=graph)["passed"]:
             raise SystemExit(1)
 
     def _summary(self, options):
-        graph = api.scan(options["repo_root"])
+        """The default command's answer: the totals, in words, and what to type next.
+
+        Four bare numbers under four bare words is a report only to someone who already
+        knows what the words claim - and the whole reason this tool exists is that they
+        usually do not. Each line says what the number means; the last two lines say where
+        to look. Order is worst-first, not alphabetical: `connected` sorted to the top and
+        put the one status nobody needs to act on where the eye lands.
+        """
+        from seamcheck.meaning import BLIND_SPOTS, meaning
+
+        # +1: serialising 37,000 symbols and saving the snapshot is several seconds of
+        # its own, and a bar that sits at 100% while work continues is a bar that lies.
+        bar = self._progress(options, api.SCAN_STEPS + 1)
+        graph = api.scan(options["repo_root"], bar)
+        bar.step("writing the snapshot")
         path = api.write_map(graph, options["repo_root"])
+        bar.finish()
+
         counts = {}
         for symbol in graph.symbols:
             counts[symbol.status.value] = counts.get(symbol.status.value, 0) + 1
-        self.stdout.write(f"{len(graph.symbols)} symbols, {len(graph.edges)} edges -> {path}")
-        for status, count in sorted(counts.items()):
-            self.stdout.write(f"  {status:<12} {count}")
+
+        self.stdout.write(f"{len(graph.symbols):,} symbols, {len(graph.edges):,} edges")
+        for status in ("unresolved", "unused", "uncertain", "connected"):
+            count = counts.get(status, 0)
+            means, _ = meaning("", status)
+            self.stdout.write(f"  {status:<11} {count:>7,}   {means}")
+        self.stdout.write("")
+        if counts.get("unused"):
+            self.stdout.write(f"  Note: {BLIND_SPOTS}")
+        self.stdout.write(f"  graph  {path}")
+        self.stdout.write("  next   seamcheck map      the same scan, as a page you can click through")
+        self.stdout.write("         seamcheck report   the findings as markdown, worst first")
 
     def _backfill(self, repo_root, count, ref="HEAD"):
         """Fill in the commit history the map's picker reads."""
         from seamcheck.history import backfill
 
+        self.stdout.write(
+            f"Scanning up to {count} commits from {ref}, each in its own worktree. "
+            "Roughly 30s each; already-scanned commits are skipped."
+        )
         scanned = backfill(repo_root, count, ref=ref)
         if not scanned:
-            return self.stdout.write(f"Nothing to scan: the last {count} commits already have snapshots.")
+            return self.stdout.write(
+                f"Nothing to do: the last {count} commits on {ref} already have snapshots."
+            )
         for sha in scanned:
-            self.stdout.write(f"scanned {sha[:12]}")
-        self.stdout.write(f"{len(scanned)} commit(s) added to the history.")
+            self.stdout.write(f"  scanned {sha[:12]}")
+        self.stdout.write(
+            f"\n{len(scanned)} commit(s) added. The map's COMMIT picker can now show what "
+            "each of them changed - re-run `seamcheck map` to pick it up."
+        )
 
     def _serve(self, text, fmt, tunnel=False):
         """Hold the report open on the LAN until interrupted."""

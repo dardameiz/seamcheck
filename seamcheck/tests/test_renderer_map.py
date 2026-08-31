@@ -273,10 +273,22 @@ class MergedReviewViewTests(SimpleTestCase):
 
         self.assertIn('"sections": []', out)
 
-    def test_it_opens_on_the_map_because_that_is_what_the_page_is_for(self):
+    def test_a_first_time_reader_lands_on_the_explanation_and_everyone_else_on_the_map(self):
+        # 30,000 nodes in thirteen columns with no statement of what a node is teaches
+        # nobody anything, so the first visit opens on the prose. The map is still what
+        # the page is for, so the second visit goes straight there.
         out = map_html.render(_map(), console=self._console())
 
-        self.assertIn('const OPENS_ON = "map"', out)
+        self.assertIn('const OPENS_ON = seenBefore() ? "map" : "start"', out)
+        self.assertIn('key: "start"', out)
+
+    def test_reading_the_seen_flag_can_throw_without_taking_the_page_with_it(self):
+        # This file is opened over file:// as often as over http, and localStorage is
+        # absent-or-throwing there. Failing means showing the intro again, which is the
+        # harmless direction.
+        out = map_html.render(_map(), console=self._console())
+
+        self.assertIn("catch (_) { return false; }", out)
 
     def test_a_desktop_gets_a_rail_and_a_phone_gets_the_select(self):
         # Rebuilding for the phone deleted the rail entirely; both drive one switch, and

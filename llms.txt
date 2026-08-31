@@ -26,14 +26,29 @@ what it lost.
 
 ## Commands
 
-- `seamcheck help` — every command
+- `seamcheck help` — every command; `seamcheck help <command>` explains one, with examples
+- `seamcheck scan` — scan and summarise; also writes the snapshot the other commands diff against
 - `seamcheck check` — the CI gate. Exit 1 on new findings, 2 if the baseline is missing, 0 clean
 - `seamcheck check --since $BASE_SHA` — gate a pull request against its base commit
-- `seamcheck map` — one self-contained HTML file: the connectivity map plus eight review views
+- `seamcheck map` — writes one self-contained HTML file (the connectivity map plus the review
+  views) and prints the path; `--open` opens it
 - `seamcheck serve` — the same UI, opened from a phone on the same network
 - `seamcheck explain <symbol-id>` — one symbol, with the source around it
 - `seamcheck report` — a markdown digest for a PR comment
-- `seamcheck backfill 20` — scan the last 20 commits so the map can show per-commit diffs
+- `seamcheck backfill` — scan the last 20 commits so the map can show per-commit diffs;
+  takes a count, e.g. `seamcheck backfill 100`
+
+Global flags: `-v/--verbose` restores the host project's own start-up logging (suppressed by
+default, though `ERROR` always gets through), `-q/--quiet` drops the progress bar. Progress is
+drawn on stderr and only on a terminal, so `seamcheck json > graph.json` stays clean. Anything
+after `--` is forwarded to the management command untouched.
+
+## Reading the output
+
+Every finding in the UI carries what the scan observed and what is usually actually true, and
+every `file:line` is a link that opens at that line in the reader's editor (configure with
+`"editor"` in `SEAMCHECK_CONFIG`: vscode, cursor, windsurf, zed, sublime, pycharm, idea,
+webstorm, none).
 
 ## MCP
 

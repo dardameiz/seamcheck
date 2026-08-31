@@ -11,6 +11,7 @@ from __future__ import annotations
 import html as html_lib
 import json
 
+from seamcheck import editors, meaning
 from seamcheck.mapdata import ConnectivityMap
 
 # Column order is the story: browser on the left, database on the right.
@@ -242,6 +243,40 @@ svg.drag { cursor:grabbing; }
 .covn { flex:none; color:var(--muted); font-size:11px; font-variant-numeric:tabular-nums; }
 .blank { position:absolute; inset:0; display:flex; align-items:center; padding:0 22px;
          color:var(--muted); font-size:13px; }
+
+
+/* A location is the whole point of a finding, so it is a control, not a caption: click
+   opens the file at the line in the reader's editor, shift-click copies the path. */
+.loc { color:var(--sig); text-decoration:none; border-bottom:1px dotted currentColor;
+       cursor:pointer; }
+.loc:hover { border-bottom-style:solid; }
+.loc.copied { color:var(--ok); border-bottom-color:var(--ok); }
+/* Precise and unreadable is not informative. Every finding carries what the scan
+   observed, and the handful of things that are usually true when you see it. */
+.why { margin-top:8px; padding:8px 10px; background:var(--sunk); border-radius:7px;
+       font-size:12.5px; line-height:1.5; }
+.why p { margin:0 0 5px; color:var(--ink); }
+.why p:last-child { margin-bottom:0; color:var(--muted); }
+.why b { font-size:9.5px; text-transform:uppercase; letter-spacing:.08em;
+         color:var(--muted); font-weight:600; margin-right:7px; }
+/* Prose, for the one panel that is prose. */
+.doc { max-width:72ch; }
+.doc p, .doc li { color:var(--ink); font-size:13.5px; line-height:1.65; }
+.doc p { margin:0 0 12px; }
+.doc h3 { font-size:13px; margin:22px 0 9px; }
+.doc ol, .doc ul { margin:0 0 12px; padding-inline-start:20px; }
+.doc li { margin-bottom:6px; }
+.doc code { background:var(--sunk); border-radius:4px; padding:1px 5px; font-size:12px;
+            font-family:ui-monospace,Menlo,monospace; }
+.caveat { border-inline-start:3px solid var(--warn); background:var(--warn-fill);
+          padding:10px 12px; border-radius:0 7px 7px 0; font-size:12.5px;
+          line-height:1.55; margin:0 0 14px; color:var(--ink); }
+.skey { display:grid; gap:8px; margin:0 0 6px; }
+.skey .s { border:1px solid var(--line); border-radius:9px; padding:10px 12px;
+           background:var(--panel); }
+.skey h4 { margin:0 0 4px; font-size:12.5px; display:flex; align-items:baseline; gap:8px; }
+.skey p { margin:0 0 4px; font-size:12.5px; line-height:1.55; color:var(--ink); }
+.skey p.c { color:var(--muted); margin-bottom:0; }
 
 @media (min-width: 761px) {
   .brand, .filters, .crumbrow { padding-left:16px; padding-right:16px; }
@@ -578,7 +613,7 @@ function hop(id, here) {
   return `<div class="hop${id === here ? " at" : ""}">
     <div class="hk">${esc(n.kind)}</div>
     <div class="hl">${esc(n.label)}</div>
-    ${n.file ? `<div class="hf">${esc(n.file)}${n.line ? ":" + n.line : ""}</div>` : ""}
+    ${n.file ? `<div class="hf">${loc(n.file, n.line)}</div>` : ""}
     ${code ? `<button class="code" data-code="${esc(id)}">code</button>` : ""}</div>`;
 }
 
@@ -624,8 +659,9 @@ function show(id) {
     </div>
     <div class="row"><span class="badge ${esc(n.status)}">${esc(n.status)}</span>
       ${esc(n.kind)}${ch ? " · " + esc(ch) : ""}</div>
-    ${n.file ? `<div class="row">${esc(n.file)}${n.line ? ":" + n.line : ""}</div>` : ""}
+    ${n.file ? `<div class="row">${loc(n.file, n.line)}</div>` : ""}
     ${n.note ? `<div class="note">${esc(n.note)}</div>` : ""}
+    ${why(n.kind, n.status)}
     <div class="lbl">Path — browser to backend</div>
     ${path.map(step => hop(step, id)).join("")}
     ${reaches.length ? `<div class="lbl">Reaches</div>` +
@@ -755,8 +791,7 @@ function selectCommit(index) {
     gone.innerHTML = list.length
       ? `<b>What this commit changed</b>` + list.map(d =>
           `<div class="ch ${esc(d.change)}"><i>${esc(d.change)}</i> ${esc(d.label)}` +
-          ` <span>${esc(d.kind)}${d.file ? " · " + esc(d.file) +
-          (d.line ? ":" + d.line : "") : ""}</span></div>`
+          ` <span>${esc(d.kind)}${d.file ? " · " + loc(d.file, d.line) : ""}</span></div>`
         ).join("") + (more > 0 ? `<div class="ch"><i></i>+${more} more</div>` : "")
       : "";
   }
@@ -782,6 +817,86 @@ document.getElementById("lg").onclick = e => {
 };
 document.addEventListener("pointerdown", () => { legendBox.hidden = true; });
 
+// --- a location you can click ------------------------------------------------------
+// Every finding is a place in a file, and the distance between reading a path and having
+// the cursor on that line was a copy, a paste and a lost train of thought. The scan
+// stores paths relative to the repo; an editor URL needs an absolute one, so the root
+// arrives once and the join happens here.
+const ROOT = (OPEN.root || "").replace(/\/+$/, "");
+function absolute(file) { return ROOT ? ROOT + "/" + file : file; }
+
+function loc(file, line) {
+  if (!file) return "";
+  const text = esc(file) + (line ? ":" + line : "");
+  const full = absolute(file) + (line ? ":" + line : "");
+  if (!OPEN.href) {
+    return `<span class="loc" data-copy="${esc(full)}" title="Click to copy">${text}</span>`;
+  }
+  // split/join, not replace: replace(string) substitutes the first match only, and a
+  // scheme that names {path} twice would have shipped half a URL.
+  const href = OPEN.href.split("{path}").join(absolute(file)).split("{line}").join(line || 1);
+  return `<a class="loc" href="${esc(href)}" data-copy="${esc(full)}"
+    title="Open in your editor · shift-click to copy the path">${text}</a>`;
+}
+
+// Clipboard, with a fallback: navigator.clipboard needs a secure context and this file
+// is routinely opened over file://, where it is absent and reading it throws.
+function copy(text, el) {
+  const mark = () => {
+    if (!el) return;
+    el.classList.add("copied");
+    setTimeout(() => el.classList.remove("copied"), 900);
+  };
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(mark, () => {});
+      return;
+    }
+  } catch (_) { /* fall through to the textarea */ }
+  const box = document.createElement("textarea");
+  box.value = text;
+  box.style.cssText = "position:fixed;top:-1000px;opacity:0";
+  document.body.appendChild(box);
+  box.select();
+  try { document.execCommand("copy"); mark(); } catch (_) { /* nothing else to try */ }
+  box.remove();
+}
+
+document.addEventListener("click", e => {
+  const el = e.target.closest(".loc");
+  if (!el) return;
+  // A span has no href to follow, so a plain click is the copy. On a link, only
+  // shift-click is - otherwise the editor never opens.
+  if (el.tagName === "A" && !e.shiftKey) return;
+  e.preventDefault();
+  copy(el.dataset.copy || "", el);
+});
+
+// --- what a finding means -----------------------------------------------------------
+// Two sentences per (kind, status), shipped once as a lookup rather than repeated on
+// each of a thousand rows: what the scan observed, and what is usually actually true.
+function why(kind, status) {
+  const m = MEANING[kind + "|" + status] || MEANING["*|" + status];
+  if (!m) return "";
+  return `<div class="why"><p><b>means</b>${esc(m.means)}</p>
+    <p><b>check</b>${esc(m.check)}</p></div>`;
+}
+
+// Rows arrive sorted worst-first then by location, so identical kinds land in runs. The
+// explanation belongs on the first row of each run: printed on all 1,455 it is a wall of
+// the same two sentences, and printed nowhere it is back to being a status word nobody
+// can act on. Runs are recomputed after every filter, so whatever is on screen at the
+// top of a group always carries its own explanation.
+function whyOncePerRun(rows) {
+  let previous = null;
+  return rows.map(r => {
+    const key = r.kind + "|" + r.status;
+    const first = key !== previous;
+    previous = key;
+    return first && r.status !== "connected" ? why(r.kind, r.status) : "";
+  });
+}
+
 // --- the review views, in the same shell -------------------------------------------
 // One surface, not two: a second document meant a second render, a second link and a
 // second mental model for the same scan. The map answers "what reaches what"; these
@@ -796,9 +911,23 @@ listToggle.onclick = () => { asList = !asList; switchTo(mode); };
 // The commit filter therefore starts at "everything": defaulting it to the newest commit
 // left the canvas holding one node, because a commit that only deletes something has
 // nothing left to draw - which reads as a page with no nodes in it.
-const OPENS_ON = "map";
+//
+// First visit is the exception: 30,000 nodes with no statement of what a node is teaches
+// nobody anything, so a reader who has not been here before lands on the explanation.
+// Storage is best-effort - this file is opened over file:// as often as over http, where
+// reading localStorage can throw outright - and failing to read it just means the intro
+// shows again, which is the harmless direction to fail in.
+function seenBefore() {
+  try {
+    if (localStorage.getItem("seamcheck.seen")) return true;
+    localStorage.setItem("seamcheck.seen", "1");
+  } catch (_) { return false; }
+  return false;
+}
+const OPENS_ON = seenBefore() ? "map" : "start";
 
-const VIEWS = [{key: "map", title: "Map — what reaches what", count: null},
+const VIEWS = [{key: "start", title: "Start here", count: null},
+               {key: "map", title: "Map — what reaches what", count: null},
                {key: "files", title: "Files", count: FILES.length},
                {key: "overview", title: "Overview", count: null}].concat(
   D.sections.map(sec => ({key: sec.key, title: sec.title,
@@ -825,6 +954,60 @@ function pills(counts) {
     .map(k => `<span class="pill ${k}">${k} ${counts[k] || 0}</span>`).join("");
 }
 
+// A reader who has never seen this arrives at 30,000 nodes in thirteen columns with no
+// statement of what a node is. One panel of prose, ahead of everything else, and the
+// caveats stated next to the numbers they change rather than in a README nobody opens.
+function statusKey() {
+  const of = k => MEANING["*|" + k] || {means: "", check: ""};
+  return ["connected", "unresolved", "unused", "uncertain"].map(k =>
+    `<div class="s"><h4><span class="badge ${k}">${k}</span></h4>
+       <p>${esc(of(k).means)}</p><p class="c">${esc(of(k).check)}</p></div>`).join("");
+}
+
+function startHtml() {
+  const commits = COMMITS.length;
+  return `<h2>Start here</h2>
+    <p class="blurb">What this page is, what its four colours claim, and where to look
+      first.</p>
+    <div class="doc">
+      <p>Seamcheck read this project's source and built one graph of <b>what reaches
+        what</b>: the URLs, the views behind them, the JavaScript that calls those URLs,
+        the template elements that JavaScript selects, and the CSS that styles those
+        elements. Everything on this page is that one graph, seen from a different angle.</p>
+      <p>A <b>symbol</b> is one named thing the scan found — a route, a function, a
+        selector, a design token. An <b>edge</b> is evidence that one symbol reaches
+        another. A symbol's colour is what the scan can say about the edges into it.</p>
+      <div class="caveat"><b>Two things to know before you read a number.</b>
+        Seamcheck reads source; it never runs your code, so every row is evidence rather
+        than a verdict. And ${esc(BLIND_SPOTS)}</div>
+      <h3>The four statuses</h3>
+      <div class="skey">${statusKey()}</div>
+      <h3>How to read the map</h3>
+      <ul>
+        <li>Columns run left to right in the order a request travels — page, module, JS
+          call, endpoint, URL, view, response field. The axis you read along <i>is</i> the
+          frontend-to-backend seam.</li>
+        <li><b>Click a node</b> to open its evidence: the chain that reaches it, each hop
+          with its source. <b>Show only this chain</b> hides everything else on the page.</li>
+        <li><b>PAGE</b> picks one entry point. <b>COMMIT</b> narrows everything to what a
+          single commit changed${commits ? "" :
+            " — once <code>seamcheck backfill</code> has given it some history"}.</li>
+        <li><b>Any <code>file:line</code> is clickable</b> and opens at that line in
+          your editor${OPEN.href ? "" : " — set <code>editor</code> in SEAMCHECK_CONFIG to turn that on"}.
+          Shift-click copies the absolute path instead.</li>
+      </ul>
+      <h3>Where to start</h3>
+      <ol>
+        <li><b>Findings</b>, filtered to <code>unresolved</code> — things the code reaches
+          for that are not there. The shortest path to a real bug.</li>
+        <li><b>DOM Wiring</b> — elements more than one file writes. Two writers on one
+          element is the usual cause of a value that flickers or reverts.</li>
+        <li><b>Files</b> — the repository's own shape, and how much of each file the scan
+          could model at all. That bar is coverage, not a finding.</li>
+      </ol>
+    </div>`;
+}
+
 function overviewHtml() {
   const total = c => Object.values(c).reduce((a, n) => a + n, 0);
   return `<h2>Overview</h2><p class="blurb">Two totals, each broken into the four
@@ -840,7 +1023,8 @@ function overviewHtml() {
        <div class="t">${esc(g[0])}</div></div>`).join("")
       : `<div class="gap">Nothing the scan is willing to claim.</div>`}
     <p class="gloss">uncertain means the scan found no evidence either way. It is not a
-    claim that anything is dead.</p>`;
+    claim that anything is dead.</p>
+    <div class="caveat">${esc(BLIND_SPOTS)}</div>`;
 }
 
 // A folder tree, the shape the repository actually has. The map is rooted at pages,
@@ -876,7 +1060,10 @@ function treeHtml() {
       node.files.sort((a, b) => a.path.localeCompare(b.path)).map(f =>
         `<div class="fl" data-path="${esc(f.path)}" style="padding-left:${depth * 13 + 20}px">
            <span class="fn">${esc(f.path.split("/").pop())}</span>
-           ${bar(f)}${flags(f)}</div>`).join("");
+           ${bar(f)}${flags(f)}${OPEN.href
+             ? `<a class="loc" href="${esc(OPEN.href.split("{path}").join(absolute(f.path))
+                 .split("{line}").join(1))}" data-copy="${esc(absolute(f.path))}"
+                 title="Open in your editor">open</a>` : ""}</div>`).join("");
     if (name === null) return inner;
     return `<details${depth < 2 || needle ? " open" : ""}>
       <summary style="padding-left:${depth * 13}px">${esc(name)}</summary>${inner}</details>`;
@@ -894,7 +1081,12 @@ function renderPanel() {
   if (mode === "files") {
     panel.innerHTML = treeHtml();
     panel.querySelectorAll(".fl").forEach(el => {
-      el.onclick = () => { fileFilter = el.dataset.path; viewer.value = "map"; switchTo("map"); };
+      el.onclick = e => {
+        // The row filters the canvas; the "open" link inside it opens an editor. Without
+        // this the link did both, and the map jumped out from under the reader.
+        if (e.target.closest(".loc")) return;
+        fileFilter = el.dataset.path; viewer.value = "map"; switchTo("map");
+      };
     });
     const box = document.getElementById("fq");
     box.oninput = e => {
@@ -904,6 +1096,7 @@ function renderPanel() {
     };
     return;
   }
+  if (mode === "start") { panel.innerHTML = startHtml(); return; }
   if (mode === "overview") { panel.innerHTML = overviewHtml(); return; }
   const sec = D.sections.find(x => x.key === mode);
   if (!sec) return;
@@ -916,6 +1109,7 @@ function renderPanel() {
   const rows = sec.rows.filter(r => (!cstatus || r.status === cstatus) &&
     (!needle || (r.label + " " + r.file + " " + r.kind).toLowerCase().includes(needle)));
   const page = rows.slice(0, shown);
+  const notes = whyOncePerRun(page);
   panel.innerHTML = `<h2>${esc(sec.title)}</h2><p class="blurb">${esc(sec.blurb)}</p>
     <div class="tools">
       <input id="cq" type="search" placeholder="Filter ${rows.length} rows" value="${esc(cq)}">
@@ -923,11 +1117,11 @@ function renderPanel() {
         ${["unresolved","unused","uncertain","connected"].map(v =>
           `<option value="${v}"${v === cstatus ? " selected" : ""}>${v}</option>`).join("")}
       </select></div>
-    ${page.map(r => `<div class="row"><span class="badge ${esc(r.status)}">${esc(r.status)}</span>
+    ${page.map((r, i) => `<div class="row"><span class="badge ${esc(r.status)}">${esc(r.status)}</span>
        <div class="t">${esc(r.label)}</div>
-       <div class="w">${esc(r.kind)}${r.file ? " · " + esc(r.file) +
-         (r.line ? ":" + r.line : "") : ""}</div>
-       ${r.note ? `<div class="n">${esc(r.note)}</div>` : ""}</div>`).join("")
+       <div class="w">${esc(r.kind)}${r.file ? " · " + loc(r.file, r.line) : ""}</div>
+       ${r.note ? `<div class="n">${esc(r.note)}</div>` : ""}
+       ${notes[i]}</div>`).join("")
       || `<div class="gap">No rows match.</div>`}
     ${rows.length > page.length
       ? `<div class="more" id="cmore">Show more — ${page.length} of ${rows.length}</div>` : ""}
@@ -1046,7 +1240,8 @@ def _console_payload(console) -> str:
     return json.dumps(data).replace("</", "<\\/")
 
 
-def render(connectivity_map: ConnectivityMap, console=None, files=None) -> str:
+def render(connectivity_map: ConnectivityMap, console=None, files=None,
+           repo_root: str = "", editor: str | None = None) -> str:
     mode = (
         f"diff vs {_esc(connectivity_map.baseline_sha[:12])}"
         if connectivity_map.baseline_sha
@@ -1110,6 +1305,12 @@ def render(connectivity_map: ConnectivityMap, console=None, files=None) -> str:
         f"<script>const MAPDATA={_payload(connectivity_map)};</script>",
         f"<script>const CONSOLE={_console_payload(console)};</script>",
         f"<script>const FILES={json.dumps(files or []).replace('</', '<\\/')};</script>",
+        # Locations are stored relative to the repo; an editor URL needs an absolute
+        # path. Ship the root once and let the page join, rather than absolutising
+        # every one of tens of thousands of rows.
+        f"<script>const OPEN={json.dumps({'root': repo_root, 'href': editors.scheme(editor)})};</script>",
+        f"<script>const MEANING={json.dumps(meaning.table()).replace('</', '<\\/')};</script>",
+        f"<script>const BLIND_SPOTS={json.dumps(meaning.BLIND_SPOTS)};</script>",
         f"<script>{_SCRIPT}</script>",
         "</body></html>",
     ])

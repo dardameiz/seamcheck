@@ -57,12 +57,30 @@ SEAMCHECK_CONFIG = {
     "js_source_root": "myapp/static/js",
     "css_source_root": "myapp/static/css",
     "first_party_prefixes": ["myapp", "myproject"],
+    # Optional. Makes every file:line in the UI open at that line.
+    # vscode (default) · cursor · windsurf · zed · sublime · pycharm · idea · webstorm · none
+    "editor": "vscode",
 }
 ```
 
 Every project-specific path lives in that dict. Nothing is hardcoded anywhere in the
 extractors — which is how this was lifted out of the project it grew in without touching
 a line of it.
+
+<details><summary>The rest of the keys</summary>
+
+| key | what it is | default |
+|---|---|---|
+| `static_root` | where a template's `{% static_js 'a/b.js' %}` resolves from | `static` |
+| `vite_config` | the bundler config, read for entry points | `vite.config.js` |
+| `asgi_module` | scanned for WebSocket and ASGI routes | none |
+| `app_configs` | apps whose models are pulled into the graph | none |
+| `tailwind_build_output` | built CSS, so utility classes aren't read as dead | none |
+| `map_output` | where `seamcheck map` writes | `docs/maps/connectivity-map.html` |
+| `report_output` | where `--format html` writes | `docs/maps/connectivity-report.html` |
+| `editor` | URL scheme for the clickable locations | `vscode` |
+
+</details>
 
 **You need Node on PATH.** The JS and CSS parsers run on it. You do *not* need npm or
 `node_modules` — acorn and postcss ship inlined in the wheel. If Node is missing,
@@ -72,12 +90,28 @@ Seamcheck says so and gives you the Python half rather than dying.
 
 ```bash
 seamcheck help              # every command, one line each
+seamcheck help map          # what one command is for, with worked examples
 seamcheck scan              # scan, summary, snapshot for later diffs
 seamcheck check             # exit 1 on new findings. This is the CI one.
 seamcheck map               # the UI, one self-contained HTML file
+seamcheck map --open        # ...and open it
 seamcheck serve             # ...opened from your phone
 seamcheck explain <id>      # one symbol, with the code around it
 ```
+
+A scan takes half a minute on a large project, so it draws a progress bar — on **stderr**,
+and only when that is a terminal. `seamcheck json > graph.json` gives you JSON and nothing
+else; a CI log collects no carriage returns.
+
+Two flags the front door owns rather than forwards:
+
+| | |
+|---|---|
+| `-v`, `--verbose` | show the host project's own warnings and start-up logging. Importing a real Django project prints a screenful before Seamcheck says anything; that noise is off by default, and `ERROR` always gets through either way. |
+| `-q`, `--quiet` | no progress bar |
+
+Anything after `--` goes straight to the management command: `seamcheck map -- --help`
+lists every flag it accepts.
 
 It finds your project by walking up to the nearest `manage.py` and reading the settings
 module out of it, so it works from anywhere inside the tree. Everything is also available
@@ -93,6 +127,14 @@ Click any node and it lights the line through it: page → module → `fetch()` 
 view, each hop with the real source, and a button to show the whole enclosing function.
 Or isolate that one chain and drop everything else.
 
+Every `file:line` in it is a link: click to open that line in your editor, shift-click to
+copy the absolute path. Set `editor` in the config to pick which one.
+
+Every finding also says **what it means and what to check** — because `unresolved ·
+css_token_use · button_badges.css:3` is precise and tells a newcomer nothing. Usually one
+of the two or three explanations offered is "this is fine, and here's why the scan can't
+tell".
+
 There's a **Files** view too — your actual folder tree, with a bar per file showing how
 many of its declarations Seamcheck reasoned about. Because "no findings" and "never
 looked" are not the same sentence.
@@ -107,7 +149,8 @@ Nothing is uploaded. `--serve` is a socket on your machine that dies with the co
 ### Per-commit
 
 ```bash
-seamcheck backfill 20       # scan the last 20 commits
+seamcheck backfill          # the last 20 commits
+seamcheck backfill 100      # ...or as many as you like
 ```
 
 Now the map has a commit picker. Pick one and see what *that commit* changed — added,

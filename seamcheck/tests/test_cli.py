@@ -164,14 +164,22 @@ class ReportFormatTests(SimpleTestCase):
             self.assertEqual(raised.exception.code, 1)
             self.assertIn("## Seamcheck", Path(path).read_text())
 
-    def test_html_with_no_out_and_no_report_output_raises_command_error(self):
-        # The design doc requires --out for html when report_output isn't configured -
-        # falling through to stdout would dump the whole ~1MB document into a terminal,
-        # exactly what the config-fallback branch two lines above exists to prevent.
-        with override_settings(SEAMCHECK_CONFIG=_CONFIG), self.assertRaises(CommandError) as raised:
-            call_command("seamcheck", "--format", "html", stdout=StringIO(), stderr=StringIO())
+    def test_a_document_with_no_destination_lands_on_disk_and_says_where(self):
+        # Never stdout: dumping a whole document into a terminal is the ~1MB (for map,
+        # 3.8MB) wall of markup that reads as the command being broken. It used to raise
+        # instead, which made `seamcheck map` fail on being typed; a default path plus a
+        # line naming it is the same protection without the dead end.
+        with tempfile.TemporaryDirectory() as repo:
+            out = StringIO()
+            with override_settings(SEAMCHECK_CONFIG=_CONFIG):
+                call_command("seamcheck", "--format", "html", "--repo-root", repo,
+                             stdout=out, stderr=StringIO())
 
-        self.assertIn("--out", str(raised.exception))
+            written = Path(repo, "docs", "maps", "connectivity-report.html")
+            self.assertTrue(written.is_file())
+            self.assertIn("wrote", out.getvalue())
+            # Something clickable, not just a path to copy.
+            self.assertIn(written.resolve().as_uri(), out.getvalue())
 
     def test_since_composes_with_format_using_the_given_ref_not_head(self):
         # An unresolvable ref surfaces its own name in the "No baseline" message, which
