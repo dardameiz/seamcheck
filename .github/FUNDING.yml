@@ -1,0 +1,10 @@
+# Renders a "Sponsor" button at the top of the repo.
+#
+# GitHub Sponsors takes no platform fee and the giver already has an account here, which
+# is why it is first. Enable it once at https://github.com/sponsors — until then this line
+# is inert, not broken.
+github: [dardameiz]
+
+# A no-account, one-off option for people who will not sign anything up. Ko-fi takes 0% on
+# one-off donations on the free tier. Uncomment once the page exists.
+# ko_fi: your-handle

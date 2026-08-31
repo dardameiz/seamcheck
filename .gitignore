@@ -8,3 +8,6 @@ build/
 node_modules/
 .ruff_cache/
 .pytest_cache/
+
+# Screenshot scratch. docs/images/ IS committed - the README needs them.
+docs/mockups/_build/

@@ -276,6 +276,11 @@ svg.nolabels .nd text { display:none; }
 .more { text-align:center; padding:10px; border:1px solid var(--line); border-radius:9px;
         cursor:pointer; font-size:13px; color:var(--sig); }
 .gloss { color:var(--muted); font-size:12px; margin-top:14px; }
+/* One line, once, at the bottom of the one panel a person reads end to end. A tool that
+   asks on every screen is an advert; a tool that never asks does not get maintained. */
+.colophon { margin:26px 0 0; padding-top:14px; border-top:1px solid var(--line);
+            color:var(--muted); font-size:12px; line-height:1.6; max-width:70ch; }
+.colophon a { color:var(--sig); }
 .tree { font-family:ui-monospace,Menlo,monospace; font-size:12.5px; }
 .tree summary { cursor:pointer; padding:3px 0; color:var(--muted); }
 .fl { display:flex; align-items:center; gap:8px; padding:3px 0; cursor:pointer;
@@ -1224,7 +1229,15 @@ function overviewHtml() {
         <b>PAGE</b> picker also has the buckets for everything no page reaches.</li>
       <li><b>Files</b> — click a file to draw its symbols; <code>edit</code> opens it.
         Any <code>file:line</code> anywhere here opens in your editor.</li>
-    </ol></div>`;
+    </ol></div>
+
+    <p class="colophon">Built by
+      <a href="https://github.com/dardameiz/seamcheck" target="_blank" rel="noreferrer">Seamcheck</a>
+      — free, MIT, no company behind it. If it found you something,
+      <a href="https://github.com/sponsors/dardameiz" target="_blank" rel="noreferrer">sponsoring it</a>
+      is the clearest signal it is worth continuing. Got a finding wrong?
+      <a href="https://github.com/dardameiz/seamcheck/issues" target="_blank" rel="noreferrer">Say so</a>
+      — that is worth more.</p>`;
 }
 
 // A folder tree, the shape the repository actually has. The map is rooted at pages,

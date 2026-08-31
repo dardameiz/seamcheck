@@ -9,6 +9,13 @@ which turns out to be the part that matters.
 
 No SaaS. No upload. One command, one HTML file, and an exit code for CI.
 
+```bash
+pip install seamcheck
+seamcheck map
+```
+
+![The connectivity map](docs/images/map.png)
+
 ## The four answers
 
 Every dead-code tool ever written has told you something was unused and been wrong, and
@@ -28,6 +35,26 @@ dead one if you only parse `fetch()` calls. Seamcheck says so instead of guessin
 It also reports **its own coverage** — how much of each file it actually reasoned about.
 No other tool I've found will tell you where it wasn't looking.
 
+## Click a red one and it shows you the whole chain
+
+Every finding is a path, and the path is the explanation. Click a node and everything else
+recedes: the line through it lights up, each hop numbered browser-first, each with the real
+source behind it and the file:line that opens in your editor.
+
+![Clicking an unresolved endpoint shows the chain that reaches it](docs/images/chain.png)
+
+That one is real, and it is the class of bug this exists for: the JS fetches
+`/api/wishlist/toggle/`, the URLconf serves `/api/wishlist/`, and nothing fails until a
+user clicks the button. No test covers it, because there is nothing to test — the code is
+syntactically perfect and points at nothing.
+
+Every row says **what the scan observed** and **what is usually actually true**, because
+`unresolved · css_token_use · button_badges.css:3` is precise and tells a newcomer
+nothing. Often the first explanation offered is "this is fine, and here is why the scan
+can't tell."
+
+![Findings, each explained](docs/images/findings.png)
+
 ## What it found in the project it was built on
 
 Not hypotheticals. Real bugs, in a real 36,000-symbol codebase, found while writing this:
@@ -39,6 +66,63 @@ Not hypotheticals. Real bugs, in a real 36,000-symbol codebase, found while writ
 - 65 API routes whose path appears in no source file at all.
 - 46 DOM elements written by more than one module — the reason a display bug survives
   being "fixed" in one of them.
+
+## Numbers you can read
+
+A count with no denominator is not a result: "1,319 unresolved" reads as a catastrophe or
+as nothing at all depending on whether the project has two thousand symbols or forty
+thousand.
+
+![Overview](docs/images/overview.png)
+
+## For CI
+
+```bash
+seamcheck check --since $BASE_SHA
+```
+
+Existing findings do not fail the build — only the ones this change introduced — so you
+can turn it on today, in a project that already has a backlog.
+
+![The CI gate](docs/images/ci.png)
+
+`1` = new findings. `2` = no baseline, so the gate didn't run. `0` = clean. That
+distinction matters: a gate that never ran is not a gate that passed.
+
+## For agents
+
+Seamcheck ships an MCP server, so your assistant can check its own work before it hands it
+to you. It speaks over stdin/stdout — no port, no daemon, no network.
+
+![Using Seamcheck from an assistant](docs/images/agent.png)
+
+```bash
+claude mcp add seamcheck -- seamcheck-mcp
+```
+
+**Cursor, Windsurf, Claude Desktop** — in the MCP config:
+
+```json
+{
+  "mcpServers": {
+    "seamcheck": {
+      "command": "seamcheck-mcp",
+      "cwd": "/path/to/your/django/project"
+    }
+  }
+}
+```
+
+`cwd` matters: Seamcheck reads a real project, so it needs to start in one. It finds the
+settings module the same way the CLI does — the nearest `manage.py`.
+
+Four tools: `seamcheck_check` (scan, report findings new since the last snapshot),
+`seamcheck_report` (the digest), `seamcheck_explain` (one symbol with its evidence), and
+`seamcheck_triage` (record a disposition).
+
+There is also an [`AGENTS.md`](seamcheck/AGENTS.md) with the one rule that matters:
+**never delete something because it came back `uncertain`.** That is the scan saying it
+has no evidence, not that the code is dead.
 
 ## Install
 
@@ -103,7 +187,7 @@ seamcheck explain <id>      # one symbol, with the code around it
 link you can click:
 
 ```
-  wrote  docs/maps/connectivity-map.html  (3.9 MB)
+  wrote  docs/maps/connectivity-map.html  (9.3 MB)
 
   open   http://127.0.0.1:49497/SW9FfTR4XybG
   phone  http://192.168.1.38:49497/SW9FfTR4XybG
@@ -111,10 +195,10 @@ link you can click:
   Ctrl-C to stop.
 ```
 
-Two links because they answer different questions: the first is the one to click here,
-the second is the one to type on a phone on the same wifi. It serves rather than printing
-a `file://` path because a `file://` link is not much of a link — VS Code's terminal opens
-it *inside VS Code*, and a phone can't use it at all.
+Two links because they answer different questions: the first is the one to click here, the
+second is the one to type on a phone on the same wifi. It serves rather than printing a
+`file://` path because a `file://` link is not much of a link — VS Code's terminal opens it
+*inside VS Code*, and a phone can't use it at all.
 
 Nothing is uploaded. While it runs, anyone on your network holding the link can read the
 report; `--local-only` binds loopback instead and drops the phone link, `--tunnel` goes the
@@ -124,8 +208,6 @@ stops, which is what CI wants.
 A scan takes half a minute on a large project, so it draws a progress bar — on **stderr**,
 and only when that is a terminal. `seamcheck json > graph.json` gives you JSON and nothing
 else; a CI log collects no carriage returns.
-
-Two flags the front door owns rather than forwards:
 
 | | |
 |---|---|
@@ -141,35 +223,23 @@ as `python manage.py seamcheck ...` if you prefer — same code, one implementat
 
 ### The UI
 
-One file, no network, opens on a phone. A left rail of views; a canvas that draws
-**every symbol a page touches at once** — 1,366 of them on the biggest page here — with
-the broken ones filled in red so they find you rather than the other way round.
-
-Click any node and it lights the line through it: page → module → `fetch()` → URL →
-view, each hop with the real source, and a button to show the whole enclosing function.
-Or isolate that one chain and drop everything else.
+One file, no network, opens on a phone. Columns run left to right in the order a request
+travels — page → module → `fetch()` → endpoint → URL → view → response field — so the axis
+you read along *is* the frontend-to-backend seam.
 
 Every `file:line` in it is a link: click to open that line in your editor, shift-click to
-copy the absolute path. Set `editor` in the config to pick which one.
+copy the absolute path.
 
-Every finding also says **what it means and what to check** — because `unresolved ·
-css_token_use · button_badges.css:3` is precise and tells a newcomer nothing. Usually one
-of the two or three explanations offered is "this is fine, and here's why the scan can't
-tell".
+**Files** is your actual folder tree, with a bar per file showing how much of it Seamcheck
+reasoned about — because "no findings" and "never looked" are not the same sentence. Click
+a file to draw its symbols on the map.
 
-There's a **Files** view too — your actual folder tree, with a bar per file showing how
-many of its declarations Seamcheck reasoned about. Because "no findings" and "never
-looked" are not the same sentence.
-
-```bash
-seamcheck map              # the link, and the phone link
-seamcheck map --tunnel     # ...reachable from anywhere
-```
-
-Nothing is uploaded. The server is a socket on your machine that dies with the command,
-and the URL carries a random token so nothing on your network stumbles into it.
-(`seamcheck serve` is the same command under the name that comes to mind when the phone
-is the point.)
+**And the 90% no page reaches.** The map is rooted at page entry points, so models, signal
+receivers, admin actions, routes nothing fetches and template elements no JS selects are
+reached by that graph only sometimes. They get pages of their own rather than being absent:
+*Django-side — reached by Django, not by a page*, *stylesheet rules nothing matched*, and so
+on. Being unreached is not a finding — Django reaches a model, a webhook reaches a route —
+so every symbol keeps its own status and the bucket says why it is a bucket.
 
 ### Per-commit
 
@@ -182,50 +252,15 @@ Now the map has a commit picker. Pick one and see what *that commit* changed —
 removed, status flipped — including things it deleted, which no longer exist to be drawn
 and get named instead.
 
-### CI
+### From your phone
 
 ```bash
-seamcheck check --since $BASE_SHA
+seamcheck map              # the link, and the phone link
+seamcheck map --tunnel     # ...reachable from anywhere
 ```
 
-`1` = new findings. `2` = no baseline, so the gate didn't run. `0` = clean. That
-distinction matters: a gate that never ran is not a gate that passed.
-
-### Agents
-
-Seamcheck ships an MCP server, so your assistant can check its own work before it hands
-it to you. It speaks over stdin/stdout — no port, no daemon, no network.
-
-**Claude Code**
-
-```bash
-claude mcp add seamcheck -- seamcheck-mcp
-```
-
-**Cursor, Windsurf, Claude Desktop** — in the MCP config:
-
-```json
-{
-  "mcpServers": {
-    "seamcheck": {
-      "command": "seamcheck-mcp",
-      "cwd": "/path/to/your/django/project"
-    }
-  }
-}
-```
-
-`cwd` matters: Seamcheck reads a real project, so it needs to start in one. It finds the
-settings module the same way the CLI does — the nearest `manage.py` — so the project root
-is the right answer.
-
-Four tools: `seamcheck_check` (scan, report findings new since the last snapshot),
-`seamcheck_report` (the digest), `seamcheck_explain` (one symbol with its evidence), and
-`seamcheck_triage` (record a disposition).
-
-There is also an [`AGENTS.md`](seamcheck/AGENTS.md) with the one rule that matters:
-**never delete something because it came back `uncertain`.** That is the scan saying it
-has no evidence, not that the code is dead.
+Nothing is uploaded. The server is a socket on your machine that dies with the command, and
+the URL carries a random token so nothing on your network stumbles into it.
 
 ## What it can't do
 
@@ -238,11 +273,26 @@ Written down because a tool that hides its blind spots is worse than no tool:
 - **It has been run against one real project.** Mine. That's one more than most tools at
   this stage and far fewer than you'd want.
 
+## Support
+
+Seamcheck is free, MIT, and has no company behind it. If it found you something,
+[**sponsor it on GitHub**](https://github.com/sponsors/dardameiz) — GitHub takes no cut,
+and it is the single clearest signal that this is worth continuing.
+
+Not sponsoring is completely fine. Opening an issue with a finding it got wrong is worth
+more than money, and there are two templates for exactly that:
+[a false finding](https://github.com/dardameiz/seamcheck/issues/new?template=false_finding.yml)
+and [one it missed](https://github.com/dardameiz/seamcheck/issues/new?template=missed_finding.yml).
+
 ## Contributing
 
 Issues and PRs welcome. One house rule, and it's the reason the tool is worth anything:
 **never make a claim the scan can't evidence.** If you can't prove it, it's `uncertain`,
 and the note says which evidence source was missing.
+
+The screenshots above are generated, not pasted: `python docs/mockups/capture.py` renders
+the real UI against a fictional bookshop in `docs/mockups/demo_graph.py`. The two dark
+panels are hand-built mockups and say so in their own corner.
 
 ## License
 

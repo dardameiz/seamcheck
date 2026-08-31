@@ -1,0 +1,99 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Agents</title>
+<style>
+:root{--bg:#0d1117;--panel:#151b24;--sunk:#0a0e14;--ink:#dde4ee;--muted:#8b97a8;
+--line:#252d38;--sig:#4aa3ff;--ok:#3fb27f;--crit:#f0736a;--warn:#a78bfa;--dim:#6f7b8c;}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);width:1440px;height:900px;
+ font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+ display:flex;align-items:center;justify-content:center;padding:40px}
+.wrap{width:100%;max-width:1250px}
+h1{font-size:26px;margin:0 0 6px;letter-spacing:-.3px}
+.sub{color:var(--muted);font-size:15px;margin:0 0 24px;max-width:86ch}
+.grid{display:grid;grid-template-columns:1.25fr 1fr;gap:20px;align-items:start}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:13px;overflow:hidden}
+.head{display:flex;align-items:center;gap:9px;padding:11px 15px;border-bottom:1px solid var(--line);
+ font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted)}
+.tag{margin-left:auto;font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;
+ padding:2px 8px;border-radius:5px;border:1px solid var(--line);color:var(--muted)}
+.body{padding:15px 17px}
+.turn{display:flex;gap:11px;margin-bottom:15px}
+.turn:last-child{margin-bottom:0}
+.av{width:25px;height:25px;border-radius:7px;flex:none;display:flex;align-items:center;
+ justify-content:center;font-size:11px;font-weight:700}
+.av.u{background:#243447;color:var(--sig)}
+.av.a{background:#2a2136;color:var(--warn)}
+.msg{flex:1;min-width:0;font-size:13.5px;line-height:1.6}
+.who{font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);margin-bottom:3px}
+.tool{margin:9px 0;border:1px solid var(--line);border-radius:9px;background:var(--sunk);
+ padding:9px 12px;font:12.5px/1.65 ui-monospace,SFMono-Regular,Menlo,monospace;
+ white-space:pre-wrap}
+.tool .n{color:var(--sig);font-weight:700}
+.c-ok{color:var(--ok)}.c-crit{color:var(--crit)}.c-warn{color:var(--warn)}.c-dim{color:var(--dim)}
+pre{margin:0;padding:15px 17px;font:12.5px/1.72 ui-monospace,SFMono-Regular,Menlo,monospace;
+ white-space:pre-wrap}
+.tools{display:flex;flex-wrap:wrap;gap:7px;margin-top:11px}
+.t{font:11.5px ui-monospace,Menlo,monospace;border:1px solid var(--line);border-radius:6px;
+ padding:3px 8px;color:var(--sig)}
+.rule{border-left:3px solid var(--crit);background:#2c1618;padding:11px 14px;
+ border-radius:0 9px 9px 0;font-size:13px;line-height:1.55;margin-top:16px}
+.mock{position:fixed;right:22px;bottom:16px;font-size:11px;color:var(--dim);letter-spacing:.06em}
+</style></head><body><div class="wrap">
+<h1>So the assistant can check its own work</h1>
+<p class="sub">An agent writes code that references things — a route, a selector, a token. Seamcheck is how it
+finds out whether those things exist, before you do. It ships an MCP server over stdio: no port, no daemon,
+no network.</p>
+<div class="grid">
+  <div class="card">
+    <div class="head">assistant session<span class="tag">MCP</span></div>
+    <div class="body">
+      <div class="turn"><div class="av u">You</div><div class="msg">
+        <div class="who">you</div>Add a wishlist button to the catalogue page.</div></div>
+      <div class="turn"><div class="av a">AI</div><div class="msg">
+        <div class="who">assistant</div>
+        Added <code>toggleWishlist()</code> in <code>catalogue.js</code> and a
+        <code>#wishlist-btn</code> in <code>catalogue.html</code>. Checking it is actually wired up.
+        <div class="tool"><span class="n">seamcheck_check</span>()
+          <span class="c-dim">→</span> 2 new findings
+
+<span class="c-crit">unresolved</span> fetch <span class="c-dim">/api/wishlist/toggle/</span>
+           no URL pattern matches this path
+<span class="c-crit">unresolved</span> selector <span class="c-dim">#promo-code</span>
+           carried over from an earlier edit</div>
+        I wrote the fetch against <code>/api/wishlist/toggle/</code>, but the route in
+        <code>urls.py</code> is <code>/api/wishlist/</code>. Fixing the call rather than adding
+        a second route.
+        <div class="tool"><span class="n">seamcheck_check</span>()
+          <span class="c-dim">→</span> <span class="c-ok">0 new findings</span></div>
+        Wired end to end: <code>toggleWishlist</code> → <code>/api/wishlist/</code> →
+        <code>wishlist_toggle</code>, and <code>#wishlist-btn</code> matches the template.
+      </div></div>
+    </div>
+  </div>
+  <div>
+    <div class="card">
+      <div class="head">one line to install<span class="tag">claude code</span></div>
+<pre><span class="c-dim">$</span> claude mcp add seamcheck -- seamcheck-mcp</pre>
+      <div class="body" style="padding-top:0">
+        <div class="tools"><span class="t">seamcheck_check</span><span class="t">seamcheck_report</span>
+          <span class="t">seamcheck_explain</span><span class="t">seamcheck_triage</span></div>
+      </div>
+    </div>
+    <div class="card" style="margin-top:20px">
+      <div class="head">.claude/skills/ship/SKILL.md<span class="tag">skill</span></div>
+<pre>Before handing work back, run <span class="c-warn">seamcheck_check</span>.
+
+Act on <span class="c-crit">unresolved</span> — the code reaches for
+something that is not there. Usually a rename.
+
+<span class="c-warn">unused</span> is a deletion candidate, not a deletion.
+
+<span class="c-dim">uncertain</span> is the scan declining to guess.
+<span class="c-crit">Never delete anything because of it.</span></pre>
+    </div>
+    <div class="rule"><b>The one rule for agents.</b> <code>uncertain</code> means no evidence
+      either way — it is the tool refusing to guess, not a finding. Every dead-code tool that
+      got this wrong is why nobody trusts them.</div>
+  </div>
+</div>
+<div class="mock">mockup · illustrative session</div>
+</div></body></html>

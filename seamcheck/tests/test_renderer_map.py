@@ -19,11 +19,28 @@ class MapRenderTests(SimpleTestCase):
 
         self.assertTrue(out.lstrip().startswith("<!doctype html>"))
 
-    def test_it_makes_no_network_requests(self):
+    def test_it_loads_nothing_from_the_network(self):
+        # The promise is that opening the file fetches nothing: no stylesheet, no script,
+        # no font, no image, no matter where it is opened or who is watching. Anchors are
+        # excluded deliberately - a link the reader may click is not a request the page
+        # makes - and the next test pins that they are the ONLY external references.
         out = map_html.render(_map())
 
-        for forbidden in ("http://", "https://", "<link", "<img", "url(", "@import", "srcset"):
+        for forbidden in ("<link", "<img", "<iframe", "url(", "@import", "srcset",
+                          "fetch(", "XMLHttpRequest", "importScripts", "<script src"):
             self.assertNotIn(forbidden, out)
+
+    def test_every_external_url_is_an_anchor_and_opens_away_from_the_report(self):
+        import re
+
+        out = map_html.render(_map())
+
+        for match in re.finditer(r"https?://", out):
+            before = out[max(0, match.start() - 120):match.start()]
+            self.assertRegex(before, r'<a href="$', "an external URL that is not an anchor")
+        for chunk in out.split('<a href="http')[1:]:
+            self.assertIn('target="_blank"', chunk[:220])
+            self.assertIn('rel="noreferrer"', chunk[:220])
 
     def test_the_script_escapes_labels_before_inserting_them(self):
         # 163 of this project's URL labels contain <path:object_id>; unescaped, the
@@ -601,3 +618,20 @@ class PathNumberingTests(SimpleTestCase):
         self.assertIn('<span class="hn">${step}</span>', out)
         self.assertIn('<span class="hs">last</span>', out)
         self.assertIn("Path — browser to backend · ${path.length} hop", out)
+
+
+class ColophonTests(SimpleTestCase):
+    def test_it_asks_once_at_the_bottom_of_the_panel_people_read(self):
+        # A tool that asks on every screen is an advert; one that never asks does not get
+        # maintained. One line, in Overview, under everything else.
+        out = map_html.render(_map())
+
+        self.assertEqual(out.count("github.com/sponsors"), 1)
+        self.assertIn("Got a finding wrong?", out)
+
+    def test_the_links_cannot_navigate_the_report_away(self):
+        out = map_html.render(_map())
+
+        for chunk in out.split('<a href="https://github.com')[1:]:
+            self.assertIn('target="_blank"', chunk[:200])
+            self.assertIn('rel="noreferrer"', chunk[:200])

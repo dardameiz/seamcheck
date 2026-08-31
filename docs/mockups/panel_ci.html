@@ -1,0 +1,87 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>CI gate</title>
+<style>
+:root{--bg:#0d1117;--panel:#151b24;--sunk:#0a0e14;--ink:#dde4ee;--muted:#8b97a8;
+--line:#252d38;--sig:#4aa3ff;--ok:#3fb27f;--crit:#f0736a;--warn:#a78bfa;--dim:#6f7b8c;}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);width:1440px;height:900px;
+ font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+ display:flex;align-items:center;justify-content:center;padding:44px}
+.wrap{width:100%;max-width:1230px}
+h1{font-size:26px;margin:0 0 6px;letter-spacing:-.3px}
+.sub{color:var(--muted);font-size:15px;margin:0 0 26px;max-width:78ch}
+.grid{display:grid;grid-template-columns:1.32fr 1fr;gap:20px;align-items:start}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:13px;overflow:hidden}
+.head{display:flex;align-items:center;gap:9px;padding:11px 15px;border-bottom:1px solid var(--line);
+ font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted)}
+.dot{width:11px;height:11px;border-radius:50%;flex:none}
+.r{background:#ff5f57}.y{background:#febc2e}.g{background:#28c840}
+.tag{margin-left:auto;font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;
+ padding:2px 8px;border-radius:5px;border:1px solid var(--line);color:var(--muted)}
+pre{margin:0;padding:16px 18px;font:13px/1.75 ui-monospace,SFMono-Regular,Menlo,monospace;
+ white-space:pre-wrap;overflow:hidden}
+.c-ok{color:var(--ok)}.c-crit{color:var(--crit)}.c-warn{color:var(--warn)}
+.c-dim{color:var(--dim)}.c-sig{color:var(--sig)}.b{font-weight:700}
+.exits{margin-top:20px;display:flex;gap:10px}
+.exit{flex:1;background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:13px 15px}
+.exit .code{font:20px ui-monospace,Menlo,monospace;font-weight:700}
+.exit .lbl{font-size:12.5px;color:var(--muted);margin-top:3px;line-height:1.45}
+.note{margin-top:18px;border-left:3px solid var(--warn);padding:11px 14px;border-radius:0 9px 9px 0;
+ background:#211a35;font-size:13px;color:var(--ink);line-height:1.55}
+.mock{position:fixed;right:22px;bottom:16px;font-size:11px;color:var(--dim);letter-spacing:.06em}
+</style></head><body><div class="wrap">
+<h1>A gate that can tell "clean" from "never ran"</h1>
+<p class="sub">Existing findings do not fail the build — only the ones this change introduced. So you can
+turn it on today, in a project that already has a backlog.</p>
+<div class="grid">
+  <div class="card">
+    <div class="head"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+      pull request #482 — “add wishlist toggle”<span class="tag">CI</span></div>
+<pre><span class="c-dim">$</span> seamcheck check --since <span class="c-sig">$BASE_SHA</span>
+
+[<span class="c-ok">████████████████</span>] 18/18 classifying          6.2s
+
+<span class="c-crit b">new_unresolved</span>  fetch:/api/wishlist/toggle/@catalogue.js:88
+   <span class="c-dim">means</span>  The frontend fetches this path and no URL
+          pattern matches it.
+   <span class="c-dim">check</span>  Renamed, removed, or built at runtime. The
+          first two 404 in the browser.
+
+<span class="c-crit b">new_unresolved</span>  dom_selector:#promo-code@checkout.js:61
+   <span class="c-dim">means</span>  JavaScript queries this selector and no
+          template renders a matching element.
+   <span class="c-dim">check</span>  The field in cart.html is <span class="c-warn">#promo-input</span>.
+
+<span class="c-warn b">new_unused</span>      css_selector:.book-carousel
+
+counts: {connected: 196, unresolved: 20, unused: 27, uncertain: 12}
+
+<span class="c-crit b">✗ 3 new findings introduced by this change</span>
+<span class="c-dim">$</span> echo $?
+<span class="c-crit b">1</span></pre>
+  </div>
+  <div>
+    <div class="card">
+      <div class="head">.github/workflows/ci.yml<span class="tag">yaml</span></div>
+<pre><span class="c-sig">- name:</span> Connectivity gate
+  <span class="c-sig">run:</span> |
+    pip install seamcheck
+    seamcheck check \
+      --since ${{ github.event.pull_request.base.sha }} \
+      --format markdown --out findings.md
+
+<span class="c-sig">- name:</span> Comment the digest
+  <span class="c-sig">if:</span> always()
+  <span class="c-sig">run:</span> gh pr comment --body-file findings.md</pre>
+    </div>
+    <div class="exits">
+      <div class="exit"><div class="code c-ok">0</div><div class="lbl">clean — nothing new</div></div>
+      <div class="exit"><div class="code c-crit">1</div><div class="lbl">new findings</div></div>
+      <div class="exit"><div class="code c-warn">2</div><div class="lbl">no baseline — the gate did not run</div></div>
+    </div>
+    <div class="note"><b>Why three codes.</b> A gate with nothing to compare against has not
+      passed — it has not run. Reporting that as <b>0</b> is how a broken gate stays green
+      for months.</div>
+  </div>
+</div>
+<div class="mock">mockup · illustrative output</div>
+</div></body></html>
