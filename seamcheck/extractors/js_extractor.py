@@ -13,7 +13,11 @@ from seamcheck.graph import Edge, Status, Symbol
 from seamcheck.nodetools import parser_path, report, run_parser
 
 _JS_TOOLS = os.path.join(os.path.dirname(__file__), os.pardir, "js_tools")
-_JS_EXTENSIONS = (".js", ".mjs", ".jsx")
+# .js first, deliberately: where a project ships `foo.js` beside `foo.ts` the .js is
+# usually build output, but preferring it preserves the behaviour every existing scan
+# already has. TypeScript and JSX reach acorn through sucrase in parse_js.mjs, which
+# strips types and compiles JSX while preserving the line count exactly.
+_JS_EXTENSIONS = (".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".mts", ".cts")
 
 # fetch() is the whole HTTP surface in most modern front ends, but sendBeacon() is a real
 # request too: omitting it leaves its endpoint looking orphaned.
@@ -92,17 +96,14 @@ def _parse_files(paths: list[str], *, report_failures: bool = True) -> dict[str,
         else:
             # A file the parser could not read used to vanish here without a word. Every
             # symbol in it then went missing from a scan that still reported success --
-            # the exact shape of bug this tool exists to find. The parser is acorn, which
-            # does not speak TypeScript or JSX, so on a React or TS codebase this is not
-            # an edge case: it is every file.
+            # the exact shape of bug this tool exists to find.
             failed.append(record.get("path", "?"))
     if failed and report_failures:
         shown = ", ".join(os.path.basename(path) for path in failed[:3])
         report(
             "js-parse-failures",
             "%s JavaScript file(s) could not be parsed and contributed no symbols (%s%s). "
-            "Anything they reference will look unused. The bundled parser reads .js/.mjs "
-            "only -- TypeScript and JSX are not supported yet.",
+            "Anything they reference will look unused.",
             len(failed), shown, ", ..." if len(failed) > 3 else "",
         )
     return parsed
@@ -158,7 +159,7 @@ def _resolve_import(current_file: str, import_path: str) -> str | None:
     for extension in _JS_EXTENSIONS:
         if os.path.isfile(base + extension):
             return base + extension
-    for index_name in ("index.js", "index.mjs"):
+    for index_name in ("index.js", "index.mjs", "index.ts", "index.tsx", "index.jsx"):
         candidate = os.path.join(base, index_name)
         if os.path.isfile(candidate):
             return candidate

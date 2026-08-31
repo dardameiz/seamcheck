@@ -46,8 +46,9 @@ No guessing, and no "supports Python" hand-waving — a framework is either read
 | **JavaScript** — `.js`, `.mjs`, inline `<script>` | ✅ `fetch`, `sendBeacon`, `querySelector`, `classList`, `dataset` |
 | **CSS** — files and inline `<style>` | ✅ selectors, custom properties, `[data-*]` attribute selectors |
 | **Templates** — Django, Jinja, **Twig**, **Blade**, **ERB**, Handlebars | ✅ ids, classes and `data-` attributes. Measured identical across all six: the scanner reads HTML *attributes*, and an attribute is an attribute whatever generated it |
-| **TypeScript** — `.ts`, `.tsx` | ❌ **not read at all.** Not discovered, and the bundled parser cannot strip type annotations |
-| **React / JSX** | ❌ `.jsx` fails to parse, and `className={styles.x}` is computed rather than literal, so the DOM half needs new extractors, not just a parser |
+| **TypeScript** — `.ts`, `.tsx`, `.d.ts` | ✅ **parsed**, including generics, `interface`, and legacy/parameter decorators (NestJS, Angular). Measured **100% parse rate** across 7,078 files in three cloned repos |
+| **JSX** — `.jsx`, `.tsx`, and JSX inside `.js` | ✅ **parsed** |
+| **React component graph** | ❌ not yet. Files parse, so `fetch()` calls in them are found — but `className={styles.x}` is computed rather than literal, so the DOM half needs new extractors |
 
 A scan **tells you** when a file could not be parsed, rather than silently dropping it.
 
@@ -359,8 +360,9 @@ Written down because a tool that hides its blind spots is worse than no tool:
 - **A project that routes through its own helper gets few routes.** Two of the six repos
   validated against do this. The scan reports the route list as incomplete, and says why,
   rather than presenting a confident near-zero.
-- **No TypeScript.** `.ts` and `.tsx` are not read at all. That takes Next.js and NestJS
-  with it, since both are TypeScript by default.
+- **No React component graph.** TypeScript and JSX parse, so `fetch()` calls in them are
+  found, but a dead component or a `styles.foo` nothing defines is not — React builds the
+  DOM differently enough to need its own extractors.
 - **Vanilla JS.** No React or Vue component graph; `.jsx` does not parse, and React builds
   the DOM differently enough that it needs new extractors rather than just a parser.
 - **Celery, Redis, WebSockets and Stripe aren't traced.** Anything reached only through

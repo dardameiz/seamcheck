@@ -74,6 +74,18 @@ REPOS = [
         "why": "a very large Express monorepo - the hardest shape to detect correctly",
     },
     {
+        "name": "excalidraw",
+        "url": "https://github.com/excalidraw/excalidraw",
+        "adapter": "none",
+        "why": "a large React + TypeScript front end - the TypeScript gate, not a backend",
+    },
+    {
+        "name": "nestjs-realworld",
+        "url": "https://github.com/lujakob/nestjs-realworld-example-app",
+        "adapter": "none",
+        "why": "NestJS: TypeScript decorators, the shape a Node backend adapter must read",
+    },
+    {
         "name": "nodebb",
         "url": "https://github.com/NodeBB/NodeBB",
         "adapter": "express",

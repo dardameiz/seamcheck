@@ -77,4 +77,8 @@ def run_parser(script: str, paths: list[str], what: str) -> list[str]:
                       "still ran. %s", what, os.path.basename(script), result.returncode,
                 (result.stderr or "").strip().splitlines()[-1:] or "")
         return []
-    return result.stdout.splitlines()
+    # split("\n"), never splitlines(): Python also breaks on U+2028 and U+2029, which are
+    # legal unescaped inside a JSON string and appear verbatim in real JavaScript source.
+    # One of them in one file of a 6,378-file repository cut a record in half and made the
+    # whole run unparseable.
+    return [line for line in result.stdout.split("\n") if line]
