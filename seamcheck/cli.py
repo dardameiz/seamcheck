@@ -117,6 +117,24 @@ COMMANDS: dict[str, Command] = {
         takes_number="--backfill",
         number_default="20",
     ),
+    "config": Command(
+        args=["--show-config"],
+        summary="Show the paths a scan will use, and where each came from.",
+        detail=(
+            "Seamcheck works out most of its config from the project: Django already knows "
+            "where its URLconf, templates, apps and static dirs are, so asking the settings "
+            "and the app registry is exact rather than a guess. Anything you set in "
+            "SEAMCHECK_CONFIG wins over what was detected.\n\n"
+            "Run this first on a project you have not scanned before. A wrong path is the "
+            "difference between a real report and an invented one - a CSS root set narrow "
+            "enough to exclude stylesheets whose templates are still being read will report "
+            "working CSS as broken, and the only way to catch that is to look at the paths."
+        ),
+        examples=[
+            ("seamcheck config", "what this project resolved to"),
+            ("seamcheck config --repo-root ../other", "for a project you are not standing in"),
+        ],
+    ),
     "scan": Command(
         args=[],
         summary="Scan and print the totals. No UI, no server.",

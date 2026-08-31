@@ -82,6 +82,10 @@ class Command(BaseCommand):
             help="Open the written file in your browser when it is done.",
         )
         parser.add_argument(
+            "--show-config", action="store_true",
+            help="Print the config a scan would use, and where each value came from.",
+        )
+        parser.add_argument(
             "--no-progress", action="store_true",
             help="Never draw the progress bar (it is off already when output is redirected).",
         )
@@ -105,6 +109,8 @@ class Command(BaseCommand):
             # other path (bare --check, --since, the no-flags summary) silently ignores
             # it - "wrote the report" that never happened is worse than an error.
             raise CommandError("--out only applies together with --format (or --json).")
+        if options["show_config"]:
+            return self._show_config(options["repo_root"])
         if options["triage"]:
             return self._triage(options)
         if options["explain"]:
@@ -141,6 +147,39 @@ class Command(BaseCommand):
         if options["check"] or options["since"]:
             return self._check(options)
         return self._summary(options)
+
+    def _show_config(self, repo_root):
+        """What the scan will use, and why - because detection must not be a black box.
+
+        A wrong path is the difference between a real report and an invented one: the one
+        config bug found while validating this against a real project had a CSS root set
+        narrow enough to exclude stylesheets whose templates were still being read, and it
+        manufactured 185 findings. If a value is wrong, a reader has to be able to SEE that
+        it is wrong.
+        """
+        from seamcheck.autoconfig import effective
+
+        config, why = effective(repo_root)
+        if not config:
+            self.stdout.write(
+                "No config, and nothing detected. Seamcheck reads a Django project's "
+                "URLconf, templates and static files, so it needs at least "
+                "settings.ROOT_URLCONF to be set."
+            )
+            return
+        width = max(len(key) for key in config)
+        self.stdout.write("The config this scan will use:\n")
+        for key in sorted(config):
+            value = config[key]
+            if isinstance(value, list) and len(value) > 3:
+                value = f"[{len(value)} items] {value[:3]} ..."
+            self.stdout.write(f"  {key:<{width}}  {value}")
+            self.stdout.write(f"  {'':<{width}}  \u2514\u2500 {why.get(key, 'default')}")
+        declared = sum(1 for key in config if why.get(key) == "SEAMCHECK_CONFIG")
+        self.stdout.write(
+            f"\n  {declared} from SEAMCHECK_CONFIG, {len(config) - declared} detected from "
+            "the project.\n  Anything you set in SEAMCHECK_CONFIG wins over detection."
+        )
 
     def _triage(self, options):
         if not options["status"]:

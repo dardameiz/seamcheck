@@ -7,8 +7,6 @@ import glob
 import os
 import pathlib
 
-from django.conf import settings
-
 from seamcheck.diff import DiffResult, diff_graphs
 from seamcheck.graph import Graph, Status, relativise
 from seamcheck.pipeline import SCAN_PHASES, run_scan
@@ -27,7 +25,25 @@ from seamcheck.triage import (
 
 
 def _config() -> dict:
-    return getattr(settings, "SEAMCHECK_CONFIG", {})
+    """What was configured, over what was detected from the project.
+
+    Seamcheck used to read SEAMCHECK_CONFIG and nothing else, so `pip install seamcheck`
+    followed by a scan did nothing until the reader had reverse-engineered eight paths out
+    of their own settings. Django already knows most of them; see seamcheck.autoconfig.
+
+    Explicit config wins key by key, so this cannot change the answer for a project that
+    had already configured itself.
+    """
+    from seamcheck.autoconfig import effective
+
+    merged, _ = effective(_CONFIG_ROOT[0])
+    return merged
+
+
+# Detection is relative to the repo, and every public entry point already takes a
+# repo_root. Rather than thread it through _config()'s dozen call sites, the scan records
+# which root it is working on. Single-process CLI and MCP server; no concurrent scans.
+_CONFIG_ROOT = ["."]
 
 
 def _static_root(config: dict, repo_root: str) -> str:
@@ -83,6 +99,7 @@ MAP_STEPS = SCAN_STEPS + len(MAP_PHASES)
 
 def scan(repo_root: str = ".", progress: Progress | None = None) -> Graph:
     progress = progress or null()
+    _CONFIG_ROOT[0] = repo_root
     progress.step("JavaScript entry points")
     config = _config()
     js_entry_files, js_project_root = _js_roots(config, repo_root)
