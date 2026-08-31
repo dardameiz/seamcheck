@@ -34,7 +34,7 @@ No guessing, and no "supports Python" hand-waving — a framework is either read
 |---|---|---|
 | **Django** | Python | ✅ **routes, views, models, ASGI, `{% url %}`, `reverse()`** — two modes: ask Django (exact), or parse `urls.py` as text so a cloned repo scans with nothing installed (**95% of declared routes**) |
 | **FastAPI** | Python | ✅ **routes and handlers** — decorators, `APIRouter` prefixes, `include_router` nesting, sub-app `mount()`, and prefixes held in settings. Validated on three cloned repos incl. a 717-file production app |
-| Express · Fastify | JavaScript | ⏳ planned — an Express app is plain JS and **the syntax tree is already built**; nothing yet looks for `app.get()` |
+| **Express · Fastify** | JavaScript | ✅ **routes and handlers** — `app.get()`, `Router()`, `use()` mounts composed through CommonJS `require`/`module.exports`, factory exports, re-exports, and Fastify's `register(plugin, {prefix})`. Validated on three cloned repos incl. a 2,895-file monorepo |
 | Next.js | TypeScript | ⏳ planned — its routes are the **filesystem**, so no parser is needed, but its files are `.ts` (see below) |
 | Laravel | PHP | ⏳ planned — `routes/web.php` is a flat list, and **Blade templates already work** |
 | Rails | Ruby | ⏳ planned — `config/routes.rb` is a DSL; ERB needs one regex |
@@ -353,9 +353,12 @@ the URL carries a random token so nothing on your network stumbles into it.
 
 Written down because a tool that hides its blind spots is worse than no tool:
 
-- **Two backends: Django and FastAPI.** A Rails, Laravel or Express project gets the
-  JS/CSS/DOM half and no routes — and with no route list, every `fetch` is reported
+- **Three backends: Django, FastAPI and Express/Fastify.** A Rails or Laravel project gets
+  the JS/CSS/DOM half and no routes — and with no route list, every `fetch` is reported
   unresolved, so the scan says that out loud rather than showing a confident wrong answer.
+- **A project that routes through its own helper gets few routes.** Two of the six repos
+  validated against do this. The scan reports the route list as incomplete, and says why,
+  rather than presenting a confident near-zero.
 - **No TypeScript.** `.ts` and `.tsx` are not read at all. That takes Next.js and NestJS
   with it, since both are TypeScript by default.
 - **Vanilla JS.** No React or Vue component graph; `.jsx` does not parse, and React builds
