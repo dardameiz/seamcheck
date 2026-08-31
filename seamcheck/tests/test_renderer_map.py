@@ -313,7 +313,41 @@ class MergedReviewViewTests(SimpleTestCase):
         out = map_html.render(_map(), console=self._console())
 
         self.assertIn("function pct(n, total)", out)
-        self.assertIn("are the ones to look at", out)
+        self.assertIn("To look at", out)
+
+    def test_the_findings_bar_is_scaled_to_the_findings(self):
+        # Drawn against the whole codebase it was 96% connected-and-uncertain - the two
+        # statuses nobody acts on - with the part you came for a sliver at the far edge.
+        out = map_html.render(_map(), console=self._console())
+
+        self.assertIn("(all[k] / looking) * 100", out)
+        self.assertIn('class="split"', out)
+
+    def test_backend_and_frontend_share_one_scale(self):
+        # Two cards each drawn to their own width made 854 and 35,890 look like comparable
+        # quantities sitting side by side.
+        out = map_html.render(_map(), console=self._console())
+
+        self.assertIn("const widest = Math.max(...rows.map(r => r.total), 1);", out)
+        self.assertIn("(r.total / widest) * 100", out)
+
+    def test_each_side_is_rated_against_itself_not_the_project(self):
+        # A share of the total says only which half is bigger - a fact about the project,
+        # not about its health.
+        out = map_html.render(_map(), console=self._console())
+
+        self.assertIn("pct(r.finds, r.total)", out)
+
+    def test_an_empty_to_do_list_says_so_rather_than_drawing_a_bar_of_nothing(self):
+        out = map_html.render(_map(), console=self._console())
+
+        self.assertIn("That is the whole to-do list.", out)
+
+    def test_the_header_row_draws_no_bar_track(self):
+        # With the track background on it, the header read as an empty third row of data.
+        out = map_html.render(_map(), console=self._console())
+
+        self.assertIn(".whead .wbar { background:none; }", out)
 
     def test_the_map_list_toggle_is_not_a_grey_chip(self):
         # The one control that changes what kind of thing you are looking at.

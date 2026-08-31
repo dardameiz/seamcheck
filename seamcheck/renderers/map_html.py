@@ -256,8 +256,6 @@ svg.nolabels .nd text { display:none; }
 .card .k { font-size:10px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); }
 .card .v { font-size:24px; font-weight:700; margin:2px 0 7px; }
 .card .vs { font-size:13px; font-weight:600; color:var(--muted); }
-/* One bar, four segments, to scale. The shares are the result; the counts are the detail
-   under them. A number with no denominator is not a result. */
 .stack { display:flex; height:9px; border-radius:5px; overflow:hidden; background:var(--sunk);
          margin:0 0 10px; }
 .stack i { display:block; height:100%; }
@@ -265,12 +263,59 @@ svg.nolabels .nd text { display:none; }
 .stack i.unresolved { background:var(--crit); }
 .stack i.unused { background:var(--warn); }
 .stack i.uncertain { background:var(--dim); }
-.tallies { display:flex; flex-wrap:wrap; gap:6px 18px; }
-.ty { display:flex; align-items:baseline; gap:6px; font-size:12.5px; }
-.ty b { font-variant-numeric:tabular-nums; }
-.ty .pc { color:var(--muted); font-size:11.5px; font-variant-numeric:tabular-nums;
-          font-family:ui-monospace,Menlo,monospace; }
-.panel h3.sec { font-size:13px; margin:22px 0 9px; }
+.panel h3.sec { font-size:13px; margin:24px 0 10px; }
+
+/* The one number worth opening the page for, at the size that says so. */
+.hero { background:var(--panel); border:1px solid var(--line); border-radius:12px;
+        padding:15px 17px; }
+.hero .hk { font-size:10px; text-transform:uppercase; letter-spacing:.09em; color:var(--muted); }
+.hero .hv { font-size:34px; font-weight:700; letter-spacing:-.5px; margin:1px 0 12px;
+            display:flex; align-items:baseline; gap:11px; font-variant-numeric:tabular-nums; }
+.hero .hp { font-size:13px; font-weight:500; color:var(--muted); letter-spacing:0; }
+/* Findings against findings. Drawn against the whole codebase this bar was 96% the two
+   statuses nobody acts on, and the part you came for was a sliver at the far edge. */
+.split { display:flex; height:14px; border-radius:7px; overflow:hidden; background:var(--sunk); }
+.split i { display:block; height:100%; }
+.split i.unresolved { background:var(--crit); }
+.split i.unused { background:var(--warn); }
+.splitkey { display:flex; flex-wrap:wrap; gap:5px 22px; margin-top:11px; }
+.kk { display:flex; align-items:baseline; gap:7px; font-size:12.5px; max-width:60ch; }
+.kk i { width:9px; height:9px; border-radius:2px; flex:none; transform:translateY(1px); }
+.kk i.unresolved { background:var(--crit); }
+.kk i.unused { background:var(--warn); }
+.kk b { font-variant-numeric:tabular-nums; }
+.kk em { font-style:normal; color:var(--muted); }
+.rest { margin:13px 0 0; padding-top:12px; border-top:1px solid var(--line);
+        color:var(--muted); font-size:12.5px; line-height:1.6; max-width:78ch; }
+.rest b { color:var(--ink); font-variant-numeric:tabular-nums; }
+
+/* One scale for both sides, or the comparison the layout invites is a lie. */
+.wtable { background:var(--panel); border:1px solid var(--line); border-radius:12px;
+          padding:6px 15px 12px; }
+.wrow { display:grid; grid-template-columns:88px 1fr 78px 78px 58px; gap:12px;
+        align-items:center; padding:9px 0; border-bottom:1px solid var(--line); }
+.wrow:last-child { border-bottom:0; }
+.whead { padding:9px 0 6px; border-bottom:1px solid var(--line); }
+/* The header's bar cell is a spacer, not a bar. With the track background on it, it read
+   as an empty third row above the data. */
+.whead .wbar { background:none; }
+.whead .wnum { font-size:9.5px; text-transform:uppercase; letter-spacing:.08em;
+               color:var(--muted); font-weight:500; }
+.wname { font-size:13px; font-weight:600; }
+.wbar { height:16px; background:var(--sunk); border-radius:5px; overflow:hidden; }
+.wbar i { display:block; height:100%; background:var(--ok); border-radius:5px 0 0 5px;
+          position:relative; min-width:2px; }
+.wbar em { position:absolute; right:0; top:0; height:100%; background:var(--crit);
+           display:block; }
+.wnum { text-align:right; font-size:13px; font-variant-numeric:tabular-nums;
+        font-family:ui-monospace,Menlo,monospace; }
+.wnum.hot { color:var(--crit); font-weight:700; }
+.wnum.cool { color:var(--muted); }
+
+@media (max-width: 760px) {
+  .wrow { grid-template-columns:74px 1fr 62px 46px; }
+  .wrow > :nth-child(4) { display:none; }
+}
 .gap { color:var(--muted); font-size:12.5px; border:1px dashed var(--line);
        border-radius:9px; padding:11px 12px; }
 .more { text-align:center; padding:10px; border:1px solid var(--line); border-radius:9px;
@@ -1178,42 +1223,83 @@ function bar(counts, total) {
     .join("") + `</div>`;
 }
 
-function tally(counts, total) {
-  return ["unresolved", "unused", "uncertain", "connected"].map(k =>
-    `<div class="ty"><span class="pill ${k}">${k}</span>
-      <b>${(counts[k] || 0).toLocaleString()}</b>
-      <span class="pc">${pct(counts[k] || 0, total)}</span></div>`).join("");
-}
+const n = v => (v || 0).toLocaleString();
 
-function overviewHtml() {
-  const sum = c => Object.values(c).reduce((a, n) => a + n, 0);
+// The four statuses split two ways that matter, and only one of them is a to-do list.
+function totals() {
   const all = {};
   ["connected", "unresolved", "unused", "uncertain"].forEach(k => {
     all[k] = (D.backend[k] || 0) + (D.frontend[k] || 0);
   });
-  const total = sum(all), back = sum(D.backend), front = sum(D.frontend);
-  const looking = (all.unresolved || 0) + (all.unused || 0);
+  const sum = c => Object.values(c).reduce((a, v) => a + v, 0);
+  return {all, total: sum(all), looking: (all.unresolved || 0) + (all.unused || 0)};
+}
 
+// Findings drawn against FINDINGS, not against the codebase. A stacked bar of all four
+// statuses spends 96% of its width on connected and uncertain - the two nobody acts on -
+// and leaves the 4% you came for as a sliver at the far right. Inside the actionable set
+// the split is legible, which is the only place a bar earns its ink here.
+function heroHtml() {
+  const {all, total, looking} = totals();
+  const rest = total - looking;
+  const seg = k => !all[k] ? "" :
+    `<i class="${k}" style="width:${(all[k] / looking) * 100}%"
+        title="${k} — ${n(all[k])}"></i>`;
+  const key = k => !all[k] ? "" : `<span class="kk"><i class="${k}"></i>
+    <b>${n(all[k])}</b> ${k} <em>${esc((MEANING["*|" + k] || {}).means || "")}</em></span>`;
+
+  return `<div class="hero">
+    <div class="hk">To look at</div>
+    <div class="hv">${n(looking)}<span class="hp">${pct(looking, total)} of ${n(total)} symbols</span></div>
+    ${looking ? `<div class="split">${seg("unresolved")}${seg("unused")}</div>
+    <div class="splitkey">${key("unresolved")}${key("unused")}</div>`
+      : `<div class="gap">Nothing unresolved and nothing unused. That is the whole to-do list.</div>`}
+    <p class="rest">The other ${n(rest)} are not findings —
+      <b>${n(all.connected)}</b> connected (${pct(all.connected, total)}), evidence attached, and
+      <b>${n(all.uncertain)}</b> uncertain (${pct(all.uncertain, total)}), which is the scan
+      declining to guess rather than a claim that anything is dead.</p>
+  </div>`;
+}
+
+// Backend against frontend, on ONE scale. Two cards each drawn to their own width made 854
+// and 35,890 look like comparable quantities sitting side by side, and reported each as a
+// share of the total - which says only "the frontend is bigger", a fact about the project
+// and not about its health. The bar is size; the darker inset is that side's own findings;
+// the rate is findings over that side's own symbols. On this project it says the thing that
+// matters in one line: the backend is clean and every finding is in the frontend.
+function sidesHtml() {
+  const sum = c => Object.values(c).reduce((a, v) => a + v, 0);
+  const rows = [["Frontend", D.frontend], ["Backend", D.backend]]
+    .map(([name, c]) => ({
+      name, total: sum(c), finds: (c.unresolved || 0) + (c.unused || 0),
+    }))
+    .sort((a, b) => b.total - a.total);
+  const widest = Math.max(...rows.map(r => r.total), 1);
+
+  return `<h3 class="sec">Where the work is</h3>
+    <div class="wtable">
+      <div class="wrow whead"><div class="wname"></div><div class="wbar"></div>
+        <div class="wnum">symbols</div><div class="wnum">to look at</div><div class="wnum">rate</div></div>
+      ${rows.map(r => `<div class="wrow">
+        <div class="wname">${esc(r.name)}</div>
+        <div class="wbar"><i style="width:${(r.total / widest) * 100}%">
+          <em style="width:${r.total ? (r.finds / r.total) * 100 : 0}%"></em></i></div>
+        <div class="wnum">${n(r.total)}</div>
+        <div class="wnum ${r.finds ? "hot" : "cool"}">${n(r.finds)}</div>
+        <div class="wnum ${r.finds ? "hot" : "cool"}">${pct(r.finds, r.total)}</div>
+      </div>`).join("")}
+    </div>
+    <p class="gloss">Both bars share one scale, so the sizes are comparable; the darker inset
+      is that side's own findings. The rate is findings over that side's own symbols — a share
+      of the whole project would only tell you which half is bigger.</p>`;
+}
+
+function overviewHtml() {
   return `<h2>Overview</h2><p class="blurb">What the scan is willing to claim about this
-    commit, as counts and as shares. A count with no denominator is not a result.</p>
+    commit, worst first. A count with no denominator is not a result.</p>
 
-    <div class="cards">
-      <div class="card wide"><div class="k">Everything the scan found</div>
-        <div class="v">${total.toLocaleString()}</div>
-        ${bar(all, total)}
-        <div class="tallies">${tally(all, total)}</div>
-        <p class="gloss"><b>${looking.toLocaleString()}</b>
-          (${pct(looking, total)}) are the ones to look at — unresolved or unused.
-          The rest is either evidenced or unmeasured.</p></div>
-    </div>
-    <div class="cards">
-      <div class="card"><div class="k">Backend</div>
-        <div class="v">${back.toLocaleString()} <span class="vs">${pct(back, total)}</span></div>
-        ${bar(D.backend, back)}${pills(D.backend)}</div>
-      <div class="card"><div class="k">Frontend</div>
-        <div class="v">${front.toLocaleString()} <span class="vs">${pct(front, total)}</span></div>
-        ${bar(D.frontend, front)}${pills(D.frontend)}</div>
-    </div>
+    ${heroHtml()}
+    ${sidesHtml()}
 
     <h3 class="sec">What the four words claim</h3>
     <div class="skey">${statusKey()}</div>
