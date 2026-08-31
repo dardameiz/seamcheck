@@ -1,7 +1,7 @@
 from django.test import SimpleTestCase
 
 from seamcheck.graph import Edge, Graph, Status, Symbol
-from seamcheck.mapdata import build_map
+from seamcheck.mapdata import UNREACHED_PAGE, build_map
 
 
 def _symbol(id_, kind, label=None, status=Status.CONNECTED, file="a.js"):
@@ -9,6 +9,11 @@ def _symbol(id_, kind, label=None, status=Status.CONNECTED, file="a.js"):
         id=id_, kind=kind, label=label or id_, sub="", file=file, line=1,
         status=status, snippet=id_, chain=[id_], note="",
     )
+
+
+def _entries(built):
+    """The pages rooted at an entry point, without the not-reached buckets."""
+    return [page for page in built.pages if not page.page.startswith(UNREACHED_PAGE + ":")]
 
 
 def _graph():
@@ -32,7 +37,7 @@ class PageScopingTests(SimpleTestCase):
         self.map = build_map(_graph(), {"home": {"a.js"}}, git_sha="abc123", now="2026-08-30T00:00:00")
 
     def test_one_page_map_per_page_with_content(self):
-        self.assertEqual([p.page for p in self.map.pages], ["home"])
+        self.assertEqual([p.page for p in _entries(self.map)], ["home"])
 
     def test_the_page_is_the_root_node(self):
         kinds = {n.kind for n in self.map.pages[0].nodes}
@@ -62,7 +67,7 @@ class PageScopingTests(SimpleTestCase):
     def test_a_page_with_no_symbols_is_dropped(self):
         built = build_map(_graph(), {"empty": {"nothing.js"}}, git_sha="abc", now="t")
 
-        self.assertEqual(built.pages, [])
+        self.assertEqual(_entries(built), [])
 
     def test_edges_carry_their_status(self):
         statuses = {e.status for e in self.map.pages[0].edges}
@@ -142,8 +147,63 @@ class PageNamingTests(SimpleTestCase):
                 "aa-main": PageName(title="Store", where="", entry="aa-main"),
             },
         )
-        self.assertEqual([page.title for page in built.pages], ["Arena", "Store"])
+        self.assertEqual([page.title for page in _entries(built)], ["Arena", "Store"])
 
     def test_without_names_a_page_still_renders_under_its_bundle_filename(self):
         built = build_map(_graph(), {"push-arena-main": {"a.js"}}, git_sha="sha")
         self.assertEqual(built.pages[0].title, "push-arena-main")
+
+
+class UnreachedTests(SimpleTestCase):
+    """90% of a real scan is reached by no page entry, and the map simply omitted it."""
+
+    def test_symbols_no_page_reaches_still_get_a_page(self):
+        # Clicking `models.py` in the Files view drew an empty canvas, which is
+        # indistinguishable from "this file is dead" - and models are reached by Django,
+        # never by a browser page, so an empty canvas was the wrong answer to a fair
+        # question.
+        graph = _graph()
+        built = build_map(graph, {"home": {"a.js"}}, git_sha="abc", now="t")
+
+        covered = {n.id for p in _entries(built) for n in p.nodes}
+        unreached = {n.id for p in built.pages
+                     if p.page.startswith(UNREACHED_PAGE + ":") for n in p.nodes}
+        every = {s.id for s in graph.symbols}
+
+        self.assertEqual(every - covered, unreached)
+
+    def test_nothing_is_counted_on_both_sides(self):
+        built = build_map(_graph(), {"home": {"a.js"}}, git_sha="abc", now="t")
+
+        covered = {n.id for p in _entries(built) for n in p.nodes}
+        unreached = {n.id for p in built.pages
+                     if p.page.startswith(UNREACHED_PAGE + ":") for n in p.nodes}
+
+        self.assertEqual(covered & unreached, set())
+
+    def test_the_buckets_say_why_rather_than_naming_a_verdict(self):
+        # Being unreached is not a finding: Django reaches a model, a webhook reaches a
+        # route. Each symbol keeps its own status, and the bucket explains itself.
+        built = build_map(_graph(), {"home": {"a.js"}}, git_sha="abc", now="t")
+
+        buckets = [p for p in built.pages if p.page.startswith(UNREACHED_PAGE + ":")]
+        self.assertTrue(buckets)
+        for bucket in buckets:
+            self.assertEqual(bucket.title, "Not reached from any page")
+            self.assertIn("—", bucket.where)
+
+    def test_a_fully_reached_graph_produces_no_buckets(self):
+        graph = _graph()
+        built = build_map(graph, {"home": {"a.js"}}, git_sha="abc", now="t")
+        reached = {n.id for p in _entries(built) for n in p.nodes}
+
+        # Everything the entry page did not reach, removed - so nothing is left over.
+        trimmed = Graph(
+            symbols=[s for s in graph.symbols if s.id in reached],
+            edges=[e for e in graph.edges if e.from_id in reached and e.to_id in reached],
+        )
+        again = build_map(trimmed, {"home": {"a.js"}}, git_sha="abc", now="t")
+
+        self.assertEqual(
+            [p for p in again.pages if p.page.startswith(UNREACHED_PAGE + ":")], []
+        )

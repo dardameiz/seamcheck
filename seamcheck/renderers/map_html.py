@@ -38,7 +38,7 @@ _CSS = """
      node is 4px tall at full-page zoom - which is where most of this map is read. */
   --bg:#f7f8fa; --panel:#ffffff; --sunk:#eef0f4;
   --ink:#0f1319; --muted:#5a6473; --line:#dfe3ea;
-  --sig:#0b6bcb;
+  --sig:#0b6bcb; --sig-fill:#e7f0fb; --sig-fill-hi:#d5e6f8;
   /* Four statuses, four hues that survive being 4px tall. `unused` was #9a6410 - a dark
      amber that reads as another red next to #c0362c, so the two categories a reader is
      meant to triage differently looked like one. It is violet now: no red in it at all,
@@ -50,7 +50,7 @@ _CSS = """
   :root {
     --bg:#0d1117; --panel:#151b24; --sunk:#0a0e14;
     --ink:#dde4ee; --muted:#8b97a8; --line:#252d38;
-    --sig:#4aa3ff;
+    --sig:#4aa3ff; --sig-fill:#12243a; --sig-fill-hi:#183353;
     --ok:#3fb27f; --crit:#f0736a; --warn:#a78bfa; --dim:#6f7b8c;
     --ok-fill:#10281e; --crit-fill:#2c1618; --warn-fill:#211a35; --dim-fill:#161c24;
   }
@@ -90,6 +90,12 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overf
 .crumbrow button { flex:none; padding:7px 10px; font-size:12px; border-radius:8px;
                    border:1px solid var(--line); background:var(--bg); color:var(--ink);
                    cursor:pointer; }
+/* The one control that changes what kind of thing you are looking at, and it read as a
+   disabled-looking grey chip beside the breadcrumb. It is the accent colour, it says
+   which way it will switch you, and it carries the icon of the destination. */
+#aslist { font-weight:600; color:var(--sig); border-color:var(--sig);
+          background:var(--sig-fill); letter-spacing:.01em; }
+#aslist:hover { background:var(--sig-fill-hi); }
 #crumb { flex:1 1 auto; min-width:0; font-size:12px; color:var(--muted);
          white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 #q { flex:0 1 150px; min-width:78px; padding:6px 9px; font-size:12.5px; border-radius:7px;
@@ -116,6 +122,8 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overf
         background:linear-gradient(135deg,var(--crit-fill) 50%,var(--warn-fill) 50%); }
 .note { padding:0 12px 8px; font-size:11.5px; color:var(--muted); }
 .note:empty { display:none; }
+/* Not a warning - a statement of what is on screen versus what exists. */
+.capnote { color:var(--warn); }
 /* A deleted symbol is in no current page, so no canvas can show it. Naming it here is
    the difference between "this commit removed one selector" and an empty screen. */
 .gone { padding:0 12px 9px; font-size:11.5px; }
@@ -244,8 +252,25 @@ svg.nolabels .nd text { display:none; }
 .cards { display:flex; gap:10px; flex-wrap:wrap; }
 .card { flex:1 1 210px; background:var(--panel); border:1px solid var(--line);
         border-radius:11px; padding:12px 13px; }
+.card.wide { flex:1 1 100%; }
 .card .k { font-size:10px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); }
 .card .v { font-size:24px; font-weight:700; margin:2px 0 7px; }
+.card .vs { font-size:13px; font-weight:600; color:var(--muted); }
+/* One bar, four segments, to scale. The shares are the result; the counts are the detail
+   under them. A number with no denominator is not a result. */
+.stack { display:flex; height:9px; border-radius:5px; overflow:hidden; background:var(--sunk);
+         margin:0 0 10px; }
+.stack i { display:block; height:100%; }
+.stack i.connected { background:var(--ok); }
+.stack i.unresolved { background:var(--crit); }
+.stack i.unused { background:var(--warn); }
+.stack i.uncertain { background:var(--dim); }
+.tallies { display:flex; flex-wrap:wrap; gap:6px 18px; }
+.ty { display:flex; align-items:baseline; gap:6px; font-size:12.5px; }
+.ty b { font-variant-numeric:tabular-nums; }
+.ty .pc { color:var(--muted); font-size:11.5px; font-variant-numeric:tabular-nums;
+          font-family:ui-monospace,Menlo,monospace; }
+.panel h3.sec { font-size:13px; margin:22px 0 9px; }
 .gap { color:var(--muted); font-size:12.5px; border:1px dashed var(--line);
        border-radius:9px; padding:11px 12px; }
 .more { text-align:center; padding:10px; border:1px solid var(--line); border-radius:9px;
@@ -336,7 +361,29 @@ const S = {connected:"var(--ok)", unresolved:"var(--crit)", unused:"var(--warn)"
 const F = {connected:"var(--ok-fill)", unresolved:"var(--crit-fill)",
            unused:"var(--warn-fill)", uncertain:"var(--dim-fill)"};
 const CH = {added:"var(--ok)", removed:"var(--crit)", status:"var(--warn)"};
-const COLS = MAPDATA.columns, PAGES = MAPDATA.pages, COMMITS = MAPDATA.commits || [];
+// Nodes arrive as arrays against three string tables (see _payload: it saved ~7 MB on a
+// real scan). Expanded once, here, into exactly the objects the rest of this script has
+// always read - so the wire format is a detail of loading and of nothing else.
+const COLS = MAPDATA.columns, COMMITS = MAPDATA.commits || [];
+const PAGES = (() => {
+  const F = MAPDATA.fields, K = MAPDATA.kinds, S_ = MAPDATA.statuses, FI = MAPDATA.files;
+  const inflate = row => {
+    const n = {};
+    F.forEach((field, i) => {
+      const v = row[i];
+      n[field] = field === "kind" ? K[v]
+        : field === "status" ? S_[v]
+        : field === "file" ? (FI[v] || "")
+        : (v == null ? (field === "line" ? null : "") : v);
+    });
+    return n;
+  };
+  return MAPDATA.pages.map(p => ({
+    ...p,
+    nodes: p.nodes.map(inflate),
+    edges: p.edges.map(e => ({source: e[0], target: e[1], status: S_[e[2]]})),
+  }));
+})();
 // Which changed-set is in force. Starts as the whole-run diff, and a commit selection
 // replaces it - so "what changed" always means the thing the reader picked, never a
 // blend of a commit and a branch.
@@ -446,7 +493,21 @@ function changedIn(p) {
   return new Set(p.nodes.filter(n => CHANGED[n.id] || n.kind === "page").map(n => n.id));
 }
 
+// A page's whole node set, drawn at once, is the point - but the not-reached buckets are
+// 17,967 template elements, and no layout makes that readable. Past this it draws a
+// screenful and says what it left out, rather than either hanging or silently lying about
+// how much is there. Narrowing (a file, a filter, a commit) always wins over the cap.
+const MAX_DRAW = 2000;
+let capped = 0;
+
+function capping(ids) {
+  capped = Math.max(ids.size - MAX_DRAW, 0);
+  if (!capped) return ids;
+  return new Set([...ids].slice(0, MAX_DRAW));
+}
+
 function visible(p) {
+  capped = 0;
   if (only) return changedIn(p);
   if (isolate && lit) return chainOf(p, lit);
   if (fileFilter) return new Set(p.nodes.filter(n => n.file === fileFilter).map(n => n.id));
@@ -454,8 +515,8 @@ function visible(p) {
   // drilled in hid the whole point: which symbols connect and which stand alone.
   if (!focus) {
     const kinds = SECTION_KINDS[mode];
-    return new Set(p.nodes.filter(n => !kinds || n.kind === "page" || kinds.has(n.kind))
-                          .map(n => n.id));
+    return capping(new Set(p.nodes.filter(n => !kinds || n.kind === "page" || kinds.has(n.kind))
+                                  .map(n => n.id)));
   }
   const adj = new Map();
   p.edges.forEach(e => {
@@ -571,8 +632,10 @@ function layoutFor(p) {
   const key = layoutKey();
   if (_layout.key !== key) {
     const keep = visible(p);
-    _layout = {key, keep, value: layout(p, keep)};
+    // `capped` is set as a side effect of visible(); a cached draw must not forget it.
+    _layout = {key, keep, capped, value: layout(p, keep)};
   }
+  capped = _layout.capped;
   return _layout;
 }
 
@@ -589,6 +652,13 @@ function draw() {
     : focus ? `${here} › ${(byId.get(focus) || {}).label || ""}`
     : `${here} — pick a module`;
   document.getElementById("up").hidden = !focus;
+  const cap = document.getElementById("capnote");
+  if (cap) {
+    cap.textContent = capped
+      ? `Showing ${MAX_DRAW.toLocaleString()} of ${(MAX_DRAW + capped).toLocaleString()}`
+        + " on this canvas. Pick a file in Files, or use the filter, to see the rest."
+      : "";
+  }
   // A commit that touched only files the scan does not read has an empty changed set.
   // Drawing that as a bare page node reads as a broken map rather than as an answer.
   if (only && !Object.keys(CHANGED).length) {
@@ -1034,29 +1104,19 @@ const ROWS_PER_PAGE = 60;
 let mode = "map", cq = "", cstatus = "", shown = ROWS_PER_PAGE, asList = false;
 const listToggle = document.getElementById("aslist");
 listToggle.onclick = () => { asList = !asList; switchTo(mode); };
-// The map is what this page is for, so it opens on the map with the whole scan drawn.
-// The commit filter therefore starts at "everything": defaulting it to the newest commit
-// left the canvas holding one node, because a commit that only deletes something has
-// nothing left to draw - which reads as a page with no nodes in it.
-//
-// First visit is the exception: 30,000 nodes with no statement of what a node is teaches
-// nobody anything, so a reader who has not been here before lands on the explanation.
-// Storage is best-effort - this file is opened over file:// as often as over http, where
-// reading localStorage can throw outright - and failing to read it just means the intro
-// shows again, which is the harmless direction to fail in.
-function seenBefore() {
-  try {
-    if (localStorage.getItem("seamcheck.seen")) return true;
-    localStorage.setItem("seamcheck.seen", "1");
-  } catch (_) { return false; }
-  return false;
-}
-const OPENS_ON = seenBefore() ? "map" : "start";
+// Overview opens, because "how is this project doing" is the question someone has when
+// they open the file, and it is one screen rather than 30,000 nodes. The commit filter
+// starts at "everything": defaulting it to the newest commit left the canvas holding one
+// node, because a commit that only deletes something has nothing left to draw.
+const OPENS_ON = "overview";
 
-const VIEWS = [{key: "start", title: "Start here", count: null},
-               {key: "map", title: "Map — what reaches what", count: null},
-               {key: "files", title: "Files", count: FILES.length},
-               {key: "overview", title: "Overview", count: null}].concat(
+// Overview first: it is the answer to "how is this project doing", which is the question
+// someone opening the file has. The map is the instrument you reach for second, once a
+// number has told you where to point it. "Start here" was a third thing explaining the
+// other two; its content lives in Overview now, where the numbers it explains are.
+const VIEWS = [{key: "overview", title: "Overview", count: null},
+               {key: "map", title: "Map", count: null},
+               {key: "files", title: "Files", count: FILES.length}].concat(
   D.sections.map(sec => ({key: sec.key, title: sec.title,
                           count: sec.unavailable ? null : (sec.total ?? sec.rows.length)})));
 
@@ -1081,9 +1141,6 @@ function pills(counts) {
     .map(k => `<span class="pill ${k}">${k} ${counts[k] || 0}</span>`).join("");
 }
 
-// A reader who has never seen this arrives at 30,000 nodes in thirteen columns with no
-// statement of what a node is. One panel of prose, ahead of everything else, and the
-// caveats stated next to the numbers they change rather than in a README nobody opens.
 function statusKey() {
   const of = k => MEANING["*|" + k] || {means: "", check: ""};
   return ["connected", "unresolved", "unused", "uncertain"].map(k =>
@@ -1091,67 +1148,83 @@ function statusKey() {
        <p>${esc(of(k).means)}</p><p class="c">${esc(of(k).check)}</p></div>`).join("");
 }
 
-function startHtml() {
-  const commits = COMMITS.length;
-  return `<h2>Start here</h2>
-    <p class="blurb">What this page is, what its four colours claim, and where to look
-      first.</p>
-    <div class="doc">
-      <p>Seamcheck read this project's source and built one graph of <b>what reaches
-        what</b>: the URLs, the views behind them, the JavaScript that calls those URLs,
-        the template elements that JavaScript selects, and the CSS that styles those
-        elements. Everything on this page is that one graph, seen from a different angle.</p>
-      <p>A <b>symbol</b> is one named thing the scan found — a route, a function, a
-        selector, a design token. An <b>edge</b> is evidence that one symbol reaches
-        another. A symbol's colour is what the scan can say about the edges into it.</p>
-      <div class="caveat"><b>Two things to know before you read a number.</b>
-        Seamcheck reads source; it never runs your code, so every row is evidence rather
-        than a verdict. And ${esc(BLIND_SPOTS)}</div>
-      <h3>The four statuses</h3>
-      <div class="skey">${statusKey()}</div>
-      <h3>How to read the map</h3>
-      <ul>
-        <li>Columns run left to right in the order a request travels — page, module, JS
-          call, endpoint, URL, view, response field. The axis you read along <i>is</i> the
-          frontend-to-backend seam.</li>
-        <li><b>Click a node</b> to open its evidence: the chain that reaches it, each hop
-          with its source. <b>Show only this chain</b> hides everything else on the page.</li>
-        <li><b>PAGE</b> picks one entry point. <b>COMMIT</b> narrows everything to what a
-          single commit changed${commits ? "" :
-            " — once <code>seamcheck backfill</code> has given it some history"}.</li>
-        <li><b>Any <code>file:line</code> is clickable</b> and opens at that line in
-          your editor${OPEN.href ? "" : " — set <code>editor</code> in SEAMCHECK_CONFIG to turn that on"}.
-          Shift-click copies the absolute path instead.</li>
-      </ul>
-      <h3>Where to start</h3>
-      <ol>
-        <li><b>Findings</b>, filtered to <code>unresolved</code> — things the code reaches
-          for that are not there. The shortest path to a real bug.</li>
-        <li><b>DOM Wiring</b> — elements more than one file writes. Two writers on one
-          element is the usual cause of a value that flickers or reverts.</li>
-        <li><b>Files</b> — the repository's own shape, and how much of each file the scan
-          could model at all. That bar is coverage, not a finding.</li>
-      </ol>
-    </div>`;
+// A count with no denominator is not a result. "1,319 unresolved" reads as a catastrophe
+// or as nothing at all depending on whether the project has two thousand symbols or forty
+// thousand; the share is the part that means something.
+function pct(n, total) {
+  if (!total) return "0%";
+  const share = (n / total) * 100;
+  return share > 0 && share < 0.1 ? "<0.1%" : `${share.toFixed(share < 10 ? 1 : 0)}%`;
+}
+
+function bar(counts, total) {
+  return `<div class="stack">` + ["connected", "uncertain", "unused", "unresolved"]
+    .filter(k => counts[k])
+    .map(k => `<i class="${k}" style="width:${(counts[k] / total) * 100}%"
+      title="${k} — ${counts[k].toLocaleString()} (${pct(counts[k], total)})"></i>`)
+    .join("") + `</div>`;
+}
+
+function tally(counts, total) {
+  return ["unresolved", "unused", "uncertain", "connected"].map(k =>
+    `<div class="ty"><span class="pill ${k}">${k}</span>
+      <b>${(counts[k] || 0).toLocaleString()}</b>
+      <span class="pc">${pct(counts[k] || 0, total)}</span></div>`).join("");
 }
 
 function overviewHtml() {
-  const total = c => Object.values(c).reduce((a, n) => a + n, 0);
-  return `<h2>Overview</h2><p class="blurb">Two totals, each broken into the four
-    statuses. Every number is what the scan is willing to claim about this commit.</p>
+  const sum = c => Object.values(c).reduce((a, n) => a + n, 0);
+  const all = {};
+  ["connected", "unresolved", "unused", "uncertain"].forEach(k => {
+    all[k] = (D.backend[k] || 0) + (D.frontend[k] || 0);
+  });
+  const total = sum(all), back = sum(D.backend), front = sum(D.frontend);
+  const looking = (all.unresolved || 0) + (all.unused || 0);
+
+  return `<h2>Overview</h2><p class="blurb">What the scan is willing to claim about this
+    commit, as counts and as shares. A count with no denominator is not a result.</p>
+
     <div class="cards">
-      <div class="card"><div class="k">Backend symbols</div><div class="v">${total(D.backend)}</div>
-        ${pills(D.backend)}</div>
-      <div class="card"><div class="k">Frontend symbols</div><div class="v">${total(D.frontend)}</div>
-        ${pills(D.frontend)}</div></div>
-    <h2 style="font-size:14px;margin:18px 0 8px">Backlog by kind</h2>
+      <div class="card wide"><div class="k">Everything the scan found</div>
+        <div class="v">${total.toLocaleString()}</div>
+        ${bar(all, total)}
+        <div class="tallies">${tally(all, total)}</div>
+        <p class="gloss"><b>${looking.toLocaleString()}</b>
+          (${pct(looking, total)}) are the ones to look at — unresolved or unused.
+          The rest is either evidenced or unmeasured.</p></div>
+    </div>
+    <div class="cards">
+      <div class="card"><div class="k">Backend</div>
+        <div class="v">${back.toLocaleString()} <span class="vs">${pct(back, total)}</span></div>
+        ${bar(D.backend, back)}${pills(D.backend)}</div>
+      <div class="card"><div class="k">Frontend</div>
+        <div class="v">${front.toLocaleString()} <span class="vs">${pct(front, total)}</span></div>
+        ${bar(D.frontend, front)}${pills(D.frontend)}</div>
+    </div>
+
+    <h3 class="sec">What the four words claim</h3>
+    <div class="skey">${statusKey()}</div>
+    <div class="caveat"><b>Two things to know before you read a number.</b>
+      Seamcheck reads source; it never runs your code, so every row is evidence rather
+      than a verdict. And ${esc(BLIND_SPOTS)}</div>
+
+    <h3 class="sec">Backlog by kind</h3>
     ${D.groups.length ? D.groups.map(g =>
       `<div class="row"><span class="badge uncertain">${g[1]}</span>
        <div class="t">${esc(g[0])}</div></div>`).join("")
       : `<div class="gap">Nothing the scan is willing to claim.</div>`}
-    <p class="gloss">uncertain means the scan found no evidence either way. It is not a
-    claim that anything is dead.</p>
-    <div class="caveat">${esc(BLIND_SPOTS)}</div>`;
+
+    <h3 class="sec">Where to look next</h3>
+    <div class="doc"><ol>
+      <li><b>Findings</b>, filtered to <code>unresolved</code> — things the code reaches
+        for that are not there. The shortest path to a real bug.</li>
+      <li><b>DOM Wiring</b> — elements more than one file writes. Two writers on one
+        element is the usual cause of a value that flickers or reverts.</li>
+      <li><b>Map</b> — click any node to see the chain that reaches it, hop by hop. The
+        <b>PAGE</b> picker also has the buckets for everything no page reaches.</li>
+      <li><b>Files</b> — click a file to draw its symbols; <code>edit</code> opens it.
+        Any <code>file:line</code> anywhere here opens in your editor.</li>
+    </ol></div>`;
 }
 
 // A folder tree, the shape the repository actually has. The map is rooted at pages,
@@ -1246,7 +1319,6 @@ function renderPanel() {
     };
     return;
   }
-  if (mode === "start") { panel.innerHTML = startHtml(); return; }
   if (mode === "overview") { panel.innerHTML = overviewHtml(); return; }
   const sec = D.sections.find(x => x.key === mode);
   if (!sec) return;
@@ -1312,7 +1384,7 @@ function switchTo(next) {
   document.getElementById("q").hidden = !drawable;
   pgwrap.hidden = !drawable;
   listToggle.hidden = !hasLens;
-  listToggle.textContent = asList ? "Show as map" : "Show as list";
+  listToggle.textContent = asList ? "\u25f1  Show as map" : "\u2630  Show as list";
   closeSheet();
   cq = ""; cstatus = ""; shown = ROWS_PER_PAGE;
   focus = null; view = {x:0, y:0, k:1};
@@ -1332,36 +1404,68 @@ def _esc(value) -> str:
     return html_lib.escape(str(value if value is not None else ""))
 
 
+# One node used to ship as an object with nine spelled-out keys. At 37,505 nodes that is
+# ~3.6 MB of the words "snippet" and "context", another ~1.7 MB of the same file paths
+# written out over and over, and ~0.9 MB of keys whose value is "". The map came to
+# 15.9 MB, which is a lot to hand a browser to say the same thing.
+#
+# So nodes travel as arrays in a fixed order against three string tables, and the page
+# expands them back into exactly the objects the rest of the script already reads. The
+# decode is one pass at load; nothing downstream knows the difference.
+_NODE_FIELDS = ("id", "label", "kind", "status", "file", "line", "note", "snippet", "context")
+
+
+class _Table:
+    """Repeated strings, sent once and referred to by index."""
+
+    def __init__(self):
+        self.values: list[str] = []
+        self._index: dict[str, int] = {}
+
+    def __call__(self, value: str) -> int:
+        if value not in self._index:
+            self._index[value] = len(self.values)
+            self.values.append(value)
+        return self._index[value]
+
+
 def _payload(connectivity_map: ConnectivityMap) -> str:
+    kinds, statuses, files = _Table(), _Table(), _Table()
+
+    def _row(node):
+        # Trailing empties are dropped, not sent as "": most nodes carry no note and the
+        # buckets carry no source context at all.
+        row = [
+            node.id, node.label, kinds(node.kind), statuses(node.status),
+            files(node.file or ""), node.line, node.note, node.snippet, node.context,
+        ]
+        while len(row) > 4 and not row[-1]:
+            row.pop()
+        return row
+
+    pages = [
+        {
+            "page": page.page,
+            "title": page.title or page.page,
+            "where": page.where,
+            "nodes": [_row(node) for node in page.nodes],
+            "edges": [[e.source, e.target, statuses(e.status)] for e in page.edges],
+        }
+        for page in connectivity_map.pages
+    ]
     data = {
         "columns": _COLUMNS,
         "changed": connectivity_map.changed,
         "commits": connectivity_map.commits,
-        "pages": [
-            {
-                "page": page.page,
-                "title": page.title or page.page,
-                "where": page.where,
-                "nodes": [
-                    {
-                        "id": node.id, "label": node.label, "kind": node.kind,
-                        "status": node.status, "file": node.file, "line": node.line,
-                        "note": node.note, "snippet": node.snippet,
-                        "context": node.context,
-                    }
-                    for node in page.nodes
-                ],
-                "edges": [
-                    {"source": e.source, "target": e.target, "status": e.status}
-                    for e in page.edges
-                ],
-            }
-            for page in connectivity_map.pages
-        ],
+        "fields": _NODE_FIELDS,
+        "kinds": kinds.values,
+        "statuses": statuses.values,
+        "files": files.values,
+        "pages": pages,
     }
     # </script> inside JSON would close the tag early; escaping the slash is the
     # standard defence and stays valid JSON.
-    return json.dumps(data).replace("</", "<\\/")
+    return json.dumps(data, separators=(",", ":")).replace("</", "<\\/")
 
 
 def _console_payload(console) -> str:
@@ -1436,7 +1540,9 @@ def render(connectivity_map: ConnectivityMap, console=None, files=None,
         '<span class="k filled"><i></i>filled in<em>= unresolved or unused. The two to look at '
         'are drawn solid, the rest as outlines.</em></span>'
         "</div>",
-        '<div class="note" id="cmnote"></div><div class="gone" id="gone"></div>',
+        '<div class="note" id="cmnote"></div>'
+        '<div class="note capnote" id="capnote"></div>'
+        '<div class="gone" id="gone"></div>',
         "</header>",
         '<main class="main">',
         '<svg id="cv"></svg>',

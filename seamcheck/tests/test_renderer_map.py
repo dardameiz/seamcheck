@@ -273,22 +273,36 @@ class MergedReviewViewTests(SimpleTestCase):
 
         self.assertIn('"sections": []', out)
 
-    def test_a_first_time_reader_lands_on_the_explanation_and_everyone_else_on_the_map(self):
-        # 30,000 nodes in thirteen columns with no statement of what a node is teaches
-        # nobody anything, so the first visit opens on the prose. The map is still what
-        # the page is for, so the second visit goes straight there.
+    def test_it_opens_on_the_overview(self):
+        # "How is this project doing" is the question someone has when they open the
+        # file, and it is one screen rather than 30,000 nodes. A separate "Start here"
+        # page explaining the other two was a third thing to read first; its content is
+        # in Overview now, beside the numbers it explains.
         out = map_html.render(_map(), console=self._console())
 
-        self.assertIn('const OPENS_ON = seenBefore() ? "map" : "start"', out)
-        self.assertIn('key: "start"', out)
+        self.assertIn('const OPENS_ON = "overview";', out)
+        self.assertNotIn('key: "start"', out)
+        self.assertNotIn("seenBefore", out)
 
-    def test_reading_the_seen_flag_can_throw_without_taking_the_page_with_it(self):
-        # This file is opened over file:// as often as over http, and localStorage is
-        # absent-or-throwing there. Failing means showing the intro again, which is the
-        # harmless direction.
+    def test_the_map_is_called_the_map(self):
         out = map_html.render(_map(), console=self._console())
 
-        self.assertIn("catch (_) { return false; }", out)
+        self.assertIn('{key: "map", title: "Map", count: null}', out)
+        self.assertNotIn("Map — what reaches what", out)
+
+    def test_overview_reports_shares_not_only_counts(self):
+        # "1,319 unresolved" reads as a catastrophe or as nothing at all depending on
+        # whether the project has two thousand symbols or forty thousand.
+        out = map_html.render(_map(), console=self._console())
+
+        self.assertIn("function pct(n, total)", out)
+        self.assertIn("are the ones to look at", out)
+
+    def test_the_map_list_toggle_is_not_a_grey_chip(self):
+        # The one control that changes what kind of thing you are looking at.
+        out = map_html.render(_map(), console=self._console())
+
+        self.assertIn("#aslist { font-weight:600; color:var(--sig); border-color:var(--sig);", out)
 
     def test_a_desktop_gets_a_rail_and_a_phone_gets_the_select(self):
         # Rebuilding for the phone deleted the rail entirely; both drive one switch, and

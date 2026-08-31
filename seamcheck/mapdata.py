@@ -148,14 +148,15 @@ class ConnectivityMap:
     changed: dict[str, str] = field(default_factory=dict)
 
 
-def _node(symbol: Symbol) -> MapNode:
+def _node(symbol: Symbol, context: bool = True, snippet_limit: int = 400) -> MapNode:
     # The site root is path("", index): a genuinely empty label that must still be
     # nameable on screen.
     label = symbol.label if (symbol.label or "").strip() else "/"
     return MapNode(
         id=symbol.id, label=label, kind=symbol.kind, status=symbol.status.value,
-        snippet=(symbol.snippet or "")[:400],
-        context=_context(symbol.file, symbol.line) if symbol.kind in _CONTEXT_KINDS else "",
+        snippet=(symbol.snippet or "")[:snippet_limit],
+        context=_context(symbol.file, symbol.line)
+                if context and symbol.kind in _CONTEXT_KINDS else "",
         file=symbol.file, line=symbol.line, note=symbol.note,
     )
 
@@ -221,6 +222,73 @@ def build_page_map(page: str, files: set[str], graph: Graph, adjacency: dict[str
     return PageMap(page=page, nodes=list(nodes.values()), edges=edges)
 
 
+# Symbols no page entry reaches, grouped so each bucket is navigable on its own. 90% of a
+# real scan lands here - 32,301 of 35,767 on the project this was built against - and the
+# map used to simply not contain them: clicking `models.py` in the Files view drew an
+# empty canvas, which is indistinguishable from "this file is dead".
+#
+# Being unreached is not itself a finding. A model, a signal receiver or an admin action
+# is reached by Django, never by a browser page; a route may be hit by a webhook or typed
+# in. What the bucket answers is "where did the rest go", and each symbol keeps its own
+# status so the reds inside it are still the reds.
+UNREACHED_PAGE = "unreached"
+UNREACHED_GROUPS: tuple[tuple[str, str, frozenset[str]], ...] = (
+    ("django", "Django-side — reached by Django, not by a page",
+     frozenset({"url", "view", "model", "admin_action", "signal_receiver",
+                "template_tag", "management_command"})),
+    ("js", "JavaScript no page bundle pulls in",
+     frozenset({"js_call", "fetch_target", "dom_selector", "multi_writer_element", "module"})),
+    ("css", "Stylesheet rules and tokens nothing on a page matched",
+     frozenset({"css_selector", "css_token_def", "css_token_use"})),
+    ("template", "Template elements no page's JavaScript selects",
+     frozenset({"dom_attr"})),
+)
+UNREACHED_OTHER = ("other", "Everything else the scan found off the page graph")
+
+
+def _unreached_group(kind: str) -> tuple[str, str]:
+    for key, blurb, kinds in UNREACHED_GROUPS:
+        if kind in kinds:
+            return key, blurb
+    return UNREACHED_OTHER
+
+
+def build_unreached_pages(graph: Graph, covered: set[str]) -> list[PageMap]:
+    """One page per family of symbols that no page entry reaches."""
+    buckets: dict[str, list[Symbol]] = {}
+    blurbs: dict[str, str] = {}
+    for symbol in graph.symbols:
+        if symbol.id in covered:
+            continue
+        key, blurb = _unreached_group(symbol.kind)
+        buckets.setdefault(key, []).append(symbol)
+        blurbs[key] = blurb
+
+    order = [key for key, _, _ in UNREACHED_GROUPS] + [UNREACHED_OTHER[0]]
+    pages = []
+    for key in order:
+        symbols = buckets.get(key)
+        if not symbols:
+            continue
+        ids = {symbol.id for symbol in symbols}
+        # No source context and a short snippet: these buckets are large by nature, they
+        # sit on no chain (there is no path to read them along), and the full text of
+        # 32,301 source lines is megabytes nobody opens. The label, the file and the line
+        # are what a reader needs here, and file:line opens the real thing.
+        nodes = [_node(symbol, context=False, snippet_limit=120) for symbol in symbols]
+        edges = [
+            MapEdge(edge.from_id, edge.to_id, edge.status.value)
+            for edge in graph.edges
+            if edge.from_id in ids and edge.to_id in ids
+        ]
+        pages.append(PageMap(
+            page=f"{UNREACHED_PAGE}:{key}", nodes=nodes, edges=edges,
+            title="Not reached from any page",
+            where=f"{blurbs[key]} — {len(nodes):,}",
+        ))
+    return pages
+
+
 def build_adjacency(graph: Graph) -> dict[str, list]:
     adjacency: dict[str, list] = {}
     for edge in graph.edges:
@@ -251,6 +319,10 @@ def build_map(
     # Grouped by the page a reader recognises, then by bundle inside it, so the sidebar
     # reads as a site rather than as a build manifest.
     page_maps.sort(key=lambda page_map: (page_map.title.lower(), page_map.page))
+    # ...and last, everything the page graph does not reach, so "where did the other 90%
+    # go" has an answer on the same picker rather than being absent from the map.
+    covered = {node.id for page_map in page_maps for node in page_map.nodes}
+    page_maps += build_unreached_pages(graph, covered)
 
     changed: dict[str, str] = {}
     if baseline is not None:
