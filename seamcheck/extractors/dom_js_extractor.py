@@ -302,11 +302,22 @@ def _class_tokens(raw: str) -> list[str]:
     return [token for token in raw.split() if token and not _NOT_A_CLASS_RE.search(token)]
 
 
+# A name whose last piece is cut off by an interpolation: the stem of a family assembled
+# at runtime. `pb-badge-${kind}` and `'pb-badge-' + kind` both leave `pb-badge-` in the
+# source and nothing else, so a rule for the whole name is live and unprovable at once.
+_STEM_RE = re.compile(r"(?:^|\s)([A-Za-z_][\w-]*[-_])(?:\$\{\}|$)")
+
+
 def _literal_strings(node: dict) -> list[str]:
     """String content a node contributes statically.
 
     A template literal's quasis are static text; its `${...}` holes are not, so the
     static neighbours are kept and the holes contribute nothing rather than a guess.
+
+    A `+` concatenation is treated the same way, with the same "${}" stand-in for whatever
+    is not a literal. It used to contribute NOTHING, so `'badge ' + kind` gave up the whole
+    token `badge` as well as the dynamic part - and `'pb-badge-' + kind` left no trace that
+    a pb-badge- family exists at all.
     """
     node_type = node.get("type")
     if node_type == "Literal" and isinstance(node.get("value"), str):
@@ -317,7 +328,26 @@ def _literal_strings(node: dict) -> list[str]:
         # must not yield the fragment "bb-spark-"; `ab-star ${x}` must still yield
         # "ab-star", because that token is whole.
         return ["${}".join((quasi.get("value") or {}).get("raw", "") for quasi in node.get("quasis") or [])]
+    if node_type == "BinaryExpression" and node.get("operator") == "+":
+        return ["".join(_concat_shape(node))]
     return []
+
+
+def _concat_shape(node: dict) -> list[str]:
+    """A `+` chain flattened to its static text, with "${}" where an operand is dynamic."""
+    if node.get("type") == "BinaryExpression" and node.get("operator") == "+":
+        return _concat_shape(node.get("left") or {}) + _concat_shape(node.get("right") or {})
+    static = _literal_strings(node)
+    return [static[0]] if static else ["${}"]
+
+
+def _class_stems(node: dict) -> list[str]:
+    """Class-name prefixes this node leaves behind, e.g. `pb-badge-` from `pb-badge-${k}`."""
+    return [
+        stem
+        for text in _literal_strings(node)
+        for stem in _STEM_RE.findall(text)
+    ]
 
 
 def extract_js_class_usages(js_files: list[str]) -> list[Symbol]:
@@ -377,12 +407,38 @@ def extract_js_class_usages(js_files: list[str]) -> list[Symbol]:
                             sources += [(token, 'setAttribute("class", ...)') for token in _class_tokens(text)]
 
             # Markup built as a string: class="..." inside any literal or template chunk.
+            stems_from: list[str] = []
             for text in _literal_strings(node):
                 for match in _CLASS_ATTR_RE.findall(text):
                     sources += [(token, 'class="..." in generated markup') for token in _class_tokens(match)]
+                    stems_from += _STEM_RE.findall(match)
+            if node_type == "AssignmentExpression" and (
+                ((node.get("left") or {}).get("property") or {}).get("name") == "className"
+            ):
+                stems_from += _class_stems(node.get("right") or {})
+            elif node_type == "CallExpression":
+                for argument in node.get("arguments") or []:
+                    stems_from += _class_stems(argument)
 
             for name, snippet in sources:
                 _record(name, path, line, enclosing, snippet)
+
+            # Stems, recorded separately. A stem is not a class anyone applied, so it must
+            # not become evidence that a rule for the STEM is live; it is evidence that a
+            # family of rules sharing that prefix may be assembled at runtime.
+            for stem in stems_from:
+                symbol_id = f"dom_selector:class:{stem}:{path}:{line}"
+                if symbol_id in seen:
+                    continue
+                seen.add(symbol_id)
+                symbols.append(
+                    Symbol(
+                        id=symbol_id, kind="dom_selector", label=stem, sub="class:stem",
+                        file=path, line=line, status=Status.UNCERTAIN,
+                        snippet=f"a '{stem}...' class name assembled at runtime",
+                        chain=[os.path.basename(path)], note="",
+                    )
+                )
 
     return symbols
 

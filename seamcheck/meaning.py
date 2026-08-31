@@ -138,9 +138,19 @@ _SPECIFIC: dict[str, tuple[str, str]] = {
     ),
     # ---- CSS -------------------------------------------------------------------------
     "css_selector|unused": (
-        "No template element, and no class JavaScript applies at runtime, matches this rule.",
-        "Check for a class built by string concatenation, and for markup in a template "
-        "outside the configured templates root. Otherwise it is deletable CSS.",
+        "Nothing matches this rule: no template attribute, no className, no classList.add, "
+        "no setAttribute, and no class in any markup JavaScript builds.",
+        "A name assembled at runtime is already excluded - those stay uncertain. What is "
+        "left is a third-party script applying its own classes (Stripe Elements, a chart "
+        "library) that you wrote overrides for, and markup in a template outside the "
+        "configured root. Otherwise it is deletable CSS.",
+    ),
+    "css_selector|uncertain": (
+        "Nothing references this rule, but its name could be assembled at runtime from a "
+        "prefix that does appear in the JavaScript.",
+        "`'pb-badge-' + kind` puts pb-badge-success on an element while only the stem is in "
+        "the source, so the rule is live and unprovable at the same time. Grep the stem to "
+        "settle it; do not delete on this alone.",
     ),
     "css_token_use|unresolved": (
         "This `var()` names a custom property that nothing in the scanned CSS defines.",

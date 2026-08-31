@@ -22,15 +22,22 @@ _EDGE_STATUS_KINDS = frozenset(
      "url_reference"}
 )
 
-# A CSS rule is matched against querySelector() calls and template class= attributes.
-# Nothing yet reads the four ways JavaScript applies a class, so 'nothing uses this'
-# is a claim the scan has not earned. Measured on this project: 5,318 selectors would
-# be reported unused while 3,205 class-application sites went unread.
-_UNPROVEN_UNUSED_KINDS = frozenset({"css_selector"})
+# Emptied. A blanket downgrade of every unreferenced CSS rule to `uncertain` was correct
+# while the class-application reader was incomplete: 3,205 sites went unread, so "nothing
+# uses this" was a claim the scan had not earned.
+#
+# It reads className, classList, setAttribute, generated markup, template attributes and
+# Python now, and the one remaining hole - a name assembled at runtime from a prefix - is
+# detected where the evidence lives, in match_css_selectors. So the downgrade was no longer
+# caution; it was hiding 3,878 rules whose names appear in no source file at all, in the
+# status that means "unmeasured".
+#
+# Kept as a mechanism rather than deleted: the next kind whose extractor is half-built will
+# want exactly this, and the note explains what it is for.
+_UNPROVEN_UNUSED_KINDS: frozenset[str] = frozenset()
 _UNPROVEN_UNUSED_NOTE = (
-    "No CSS-side or template-side reference found, but JavaScript that applies classes "
-    "via className, classList.add or setAttribute is not yet scanned - so this is not "
-    "evidence the rule is dead."
+    "The extractor for this kind cannot see every way it could be referenced, so "
+    "'nothing uses this' is not a claim the scan has earned."
 )
 
 # `{% url %}`, reverse(), redirect(), <a href>, form actions and HTMX attributes are all

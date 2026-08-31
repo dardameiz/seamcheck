@@ -58,15 +58,44 @@ def discover_js_roots(vite_config: str, templates_root: str, static_root: str) -
     return [root for root in dict.fromkeys(roots) if pathlib.Path(root).is_file()]
 
 
-def discover_css_files(css_source_root: str) -> list[str]:
-    """Every stylesheet under the CSS root, plus whatever they @import.
+def _is_project_stylesheet(path: pathlib.Path, tailwind_output: str | None) -> bool:
+    """Whether this stylesheet is code the project wrote, and can therefore act on.
+
+    Three kinds get excluded, and every one of them was measured producing findings nobody
+    could use:
+
+    * **Built output.** `dist/` holds a COPY of the source, so scanning it doubles every
+      symbol and then reports the copies as unreferenced - 145 findings on the project
+      measured, and the exclusion list never applied because it only ran during config
+      detection, not when a config was written by hand.
+    * **Vendor bundles.** `font-awesome.min.css` alone contributed 2,388 "dead" rules, 55%
+      of the total. Font Awesome ships thousands of icons and a project uses a dozen; the
+      other 2,376 are true, useless, and undeletable.
+    * **Generated utility CSS.** The Tailwind build output is already read separately, to
+      learn which utility classes exist. Reading it as source as well reported 150 utilities
+      nobody happened to use as dead code.
+    """
+    from seamcheck.autoconfig import EXCLUDED_DIRS
+
+    if any(part in EXCLUDED_DIRS for part in path.parts):
+        return False
+    if path.name.endswith(".min.css"):
+        return False
+    return not (tailwind_output and path.resolve() == pathlib.Path(tailwind_output).resolve())
+
+
+def discover_css_files(css_source_root: str, tailwind_output: str | None = None) -> list[str]:
+    """Every stylesheet the PROJECT wrote under the CSS root, plus whatever they @import.
 
     The @import walk mirrors the Python and JS reachability walks: a file list, not an
     allow-list, so a stylesheet pulled in only by an @import chain is still scanned.
     """
     from seamcheck.extractors.css_extractor import css_imports
 
-    found = [str(path) for path in pathlib.Path(css_source_root).rglob("*.css")]
+    found = [
+        str(path) for path in pathlib.Path(css_source_root).rglob("*.css")
+        if _is_project_stylesheet(path, tailwind_output)
+    ]
     seen = set(found)
     queue = list(found)
     while queue:
@@ -75,7 +104,8 @@ def discover_css_files(css_source_root: str) -> list[str]:
         for source, targets in imports.items():
             for target in targets:
                 resolved = (pathlib.Path(source).parent / target).resolve()
-                if resolved.is_file() and str(resolved) not in seen:
+                if (resolved.is_file() and str(resolved) not in seen
+                        and _is_project_stylesheet(resolved, tailwind_output)):
                     seen.add(str(resolved))
                     queue.append(str(resolved))
     return sorted(seen)

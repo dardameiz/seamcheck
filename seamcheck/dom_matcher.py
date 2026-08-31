@@ -50,7 +50,7 @@ def match_dom_selectors(dom_attrs: list[Symbol], dom_selectors: list[Symbol]) ->
     for selector in dom_selectors:
         # A runtime-built selector names nothing checkable, and a class JavaScript
         # applies needs no template attribute to match - the JS creates the element.
-        if selector.label == "<dynamic>" or selector.sub.startswith("class:apply"):
+        if selector.label == "<dynamic>" or selector.sub.startswith(("class:apply", "class:stem")):
             continue
         matched = attrs_by_key.get((_base_sub(selector), selector.label))
         if matched:
@@ -114,6 +114,24 @@ def detect_multi_writers(dom_selectors: list[Symbol]) -> list[Symbol]:
     return flagged
 
 
+def _assemblable(label: str, stems: set[str]) -> str | None:
+    """The literal prefix a runtime-built class name could have come from.
+
+    `'pb-badge-' + kind` produces `pb-badge-success`, and the only thing in the source is
+    the stem. A rule for the full name is therefore live and unprovable at the same time,
+    so it must not be called dead - measured at 537 of one project's 4,415 otherwise
+    unreferenced selectors, 12%.
+
+    Only stems ending in a separator count. Requiring that is what keeps this from matching
+    every class that happens to share three opening letters with another.
+    """
+    for cut in range(len(label) - 1, 2, -1):
+        stem = label[:cut]
+        if stem.endswith(("-", "_")) and stem in stems:
+            return stem
+    return None
+
+
 def match_css_selectors(
     dom_selectors: list[Symbol],
     dom_attrs: list[Symbol],
@@ -139,7 +157,7 @@ def match_css_selectors(
             edges.append(Edge(from_id=symbol.id, to_id=defined.id, status=Status.CONNECTED))
         elif key[0] == "class" and symbol.label in tailwind_build_classes:
             edges.append(Edge(from_id=symbol.id, to_id=symbol.id, status=Status.CONNECTED))
-        elif symbol.sub.startswith("class:apply"):
+        elif symbol.sub.startswith(("class:apply", "class:stem")):
             # A class JavaScript applies exists to be styled OR to be a hook the code
             # later queries. Having no stylesheet rule is therefore not a defect, so
             # these contribute evidence and never become findings themselves.
@@ -147,8 +165,24 @@ def match_css_selectors(
         else:
             edges.append(Edge(from_id=symbol.id, to_id=symbol.id, status=Status.UNRESOLVED))
 
+    # Class-name stems seen in the source, so a rule whose name could be ASSEMBLED at
+    # runtime is separated from one that could not. `extract_js_class_usages` already emits
+    # the literal part of a concatenation as a class token, so the evidence is to hand.
+    stems = {
+        symbol.label for symbol in dom_selectors if symbol.sub.startswith("class:stem")
+    } | {
+        symbol.label for symbol in dom_attrs if symbol.label.endswith(("-", "_"))
+    }
+
     for key, symbol in css_by_key.items():
-        if key not in used_keys:
+        if key in used_keys:
+            continue
+        # A rule nothing references, where the name could still be built at runtime, is not
+        # evidence of anything. Marked UNCERTAIN here rather than downgraded later, because
+        # this is where the evidence is: the classifier cannot see class-name stems.
+        if key[0] == "class" and _assemblable(symbol.label, stems):
+            edges.append(Edge(from_id=symbol.id, to_id=symbol.id, status=Status.UNCERTAIN))
+        else:
             edges.append(Edge(from_id=symbol.id, to_id=symbol.id, status=Status.UNUSED))
     return edges
 

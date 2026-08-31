@@ -116,13 +116,17 @@ def scan(repo_root: str = ".", progress: Progress | None = None) -> Graph:
     )
     progress.step("listing stylesheets")
     css_root = config.get("css_source_root")
-    css_files = (
-        discover_css_files(os.path.join(repo_root, css_root))
-        if css_root and os.path.isdir(os.path.join(repo_root, css_root))
-        else []
+    _css_root_dir = (
+        os.path.join(repo_root, css_root)
+        if css_root and os.path.isdir(os.path.join(repo_root, css_root)) else None
     )
     progress.step("Tailwind output")
     build_output = config.get("tailwind_build_output")
+    tailwind_path = os.path.join(repo_root, build_output) if build_output else None
+
+    css_files = (
+        discover_css_files(_css_root_dir, tailwind_path) if _css_root_dir else []
+    )
 
     return relativise(run_scan(
         urlconf_module=config["urlconf_module"],

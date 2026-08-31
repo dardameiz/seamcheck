@@ -21,7 +21,18 @@ def _extract(source):
 
 
 def _labels(source):
-    return {symbol.label for symbol in _extract(source)}
+    """Classes the JavaScript actually APPLIES - not stems, which are a different claim."""
+    return {
+        symbol.label for symbol in _extract(source)
+        if not symbol.sub.startswith("class:stem")
+    }
+
+
+def _stems(source):
+    return {
+        symbol.label for symbol in _extract(source)
+        if symbol.sub.startswith("class:stem")
+    }
 
 
 class ClassNameAssignmentTests(SimpleTestCase):
@@ -93,6 +104,20 @@ class InterpolationFragmentTests(SimpleTestCase):
         # `bb-spark-${i}` is one runtime name, not a class called "bb-spark-".
         # 319 such fragments were reported before this guard.
         self.assertEqual(_labels("el.className = `bb-spark-${i}`;"), set())
+
+    def test_the_fragment_is_still_recorded_as_a_family_STEM(self):
+        # Not a class anyone applied - and not nothing either. It is the only trace in the
+        # source that a `bb-spark-*` family is assembled at runtime, which is what stops a
+        # rule for `bb-spark-3` being called dead.
+        self.assertEqual(_stems("el.className = `bb-spark-${i}`;"), {"bb-spark-"})
+
+    def test_a_concatenated_prefix_is_a_stem_too(self):
+        # `_literal_strings` used to return nothing at all for a `+` chain, so this left no
+        # trace of the family AND lost the whole tokens beside it.
+        self.assertEqual(_stems("el.className = 'pb-badge-' + kind;"), {"pb-badge-"})
+
+    def test_a_whole_token_in_a_concatenation_is_now_kept(self):
+        self.assertEqual(_labels("el.className = 'badge ' + kind;"), {"badge"})
 
     def test_a_leading_interpolation_yields_no_fragment(self):
         self.assertEqual(_labels("el.className = `${prefix}-celebration`;"), set())

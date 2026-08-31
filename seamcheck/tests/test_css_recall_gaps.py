@@ -9,10 +9,9 @@ import tempfile
 
 from django.test import SimpleTestCase
 
-from seamcheck.classifier import classify
-from seamcheck.dom_matcher import match_css_tokens
+from seamcheck.dom_matcher import match_css_selectors, match_css_tokens
 from seamcheck.extractors.dom_js_extractor import extract_js_css_tokens
-from seamcheck.graph import Edge, Status, Symbol
+from seamcheck.graph import Status, Symbol
 
 
 def _symbol(id_, kind, label, status=Status.UNCERTAIN):
@@ -22,42 +21,64 @@ def _symbol(id_, kind, label, status=Status.UNCERTAIN):
     )
 
 
-class CssSelectorIsNeverClaimedUnusedTests(SimpleTestCase):
-    def test_an_unreferenced_css_selector_is_uncertain_not_unused(self):
-        # The matcher can only see querySelector() and template class= attributes.
-        # It cannot see className=, classList.add, setAttribute('class') or class
-        # literals in JS template strings, so "nothing uses this" is not a claim it
-        # is entitled to make.
-        selector = _symbol("css_selector:class:orphan", "css_selector", "orphan")
+class CssSelectorUnusedIsEarnedNotAssumedTests(SimpleTestCase):
+    """This used to be a blanket downgrade, and the reason it no longer is.
 
-        orphan = "css_selector:class:orphan"
-        classified = classify([selector], [Edge(orphan, orphan, Status.UNUSED)])
+    Every unreferenced CSS rule was forced to `uncertain`, because the matcher could not
+    see className=, classList.add, setAttribute('class') or class literals in JS template
+    strings - 3,205 unread sites, so "nothing uses this" was unearned.
 
-        self.assertEqual(classified[0].status, Status.UNCERTAIN)
+    All four are read now. The downgrade was therefore no longer caution: it was holding
+    3,878 rules whose names appear in NO source file inside the status that means
+    "unmeasured". The one real hole left is a name assembled at runtime, and that is
+    detectable, so it is detected rather than assumed everywhere.
+    """
 
-    def test_the_downgraded_selector_says_what_evidence_is_missing(self):
-        selector = _symbol("css_selector:class:orphan", "css_selector", "orphan")
+    def _css(self, label):
+        return Symbol(id=f"css_selector:class:{label}", kind="css_selector", label=label,
+                      sub="class", file="a.css", line=1, status=Status.UNCERTAIN,
+                      snippet=label, chain=[], note="")
 
-        orphan = "css_selector:class:orphan"
-        classified = classify([selector], [Edge(orphan, orphan, Status.UNUSED)])
+    def test_a_rule_whose_name_appears_nowhere_is_unused(self):
+        edges = match_css_selectors([], [], [self._css("hint-warm")], set())
 
-        self.assertIn("className", classified[0].note)
+        self.assertEqual([e.status for e in edges], [Status.UNUSED])
 
-    def test_a_referenced_css_selector_is_still_connected(self):
-        selector = _symbol("css_selector:class:used", "css_selector", "used")
+    def test_a_rule_whose_name_could_be_assembled_stays_uncertain(self):
+        # `'pb-badge-' + kind` produces pb-badge-success, and only the stem is in the
+        # source. The rule is live and unprovable at once, so it must not be called dead.
+        applied = Symbol(id="dom_selector:class:pb-badge-:a.js:1", kind="dom_selector",
+                         label="pb-badge-", sub="class:stem", file="a.js", line=1,
+                         status=Status.UNCERTAIN, snippet="", chain=[], note="")
 
-        classified = classify([selector], [Edge("dom_attr:x", "css_selector:class:used", Status.CONNECTED)])
+        edges = match_css_selectors([applied], [], [self._css("pb-badge-success")], set())
 
-        self.assertEqual(classified[0].status, Status.CONNECTED)
+        self.assertIn(Status.UNCERTAIN, [e.status for e in edges])
 
-    def test_other_kinds_can_still_be_claimed_unused(self):
-        # Only css_selector has this recall gap. A dead design token stays a finding.
-        token = _symbol("css_token_def:token:--dead", "css_token_def", "--dead")
+    def test_a_shared_opening_that_is_not_a_separator_does_not_excuse_a_rule(self):
+        # Requiring the stem to end in - or _ is what stops this matching every class that
+        # happens to share three letters with another.
+        applied = Symbol(id="dom_selector:class:hint:a.js:1", kind="dom_selector",
+                         label="hint", sub="class:stem", file="a.js", line=1,
+                         status=Status.UNCERTAIN, snippet="", chain=[], note="")
 
-        dead = "css_token_def:token:--dead"
-        classified = classify([token], [Edge(dead, dead, Status.UNUSED)])
+        edges = match_css_selectors([applied], [], [self._css("hintwarm")], set())
 
-        self.assertEqual(classified[0].status, Status.UNUSED)
+        self.assertEqual([e.status for e in edges if e.to_id.endswith("hintwarm")],
+                         [Status.UNUSED])
+
+    def test_an_id_rule_is_never_excused_by_a_prefix(self):
+        # Ids are not assembled from families the way utility classes are.
+        css = Symbol(id="css_selector:id:thing-x", kind="css_selector", label="thing-x",
+                     sub="id", file="a.css", line=1, status=Status.UNCERTAIN,
+                     snippet="", chain=[], note="")
+        applied = Symbol(id="dom_selector:class:thing-:a.js:1", kind="dom_selector",
+                         label="thing-", sub="class:stem", file="a.js", line=1,
+                         status=Status.UNCERTAIN, snippet="", chain=[], note="")
+
+        edges = match_css_selectors([applied], [], [css], set())
+
+        self.assertEqual([e.status for e in edges], [Status.UNUSED])
 
 
 class JsDefinedTokensTests(SimpleTestCase):
