@@ -64,6 +64,7 @@ SCAN_PHASES = (
     "JavaScript in templates",
     "matching calls to endpoints",
     "GraphQL",
+    "Celery",
     "Python entry points",
     "references to routes",
     "response fields",
@@ -220,6 +221,16 @@ def run_scan(
     from seamcheck.extractors.graphql_extractor import extract_graphql
 
     graphql_symbols, graphql_edges = extract_graphql(repo_root)
+
+    progress.step("Celery")
+    # Code reached with no HTTP request at all. A beat entry naming a task that does not
+    # exist raises where nobody is looking and the job silently never runs - the reference
+    # project lost challenges and season rollover for fourteen days that way.
+    from seamcheck.extractors.celery_extractor import extract_celery
+
+    celery_symbols, celery_edges = extract_celery(repo_root)
+    graphql_symbols += celery_symbols
+    graphql_edges += celery_edges
 
     progress.step("Python entry points")
     entry_point_symbols = extract_entry_points(entry_point_files or set())
