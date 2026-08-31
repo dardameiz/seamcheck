@@ -65,8 +65,9 @@ REPOS = [
     {
         "name": "saleor-dashboard",
         "url": "https://github.com/saleor/saleor-dashboard",
-        "adapter": "nextjs",
-        "why": "a real GraphQL CLIENT - ships the schema and its own .graphql operations",
+        "adapter": "django",
+        "why": "a React SPA with NO backend - the GraphQL client half, and the case where "
+               "no adapter fits and the fallback is honest about finding nothing",
     },
     {
         "name": "cal.com",
@@ -241,6 +242,25 @@ def scan_one(repo: dict) -> dict:
                 if symbol.id not in seen:
                     seen.add(symbol.id)
                     symbols.append(symbol)
+        # The transports, which no route list contains and which are the reason a repo
+        # can be "fully read" and still have a whole API invisible.
+        from seamcheck.extractors.celery_extractor import extract_celery
+        from seamcheck.extractors.graphql_extractor import extract_graphql
+        from seamcheck.extractors.stripe_extractor import extract_stripe
+
+        for extract in (extract_graphql, extract_celery, extract_stripe):
+            try:
+                extra, _ = extract(str(target))
+            except Exception:  # noqa: BLE001 - a transport must not fail the scan
+                extra = []
+            for symbol in extra:
+                if symbol.id not in seen:
+                    seen.add(symbol.id)
+                    symbols.append(symbol)
+        row["graphql"] = sum(1 for s in symbols if s.kind.startswith("graphql"))
+        row["celery"] = sum(1 for s in symbols if s.kind.startswith("celery"))
+        row["stripe"] = sum(1 for s in symbols if s.kind.startswith("stripe"))
+
         routes = [s for s in symbols if s.kind == "url"]
         row["routes"] = len(routes)
         row["views"] = sum(1 for s in symbols if s.kind == "view")
@@ -280,7 +300,7 @@ def scan(only: str | None = None) -> None:
     width = max((len(row["name"]) for row in rows), default=10)
     detected_width = max((len(row.get("detected", "")) for row in rows), default=10)
     print(f"\n  {'repo':<{width}}  {'detected':<{detected_width}} {'routes':>7} {'views':>6} "
-          f"{'unsure':>7} {'files':>7} {'lines':>10} {'sec':>6}  gates")
+          f"{'unsure':>7} {'gql':>6} {'celery':>7} {'stripe':>7} {'lines':>10} {'sec':>6}  gates")
     print("  " + "-" * (width + 76))
     for row in rows:
         if row.get("gate1") != "ok":
@@ -289,14 +309,18 @@ def scan(only: str | None = None) -> None:
         mark = "1" + ("2" if row["gate2"] == "ok" else "-") + ("4" if row["gate4"] == "ok" else "-")
         flag = "" if row["expected"] in row["detected"] else f"  (expected {row['expected']})"
         print(f"  {row['name']:<{width}}  {row['detected']:<{detected_width}} {row['routes']:>7,} "
-              f"{row['views']:>6,} {row['uncertain']:>7,} {row['files']:>7,} "
+              f"{row['views']:>6,} {row['uncertain']:>7,} {row.get('graphql', 0):>6,} "
+              f"{row.get('celery', 0):>7,} {row.get('stripe', 0):>7,} "
               f"{row['lines']:>10,} {row['seconds']:>6}  {mark}{flag}")
     done = [row for row in rows if row.get("gate1") == "ok"]
     if done:
         print("  " + "-" * (width + 76))
         print(f"  {'TOTAL':<{width}}  {len(done):<10} "
               f"{sum(r['routes'] for r in done):>7,} {sum(r['views'] for r in done):>6,} "
-              f"{sum(r['uncertain'] for r in done):>7,} {sum(r['files'] for r in done):>7,} "
+              f"{sum(r['uncertain'] for r in done):>7,} "
+              f"{sum(r.get('graphql', 0) for r in done):>6,} "
+              f"{sum(r.get('celery', 0) for r in done):>7,} "
+              f"{sum(r.get('stripe', 0) for r in done):>7,} "
               f"{sum(r['lines'] for r in done):>10,}")
     (CORPUS / "results.json").write_text(json.dumps(rows, indent=2), encoding="utf-8")
     print(f"\n  wrote {CORPUS / 'results.json'}")
