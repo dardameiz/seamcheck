@@ -252,6 +252,33 @@ def find_project(start: pathlib.Path) -> tuple[str, pathlib.Path] | None:
 PRIMARY = ("map", "check", "backfill")
 
 
+def version_line() -> str:
+    """The installed version, plus a warning when that number can be stale.
+
+    An editable install records its version at install time and never revisits it, so a
+    checkout whose pyproject has moved on reports the old number while running the new
+    code. That looks exactly like a failed upgrade, and the only way to tell is to see
+    where the module is being imported from - so it is printed.
+    """
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        installed = version("seamcheck")
+    except PackageNotFoundError:  # running straight from a source tree
+        installed = "unknown"
+
+    here = pathlib.Path(__file__).resolve().parent
+    from_site_packages = "site-packages" in here.parts or "dist-packages" in here.parts
+    line = f"seamcheck {installed}"
+    if not from_site_packages:
+        line += (
+            f"\n  running from {here}"
+            "\n  This is a source or editable install: the version above was recorded when"
+            "\n  it was installed and may lag the code. `pip install -e <path>` refreshes it."
+        )
+    return line
+
+
 def _overview() -> str:
     width = max(len(name) for name in PRIMARY)
     listing = "\n".join(f"  {name:<{width}}  {COMMANDS[name].summary}" for name in PRIMARY)
@@ -262,7 +289,8 @@ def _overview() -> str:
         "     seamcheck help <command>   what any of them is for, with examples\n\n"
         "options:\n"
         "  -v, --verbose   show the host project's own warnings and start-up logging\n"
-        "  -q, --quiet     no progress bar (it is off already when output is redirected)\n\n"
+        "  -q, --quiet     no progress bar (it is off already when output is redirected)\n"
+        "  -V, --version   which seamcheck this is, and where it is running from\n\n"
         "Any flag the management command accepts also works here, e.g.\n"
         "  seamcheck map --since main --no-serve\n"
         "  seamcheck map --tunnel\n"
@@ -395,6 +423,9 @@ def main(argv: list[str] | None = None) -> int:
     argv, verbose, no_progress = _split_flags(argv)
     parser = build_parser()
 
+    if argv and argv[0] in ("-V", "--version", "version"):
+        print(version_line())
+        return 0
     if not argv or argv[0] in ("-h", "--help"):
         parser.print_help()
         return 0

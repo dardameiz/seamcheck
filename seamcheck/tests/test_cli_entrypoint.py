@@ -264,3 +264,37 @@ class FrontDoorFlagTests(SimpleTestCase):
             main(["scan", "-v"])
 
         self.assertEqual(seen, [True])
+
+
+class VersionTests(SimpleTestCase):
+    def test_it_reports_a_version(self):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.assertEqual(main(["--version"]), 0)
+
+        self.assertIn("seamcheck ", out.getvalue())
+
+    def test_a_source_install_says_the_number_can_be_stale(self):
+        # An editable install records its version once and never revisits it, so a checkout
+        # whose pyproject has moved on reports the old number while running the new code -
+        # indistinguishable from a failed upgrade unless the path is shown.
+        import seamcheck.cli
+        from seamcheck.cli import version_line
+
+        line = version_line()
+        self.assertIn("seamcheck ", line)
+
+        installed_normally = "site-packages" in pathlib.Path(seamcheck.cli.__file__).parts
+        if not installed_normally:
+            self.assertIn("running from", line)
+            self.assertIn("may lag the code", line)
+        else:
+            self.assertNotIn("may lag the code", line)
+
+    def test_version_wins_over_being_read_as_a_command(self):
+        # `version` is not in COMMANDS; without this it is a typo and exits 2.
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.assertEqual(main(["version"]), 0)
+
+        self.assertIn("seamcheck ", out.getvalue())
