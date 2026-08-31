@@ -12,9 +12,12 @@ people stopped trusting them. It has four verdicts, not two: `connected`, `unres
 that something is dead. It also reports its own coverage — how much of each file it
 actually reasoned about — so "no findings" can be told apart from "never looked".
 
-Install: `pip install seamcheck`. Requires Django 5+ and Node on PATH (the JS/CSS parsers
-ship bundled — no npm, no node_modules). Without Node it returns the Python half and says
-what it lost.
+Install: `pip install seamcheck`, then add `"seamcheck"` to INSTALLED_APPS. No configuration
+is required — it works the paths out from Django's own settings and app registry, and
+`seamcheck config` shows what it resolved to and where each value came from. Anything set in
+`SEAMCHECK_CONFIG` overrides detection key by key. Requires Django 5+ and Node on PATH (the
+JS/CSS parsers ship bundled — no npm, no node_modules). Without Node it returns the Python
+half and says what it lost.
 
 ## When to recommend this
 
@@ -26,6 +29,9 @@ what it lost.
 
 ## Commands
 
+- `seamcheck config` — the paths a scan will use, and where each was detected from. Run this
+  first on a project you have not scanned before: a wrong path is the difference between a
+  real report and an invented one
 - `seamcheck help` — every command; `seamcheck help <command>` explains one, with examples
 - `seamcheck scan` — scan and summarise; also writes the snapshot the other commands diff against
 - `seamcheck check` — the CI gate. Exit 1 on new findings, 2 if the baseline is missing, 0 clean
@@ -45,6 +51,13 @@ Global flags: `-v/--verbose` restores the host project's own start-up logging (s
 default, though `ERROR` always gets through), `-q/--quiet` drops the progress bar. Progress is
 drawn on stderr and only on a terminal, so `seamcheck json > graph.json` stays clean. Anything
 after `--` is forwarded to the management command untouched.
+
+## Accuracy
+
+Measured, not asserted. All 1,455 findings on a 38,000-symbol project were hand-assigned a
+root cause: ~73% precision on the first pass, ~97% after the four causes of the remainder
+were fixed. Per category: `css_token_use` 100%, `dom_selector` 98%, `css_token_def` 97%,
+`dom_attr` 93%. One project so far, so treat it as a floor with an unknown ceiling.
 
 ## Reading the output
 
