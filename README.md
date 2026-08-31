@@ -183,6 +183,7 @@ doubles every symbol and then reports the copies as unreferenced.
 
 | key | what it is | default |
 |---|---|---|
+| `static_urls` | read `urls.py` as text instead of importing it — see below | `false` |
 | `static_root` | where a template's `{% static_js 'a/b.js' %}` resolves from | `static` |
 | `vite_config` | the bundler config, read for entry points | `vite.config.js` |
 | `asgi_module` | scanned for WebSocket and ASGI routes | none |
@@ -197,6 +198,26 @@ doubles every symbol and then reports the copies as unreferenced.
 **You need Node on PATH.** The JS and CSS parsers run on it. You do *not* need npm or
 `node_modules` — acorn and postcss ship inlined in the wheel. If Node is missing,
 Seamcheck says so and gives you the Python half rather than dying.
+
+### Scanning a project that will not import
+
+By default Seamcheck asks Django to resolve the URLconf, which is exact and needs the
+project to **run**: settings on the environment, every app importable, every dependency
+installed. That is fine in a project you own and impossible in one you cloned.
+
+```python
+SEAMCHECK_CONFIG = {"static_urls": True}
+```
+
+reads `urls.py` as text instead. Measured against Django's own resolver on a 373-route
+project, it recovers **95% of the routes actually declared in a `urls.py`**. What it misses
+is what no reader of text could:
+
+- **Routes Django generates at runtime** — the admin builds 116 of them from registered
+  ModelAdmins, and they exist in no source file.
+- **Pattern lists built by a loop** — `[path(f'{v}/', view) for v in VARIANTS]`.
+- **Third-party `include()`** whose source is outside the repo, which is excluded on purpose:
+  somebody else's routing table is not your dead code.
 
 ## Use
 

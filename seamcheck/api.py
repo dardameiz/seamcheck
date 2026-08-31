@@ -97,7 +97,9 @@ MAP_PHASES = ("building the report", "page attribution", "commit history", "rend
 MAP_STEPS = SCAN_STEPS + len(MAP_PHASES)
 
 
-def scan(repo_root: str = ".", progress: Progress | None = None) -> Graph:
+def scan(
+    repo_root: str = ".", progress: Progress | None = None, static_urls: bool | None = None
+) -> Graph:
     progress = progress or null()
     _CONFIG_ROOT[0] = repo_root
     progress.step("JavaScript entry points")
@@ -142,6 +144,10 @@ def scan(repo_root: str = ".", progress: Progress | None = None) -> Graph:
             tailwind_classes(os.path.join(repo_root, build_output)) if build_output else set()
         ),
         progress=progress,
+        repo_root=repo_root,
+        static_urls=(
+            config.get("static_urls", False) if static_urls is None else static_urls
+        ),
     ), repo_root)
 
 

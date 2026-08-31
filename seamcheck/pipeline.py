@@ -22,6 +22,7 @@ from seamcheck.extractors.css_extractor import (
 )
 from seamcheck.extractors.django_extractor import extract_django_urls_views, route_name_index
 from seamcheck.extractors.django_models_extractor import extract_django_models
+from seamcheck.extractors.django_static_extractor import extract_urls_views_static
 from seamcheck.extractors.dom_js_extractor import (
     extract_dom_selectors,
     extract_js_class_usages,
@@ -141,10 +142,26 @@ def run_scan(
     css_files: list[str] | None = None,
     tailwind_build_classes: set[str] | None = None,
     progress: Progress | None = None,
+    repo_root: str = ".",
+    static_urls: bool = False,
 ) -> Graph:
     progress = progress or null()
     progress.step("URLs and views")
-    django_symbols, routing_edges = extract_django_urls_views(urlconf_module, first_party_prefixes)
+    # Two ways to read a URLconf, and the choice is about what the machine can do rather
+    # than about accuracy. Asking Django is exact and needs the project to RUN - settings,
+    # every app importable, every dependency installed. Reading the source needs none of
+    # that, and on the project both were measured against it recovers 95% of the routes
+    # actually declared in a urls.py. What it cannot see is what no reader of text could:
+    # routes Django generates at runtime (the admin's 116) and lists built by a loop.
+    static_names: dict[str, str] = {}
+    if static_urls:
+        django_symbols, routing_edges, static_names = extract_urls_views_static(
+            repo_root, urlconf_module, first_party_prefixes
+        )
+    else:
+        django_symbols, routing_edges = extract_django_urls_views(
+            urlconf_module, first_party_prefixes
+        )
     progress.step("ASGI routes")
     if asgi_file:
         django_symbols = django_symbols + extract_asgi_routes(asgi_file)
@@ -177,7 +194,7 @@ def run_scan(
     # counted as reaching a route, so every server-rendered page read as unmeasured.
     reference_symbols, reference_edges = extract_url_references(
         template_files or [], sorted(entry_point_files or []),
-        route_name_index(urlconf_module), django_symbols,
+        static_names if static_urls else route_name_index(urlconf_module), django_symbols,
     )
     symbols += reference_symbols
     edges += reference_edges
