@@ -63,6 +63,12 @@ REPOS = [
         "why": "large Django, GraphQL-first - few REST routes by design",
     },
     {
+        "name": "saleor-dashboard",
+        "url": "https://github.com/saleor/saleor-dashboard",
+        "adapter": "nextjs",
+        "why": "a real GraphQL CLIENT - ships the schema and its own .graphql operations",
+    },
+    {
         "name": "cal.com",
         "url": "https://github.com/calcom/cal.com",
         "adapter": "nextjs",

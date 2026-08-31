@@ -53,6 +53,7 @@ SCAN_PHASES = (
     "JavaScript modules",
     "JavaScript in templates",
     "matching calls to endpoints",
+    "GraphQL",
     "Python entry points",
     "references to routes",
     "response fields",
@@ -193,11 +194,20 @@ def run_scan(
     js_edges += inline_edges
     progress.step("matching calls to endpoints")
     match_edges = match_js_to_django(server_symbols, js_symbols)
+    progress.step("GraphQL")
+    # A GraphQL API has ONE route, so every adapter reports it as a single connected
+    # endpoint and stops. The real API is the schema, and the seam is a query naming a
+    # field the schema does not define - the same bug as a dead fetch, in a place the
+    # route readers cannot see.
+    from seamcheck.extractors.graphql_extractor import extract_graphql
+
+    graphql_symbols, graphql_edges = extract_graphql(repo_root)
+
     progress.step("Python entry points")
     entry_point_symbols = extract_entry_points(entry_point_files or set())
 
-    symbols = server_symbols + js_symbols + entry_point_symbols
-    edges = routing_edges + js_edges + match_edges
+    symbols = server_symbols + js_symbols + entry_point_symbols + graphql_symbols
+    edges = routing_edges + js_edges + match_edges + graphql_edges
     progress.step("references to routes")
     # Every other way the project points at its own routes. Without this, only a fetch()
     # counted as reaching a route, so every server-rendered page read as unmeasured.
