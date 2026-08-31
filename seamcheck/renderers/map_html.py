@@ -39,16 +39,20 @@ _CSS = """
   --bg:#f7f8fa; --panel:#ffffff; --sunk:#eef0f4;
   --ink:#0f1319; --muted:#5a6473; --line:#dfe3ea;
   --sig:#0b6bcb;
-  --ok:#1a7f4b; --crit:#c0362c; --warn:#9a6410; --dim:#8b95a5;
-  --ok-fill:#e6f4ec; --crit-fill:#fbeae8; --warn-fill:#fdf1de; --dim-fill:#eef0f4;
+  /* Four statuses, four hues that survive being 4px tall. `unused` was #9a6410 - a dark
+     amber that reads as another red next to #c0362c, so the two categories a reader is
+     meant to triage differently looked like one. It is violet now: no red in it at all,
+     distinct from the green and the blue-grey, and still legible on white. */
+  --ok:#1a7f4b; --crit:#d1332a; --warn:#7c3aed; --dim:#8b95a5;
+  --ok-fill:#e6f4ec; --crit-fill:#fdeae8; --warn-fill:#f1ebfe; --dim-fill:#eef0f4;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg:#0d1117; --panel:#151b24; --sunk:#0a0e14;
     --ink:#dde4ee; --muted:#8b97a8; --line:#252d38;
     --sig:#4aa3ff;
-    --ok:#3fb27f; --crit:#f0736a; --warn:#d69a3c; --dim:#6f7b8c;
-    --ok-fill:#10281e; --crit-fill:#2c1618; --warn-fill:#2a2011; --dim-fill:#161c24;
+    --ok:#3fb27f; --crit:#f0736a; --warn:#a78bfa; --dim:#6f7b8c;
+    --ok-fill:#10281e; --crit-fill:#2c1618; --warn-fill:#211a35; --dim-fill:#161c24;
   }
 }
 * { box-sizing:border-box; }
@@ -90,6 +94,11 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overf
          white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 #q { flex:0 1 150px; min-width:78px; padding:6px 9px; font-size:12.5px; border-radius:7px;
      border:1px solid var(--line); background:var(--panel); color:var(--ink); }
+/* A filter that matched nothing used to grey all 1,450 nodes and say nothing at all, so
+   the map looked broken rather than empty. It says how many matched. */
+.qn { flex:none; font-size:11px; color:var(--muted); white-space:nowrap;
+      font-family:ui-monospace,Menlo,monospace; }
+.qn.none { color:var(--crit); }
 /* Always on screen. A reader should never have to hunt for what a colour claims, and the
    four statuses are the whole contract this tool makes. */
 .legendbar { display:flex; flex-wrap:wrap; gap:4px 14px; padding:0 12px 9px; font-size:11px; }
@@ -101,7 +110,10 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overf
 .legendbar .unresolved i { border-color:var(--crit); }
 .legendbar .unused i { border-color:var(--warn); }
 .legendbar .uncertain i { border-color:var(--dim); }
-.legendbar .filled i { border-color:var(--crit); background:var(--crit-fill); }
+/* Not a fifth status: a swatch showing what "solid" means, so it borrows the two hues
+   it describes rather than adding a third red to the row. */
+.legendbar .filled i { border-color:var(--crit);
+        background:linear-gradient(135deg,var(--crit-fill) 50%,var(--warn-fill) 50%); }
 .note { padding:0 12px 8px; font-size:11.5px; color:var(--muted); }
 .note:empty { display:none; }
 /* A deleted symbol is in no current page, so no canvas can show it. Naming it here is
@@ -129,6 +141,7 @@ svg.drag { cursor:grabbing; }
            font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
 .nd { cursor:pointer; }
 .nd.faded { opacity:.10; }
+svg.nolabels .nd text { display:none; }
 .nd.lit rect { stroke-width:3.5; }
 .ed { fill:none; stroke-width:1.1; opacity:.38; }
 .ed.faded { opacity:.05; }
@@ -163,7 +176,16 @@ svg.drag { cursor:grabbing; }
 /* One row per hop, joined by a rule down the left, so the walk reads as a route. */
 .hop { border-left:2px solid var(--line); padding:0 0 9px 10px; position:relative; }
 .hop.at { border-left-color:var(--sig); }
-.hop .hk { font-size:9.5px; text-transform:uppercase; letter-spacing:.07em; color:var(--muted); }
+.hop .hk { font-size:9.5px; text-transform:uppercase; letter-spacing:.07em;
+           color:var(--muted); display:flex; align-items:center; gap:6px; }
+/* The step number sits in the rule the hops hang off, so the column of numbers reads as
+   an order rather than as part of each label. */
+.hop .hn { flex:none; width:16px; height:16px; margin-left:-19px; border-radius:50%;
+           background:var(--line); color:var(--ink); font-size:9px; font-weight:700;
+           display:inline-flex; align-items:center; justify-content:center;
+           letter-spacing:0; }
+.hop.at .hn { background:var(--sig); color:#fff; }
+.hop .hs { color:var(--muted); font-size:9px; letter-spacing:.04em; }
 .hop .hl { font-size:12.5px; font-family:ui-monospace,Menlo,monospace; word-break:break-all; }
 .hop.at { background:var(--sunk);
           border-radius:0 7px 7px 0; }
@@ -234,6 +256,14 @@ svg.drag { cursor:grabbing; }
 .fl { display:flex; align-items:center; gap:8px; padding:3px 0; cursor:pointer;
       border-radius:6px; }
 .fl:hover { background:var(--panel); }
+/* The row's own action is "show me this on the map", and it was invisible next to an
+   `open` link that left for VS Code - so the one thing the view exists for read as the
+   secondary one. Named, and on hover it is the loud half of the row. */
+.fl .go { flex:none; margin-left:auto; color:var(--sig); font-size:11px; opacity:0;
+          font-family:ui-monospace,Menlo,monospace; }
+.fl:hover .go { opacity:1; }
+.fl .edit { flex:none; font-size:11px; opacity:.55; }
+.fl:hover .edit { opacity:1; }
 .fl .fn { flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis;
           white-space:nowrap; }
 .cov { flex:none; width:52px; height:6px; border-radius:3px; background:var(--line);
@@ -342,6 +372,17 @@ const crumb = document.getElementById("crumb");
 const byId = new Map();
 PAGES.forEach(p => p.nodes.forEach(n => byId.set(n.id, n)));
 
+// How many symbols each file has in the whole scan, so the breadcrumb can say "210 of
+// 674" rather than showing 210 boxes and letting a reader conclude that is all of it.
+//
+// Counted from FILES - the same numbers the Files view puts on its badges - and NOT from
+// the drawn pages. The canvas can only show what a page entry reaches, so counting what
+// it drew would always report "210 of 210" and quietly hide the 464 symbols in that file
+// that no page reaches at all. Those are exactly the ones worth knowing about.
+const FILE_TOTALS = new Map(
+  FILES.map(f => [f.path, Object.values(f.counts || {}).reduce((a, n) => a + n, 0)])
+);
+
 // The pages a reader recognises, each holding the bundles it loads. A scrolling rail of
 // 34 rows cost more than half a phone screen; an optgroup says the same thing in one
 // control and gives every pixel of it back to the canvas.
@@ -437,6 +478,20 @@ function visible(p) {
   return keep;
 }
 
+// A label longer than the box loses its end, and the end is the half that identifies it:
+// `api/announcements/m…` and `api/announcements/p…` are the same string on screen, and
+// `mark_announcement_v…` could be viewed, visible or void. Both ends survive instead, so
+// the middle - which is almost always a shared prefix - is what gets dropped. The full
+// value is on the node's <title>, and in the panel, either way.
+function fit(text, max) {
+  const value = String(text == null ? "" : text);
+  if (value.length <= max) return value;
+  // Two thirds to the front: a path's tail is short and decisive ("/pbits-notif" ->
+  // "-notify/"), its head is the part that repeats.
+  const tail = Math.max(4, Math.floor((max - 1) / 3));
+  return value.slice(0, max - 1 - tail) + "…" + value.slice(-tail);
+}
+
 const NODE_W = 150, LANE = 160, ROW = 30;
 
 const ROW_CHOICES = [16, 22, 30, 42, 58, 80, 110, 150, 210];
@@ -490,12 +545,47 @@ function layout(p, keep) {
 
 const hit = n => !query || (n.label + " " + n.file).toLowerCase().includes(query);
 
+// How many nodes the filter box matched, said out loud. Fading is only meaningful when
+// something survives it: with no matches every node dimmed at once, which is a canvas of
+// ghosts and edge spaghetti that reads as a bug, not as "nothing here is called that".
+function reportMatches(drawn, matched) {
+  const box = document.getElementById("qn");
+  if (!box) return;
+  box.classList.toggle("none", Boolean(query) && matched === 0);
+  box.textContent = !query ? ""
+    : matched === 0 ? `no match in ${drawn}`
+    : `${matched} of ${drawn}`;
+}
+
+// The layout is nine trial placements over every node on the page - the single most
+// expensive thing here - and it was recomputed on every draw, including the draws that
+// only moved the viewport. Nothing about a pan changes where a node sits relative to its
+// neighbours, so the answer is cached against the things that DO change it.
+let _layout = {key: null, keep: null, value: null};
+
+function layoutKey() {
+  return [current, mode, focus, fileFilter, only, isolate ? lit : "", asList].join("\u0000");
+}
+
+function layoutFor(p) {
+  const key = layoutKey();
+  if (_layout.key !== key) {
+    const keep = visible(p);
+    _layout = {key, keep, value: layout(p, keep)};
+  }
+  return _layout;
+}
+
 function draw() {
   const p = PAGES[current];
   if (!p) return;
   pages.value = String(current);
   const here = p.where ? `${p.title} · ${p.where}` : p.title;
-  crumb.textContent = fileFilter ? `${here} › ${fileFilter}`
+  const drawnHere = fileFilter ? p.nodes.filter(n => n.file === fileFilter).length : 0;
+  const inFile = FILE_TOTALS.get(fileFilter) || drawnHere;
+  crumb.textContent = fileFilter
+      ? `${here} › ${fileFilter} — ${drawnHere} of ${inFile} symbols`
+        + (drawnHere < inFile ? "; the rest are not reached from any page" : "")
     : focus ? `${here} › ${(byId.get(focus) || {}).label || ""}`
     : `${here} — pick a module`;
   document.getElementById("up").hidden = !focus;
@@ -505,8 +595,7 @@ function draw() {
     svg.innerHTML = `<text x="20" y="40" class="col">nothing the scan reads changed in this commit</text>`;
     return;
   }
-  const keep = visible(p);
-  const {pos, columns, width, height} = layout(p, keep);
+  const {keep, value: {pos, columns, width, height}} = layoutFor(p);
   // A phone is narrower than two columns of this map, so an untouched view opens showing
   // the whole chain, nudged clear of the left edge. Only the first draw of a view fits:
   // once someone pans or zooms, the view is theirs.
@@ -521,14 +610,22 @@ function draw() {
   // What the click lit up. Everything else stays on the canvas but recedes, so the chain
   // reads as a line through the page instead of the reader tracing edges by eye. Declared
   // before the edges that read it: the node loop is further down, but the edge loop is not.
+  // Counted before the loop that fades, so "nothing matched" can be treated as its own
+  // answer rather than as 1,450 individually-dimmed nodes.
+  const drawnNodes = p.nodes.filter(n => keep.has(n.id));
+  const matched = query ? drawnNodes.filter(hit).length : drawnNodes.length;
+  const fading = !query || matched > 0;
+  reportMatches(drawnNodes.length, matched);
   const chain = lit && !isolate ? chainOf(p, lit) : null;
-  const out = [`<g transform="translate(${view.x},${view.y}) scale(${view.k})">`];
+  const out = ['<g id="vp">'];
   columns.forEach(c => out.push(
     `<text class="col" x="${c.x}" y="44">${esc(c.label)} ${c.count}</text>`));
   p.edges.forEach(e => {
     const a = pos.get(e.source), b = pos.get(e.target);
     if (!a || !b) return;
-    const dim = chain && !(chain.has(e.source) && chain.has(e.target));
+    const ends = [byId.get(e.source), byId.get(e.target)];
+    const dim = (chain && !(chain.has(e.source) && chain.has(e.target)))
+      || (fading && query && !ends.every(n => n && hit(n)));
     const mx = (a.x + 150 + b.x) / 2;
     out.push(`<path class="ed${dim ? " faded" : ""}" stroke="${S[e.status] || "var(--dim)"}"
       d="M${a.x + 150},${a.y + 10} C${mx},${a.y + 10} ${mx},${b.y + 10} ${b.x},${b.y + 10}"/>`);
@@ -540,26 +637,44 @@ function draw() {
   // observable and nothing used it), so those are filled rather than outlined: at the zoom
   // where a whole page fits, labels are gone and a solid block is the only thing that
   // carries across a wall of outlines.
-  const withLabels = view.k >= 0.34;
-  p.nodes.filter(n => keep.has(n.id)).forEach(n => {
+  // Labels used to be left out of the markup below a zoom threshold, which made every
+  // wheel tick a full rebuild. They are always emitted now and hidden by a class on the
+  // svg (see applyView), so the threshold costs one attribute instead of re-parsing
+  // thousands of nodes.
+  drawnNodes.forEach(n => {
     const q = pos.get(n.id); if (!q) return;
     const ch = CHANGED[n.id];
     const stroke = ch ? CH[ch] : (S[n.status] || "var(--dim)");
     const alone = n.status === "unresolved" || n.status === "unused";
-    const label = n.label.length > 20 ? n.label.slice(0, 19) + "…" : n.label;
+    const label = fit(n.label, 20);
     // The drawn box is 20px tall and the view opens scaled down, so on a phone the
     // visible target can be 8px. The transparent rect below it fills the row pitch.
-    const shown = hit(n) && (!chain || chain.has(n.id));
+    const shown = (!fading || hit(n)) && (!chain || chain.has(n.id));
     out.push(`<g class="nd${shown ? "" : " faded"}${n.id === lit ? " lit" : ""}" data-id="${n.id}">
       <rect x="${q.x - 5}" y="${q.y - 5}" width="160" height="30" fill="transparent"
             pointer-events="all"/>
       <rect x="${q.x}" y="${q.y}" width="150" height="20" rx="5"
             fill="${alone ? (F[n.status] || "var(--panel)") : "var(--panel)"}"
             stroke="${stroke}" stroke-width="${ch ? 3 : 1.5}"/>
-      ${withLabels ? `<text x="${q.x + 7}" y="${q.y + 14}">${esc(label)}</text>` : ""}</g>`);
+      <title>${esc(n.label)}${n.file ? "\n" + esc(n.file) + (n.line ? ":" + n.line : "") : ""}</title>
+      <text x="${q.x + 7}" y="${q.y + 14}">${esc(label)}</text></g>`);
   });
   out.push("</g>");
   svg.innerHTML = out.join("");
+  applyView();
+}
+
+// The whole cost of a pan. The viewport is one transform on one group, so moving it is a
+// single attribute write no matter how many thousand nodes are under it - where rebuilding
+// the markup was O(nodes) per pointermove frame, which is what made a 1,450-node page
+// unusable and would have made a 15,000-node one impossible.
+function applyView() {
+  const g = document.getElementById("vp");
+  if (!g) return;
+  g.setAttribute("transform", `translate(${view.x},${view.y}) scale(${view.k})`);
+  // Below this zoom the text is sub-pixel anyway; hiding it by class keeps the DOM stable
+  // and is what makes zooming out of a large page cheap rather than catastrophic.
+  svg.classList.toggle("nolabels", view.k < 0.34);
 }
 
 // Delegated, not per-node: draw() replaces svg.innerHTML, and panning redraws on every
@@ -607,11 +722,19 @@ function routes(id) {
           outbound: (fwd.get(id) || []).filter(x => !seenOnPath.has(x)).slice(0, 12)};
 }
 
-function hop(id, here) {
+// Five unlabelled boxes down a rule do not say which end is the browser and which is the
+// database, and a reader tracing a bug needs to know which way round it is. Each hop is
+// numbered, "1 of 5", and the last one says so.
+function hop(id, here, step, total) {
   const n = byId.get(id); if (!n) return "";
   const code = n.context || n.snippet;
+  // The count lives in the section heading ("2 hops"), so a per-row "of 2" only repeats
+  // it. The number and the word `last` are what a row needs: where am I, and is this the
+  // end of the line.
+  const mark = step ? `<span class="hn">${step}</span>` : "";
+  const end = step && step === total ? `<span class="hs">last</span>` : "";
   return `<div class="hop${id === here ? " at" : ""}">
-    <div class="hk">${esc(n.kind)}</div>
+    <div class="hk">${mark}${esc(n.kind)}${end}</div>
     <div class="hl">${esc(n.label)}</div>
     ${n.file ? `<div class="hf">${loc(n.file, n.line)}</div>` : ""}
     ${code ? `<button class="code" data-code="${esc(id)}">code</button>` : ""}</div>`;
@@ -662,10 +785,11 @@ function show(id) {
     ${n.file ? `<div class="row">${loc(n.file, n.line)}</div>` : ""}
     ${n.note ? `<div class="note">${esc(n.note)}</div>` : ""}
     ${why(n.kind, n.status)}
-    <div class="lbl">Path — browser to backend</div>
-    ${path.map(step => hop(step, id)).join("")}
-    ${reaches.length ? `<div class="lbl">Reaches</div>` +
-      reaches.map(step => hop(step, id)).join("") : ""}`;
+    ${path.length ? `<div class="lbl">Path — browser to backend · ${path.length} hop${
+      path.length === 1 ? "" : "s"}</div>` : ""}
+    ${path.map((step, i) => hop(step, id, i + 1, path.length)).join("")}
+    ${reaches.length ? `<div class="lbl">Reaches — ${reaches.length} from here</div>` +
+      reaches.map((step, i) => hop(step, id, i + 1, reaches.length)).join("") : ""}`;
   sheet.hidden = false;
   document.getElementById("iso").onclick = () => {
     isolate = !isolate; view = {x:0, y:0, k:1}; draw(); show(id);
@@ -679,7 +803,7 @@ document.getElementById("dx").onclick = () => { lit = null; isolate = false; clo
 const ptrs = new Map();
 let drag = null, moved = false, pinch = null;
 
-const zoomTo = k => { view.k = Math.min(3, Math.max(0.2, k)); draw(); };
+const zoomTo = k => { view.k = Math.min(3, Math.max(0.2, k)); applyView(); };
 
 let lastTap = 0;
 svg.addEventListener("pointerdown", e => {
@@ -713,7 +837,7 @@ window.addEventListener("pointermove", e => {
   if (!moved && Math.abs(e.clientX - drag.sx) + Math.abs(e.clientY - drag.sy) < 6) return;
   moved = true;
   svg.classList.add("drag");
-  view.x = e.clientX - drag.x; view.y = e.clientY - drag.y; draw();
+  view.x = e.clientX - drag.x; view.y = e.clientY - drag.y; applyView();
 });
 const release = e => {
   ptrs.delete(e.pointerId);
@@ -734,13 +858,16 @@ svg.addEventListener("wheel", e => {
     return;
   }
   view.x -= e.deltaX; view.y -= e.deltaY;
-  draw();
+  applyView();
 }, {passive: false});
 
 // A pinch needs two fingers and some dexterity; these need one thumb.
 document.getElementById("zi").onclick = () => zoomTo(view.k * 1.25);
 document.getElementById("zo").onclick = () => zoomTo(view.k / 1.25);
-document.getElementById("zf").onclick = () => { view = {x:0, y:0, k:1}; draw(); };
+document.getElementById("zf").onclick = () => {
+  // Back to "unset", which is the signal draw() reads to re-fit the page to the screen.
+  view = {x:0, y:0, k:1}; draw();
+};
 document.getElementById("q").addEventListener("input", e => {
   query = e.target.value.trim().toLowerCase(); draw();
 });
@@ -1058,23 +1185,40 @@ function treeHtml() {
     const kids = [...node.dirs.entries()].sort((a, b) => a[0].localeCompare(b[0]));
     const inner = kids.map(([n, d]) => walk(d, n, depth + 1)).join("") +
       node.files.sort((a, b) => a.path.localeCompare(b.path)).map(f =>
-        `<div class="fl" data-path="${esc(f.path)}" style="padding-left:${depth * 13 + 20}px">
+        `<div class="fl" data-path="${esc(f.path)}" style="padding-left:${depth * 13 + 20}px"
+              title="Draw this file's symbols on the map">
            <span class="fn">${esc(f.path.split("/").pop())}</span>
-           ${bar(f)}${flags(f)}${OPEN.href
-             ? `<a class="loc" href="${esc(OPEN.href.split("{path}").join(absolute(f.path))
+           ${bar(f)}${flags(f)}
+           <span class="go">on map \u2192</span>
+           ${OPEN.href
+             ? `<a class="loc edit" href="${esc(OPEN.href.split("{path}").join(absolute(f.path))
                  .split("{line}").join(1))}" data-copy="${esc(absolute(f.path))}"
-                 title="Open in your editor">open</a>` : ""}</div>`).join("");
+                 title="Open the file in your editor">edit</a>` : ""}</div>`).join("");
     if (name === null) return inner;
     return `<details${depth < 2 || needle ? " open" : ""}>
       <summary style="padding-left:${depth * 13}px">${esc(name)}</summary>${inner}</details>`;
   };
-  return `<h2>Files</h2><p class="blurb">Every file the scan read, in the shape the
-    repository has. The bar is how many of a file's own declarations appear in the graph
-    at all — that is coverage, not a finding: a helper that makes no request and touches
-    no element has nothing to model. Click a file to draw only its symbols.</p>
+  return `<h2>Files</h2><p class="blurb"><b>Click a file to draw its symbols on the
+    map</b> — that is what this view is for: it answers "what of this file is actually
+    wired to anything", which the folder tree alone cannot. <code>edit</code> is the
+    other thing, and opens the file in your editor.<br><br>
+    Every file the scan read, in the shape the repository has. The bar is how many of a
+    file's own declarations appear in the graph at all — that is coverage, not a finding:
+    a helper that makes no request and touches no element has nothing to model.</p>
     <div class="tools"><input id="fq" type="search"
       placeholder="Filter ${shown.length} of ${FILES.length} files" value="${esc(fileQuery)}"></div>
     <div class="tree">${walk(root, null, 0)}</div>`;
+}
+
+// Which page shows the most of one file. A file's symbols are spread across the pages
+// that load it, and only one page can be drawn at a time.
+function bestPageFor(path) {
+  let best = current, most = -1;
+  PAGES.forEach((p, i) => {
+    const n = p.nodes.reduce((count, node) => count + (node.file === path ? 1 : 0), 0);
+    if (n > most) { most = n; best = i; }
+  });
+  return best;
 }
 
 function renderPanel() {
@@ -1082,10 +1226,16 @@ function renderPanel() {
     panel.innerHTML = treeHtml();
     panel.querySelectorAll(".fl").forEach(el => {
       el.onclick = e => {
-        // The row filters the canvas; the "open" link inside it opens an editor. Without
+        // The row filters the canvas; the `edit` link inside it opens an editor. Without
         // this the link did both, and the map jumped out from under the reader.
         if (e.target.closest(".loc")) return;
-        fileFilter = el.dataset.path; viewer.value = "map"; switchTo("map");
+        fileFilter = el.dataset.path;
+        // ...and go to the page that actually holds this file. Keeping whatever page was
+        // selected answered "what of this file is on the page you happened to be looking
+        // at", which for push_arena.js was 3 symbols out of 674 - a blank-looking canvas
+        // that reads as the file being unwired.
+        current = bestPageFor(fileFilter);
+        viewer.value = "map"; switchTo("map");
       };
     });
     const box = document.getElementById("fq");
@@ -1276,13 +1426,15 @@ def render(connectivity_map: ConnectivityMap, console=None, files=None,
         '<div class="crumbrow"><button id="up" type="button" hidden>\u2190</button>'
         '<button id="aslist" type="button" hidden>Show as list</button>'
         '<span id="crumb"></span>'
-        '<input id="q" type="search" placeholder="Filter"></div>',
+        '<input id="q" type="search" placeholder="Filter">'
+        '<span id="qn" class="qn"></span></div>',
         '<div class="legendbar" id="colourkey">'
         '<span class="k connected"><i></i>connected<em>something reaches it, evidence attached</em></span>'
         '<span class="k unresolved"><i></i>unresolved<em>something reaches for it and it is not there</em></span>'
         '<span class="k unused"><i></i>unused<em>both ends observable, nothing uses it</em></span>'
         '<span class="k uncertain"><i></i>uncertain<em>no evidence either way \u2014 not a claim it is dead</em></span>'
-        '<span class="k filled"><i></i>filled<em>unresolved or unused: the ones to look at</em></span>'
+        '<span class="k filled"><i></i>filled in<em>= unresolved or unused. The two to look at '
+        'are drawn solid, the rest as outlines.</em></span>'
         "</div>",
         '<div class="note" id="cmnote"></div><div class="gone" id="gone"></div>',
         "</header>",

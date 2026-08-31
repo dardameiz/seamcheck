@@ -357,10 +357,31 @@ class BigCanvasTests(SimpleTestCase):
         self.assertIn('F[n.status] || "var(--panel)"', out)
         self.assertIn("--crit-fill", out)
 
-    def test_labels_are_dropped_when_they_would_be_unreadable(self):
+    def test_labels_are_hidden_by_class_not_by_rebuilding_the_page(self):
+        # Below this zoom the text is sub-pixel anyway. Leaving it out of the markup meant
+        # crossing the threshold re-parsed every node on the page, so a wheel tick on a
+        # large page stalled; the threshold is one class on the svg now.
         out = map_html.render(_map())
 
-        self.assertIn("const withLabels = view.k >= 0.34", out)
+        self.assertIn('svg.classList.toggle("nolabels", view.k < 0.34)', out)
+        self.assertIn("svg.nolabels .nd text { display:none; }", out)
+
+    def test_panning_moves_one_transform_instead_of_redrawing(self):
+        # The whole reason a 1,450-node page was unusable: draw() rebuilt the markup on
+        # every pointermove frame. Pan and zoom write one attribute on one group.
+        out = map_html.render(_map())
+
+        self.assertIn("view.x = e.clientX - drag.x; view.y = e.clientY - drag.y; applyView();", out)
+        self.assertIn("const zoomTo = k => { view.k = Math.min(3, Math.max(0.2, k)); applyView(); }", out)
+        self.assertIn('g.setAttribute("transform"', out)
+
+    def test_the_layout_is_cached_against_what_actually_changes_it(self):
+        # layout() is nine trial placements over every node. Recomputing it for a pan is
+        # the difference between a smooth map and a slideshow.
+        out = map_html.render(_map())
+
+        self.assertIn("function layoutKey()", out)
+        self.assertIn("if (_layout.key !== key)", out)
 
 
 class ReadabilityTests(SimpleTestCase):
@@ -482,3 +503,87 @@ class PaletteTests(SimpleTestCase):
         # token instead. Matching the bare word also matched the comment explaining it -
         # the call is what matters, so the call is what is asserted.
         self.assertNotIn("color-mix(", map_html.render(_map()))
+
+
+class FilterFeedbackTests(SimpleTestCase):
+    """A filter that matched nothing greyed all 1,450 nodes and said nothing at all."""
+
+    def test_it_says_how_many_matched(self):
+        out = map_html.render(_map())
+
+        self.assertIn("function reportMatches(drawn, matched)", out)
+        self.assertIn("`no match in ${drawn}`", out)
+        self.assertIn("`${matched} of ${drawn}`", out)
+
+    def test_nothing_matching_is_not_drawn_as_everything_dimmed(self):
+        # Fading is only meaningful when something survives it. With no matches every
+        # node dimmed at once, leaving a canvas of ghosts under full-strength edges -
+        # which reads as a broken map, not as "nothing here is called that".
+        out = map_html.render(_map())
+
+        self.assertIn("const fading = !query || matched > 0;", out)
+        self.assertIn("const shown = (!fading || hit(n))", out)
+
+    def test_edges_follow_the_filter_too(self):
+        # Dimming only the nodes left the lines at full strength over the ghosts.
+        out = map_html.render(_map())
+
+        self.assertIn("|| (fading && query && !ends.every(n => n && hit(n)))", out)
+
+
+class LabelFittingTests(SimpleTestCase):
+    def test_both_ends_of_a_long_label_survive(self):
+        # `api/announcements/m…` and `api/announcements/p…` were the same string on
+        # screen, and the end is the half that identifies a route or a view.
+        out = map_html.render(_map())
+
+        self.assertIn("function fit(text, max)", out)
+        self.assertIn('return value.slice(0, max - 1 - tail) + "…" + value.slice(-tail);', out)
+
+    def test_the_full_value_is_on_the_node_itself(self):
+        # Truncation is a display choice; hovering must still answer what it really is.
+        out = map_html.render(_map())
+
+        self.assertIn("<title>${esc(n.label)}", out)
+
+
+class FilesViewTests(SimpleTestCase):
+    def test_the_row_advertises_the_map_not_the_editor(self):
+        # The row's own action is "draw this file on the map" - the thing the view exists
+        # for - and it was invisible next to an `open` link that left for VS Code.
+        out = map_html.render(_map(), console=None, files=[
+            {"path": "a/b.js", "counts": {"connected": 1}, "declarations": 2, "known": 1},
+        ], repo_root="/repo", editor="vscode")
+
+        self.assertIn('<span class="go">on map \\u2192</span>', out)
+        self.assertIn(">edit</a>", out)
+        self.assertNotIn(">open</a>", out)
+    def test_clicking_a_file_goes_to_the_page_that_holds_it(self):
+        # Keeping whatever page was selected answered "what of this file is on the page
+        # you happened to be looking at" - 3 symbols of 674 for push_arena.js, a canvas
+        # that reads as the file being unwired.
+        out = map_html.render(_map())
+
+        self.assertIn("function bestPageFor(path)", out)
+        self.assertIn("current = bestPageFor(fileFilter);", out)
+
+    def test_the_breadcrumb_says_how_much_of_the_file_is_on_screen(self):
+        # And counts the total from FILES, not from the drawn page: the canvas can only
+        # show what a page entry reaches, so counting what it drew always said "210 of
+        # 210" and hid the 464 symbols in that file no page reaches - the interesting ones.
+        out = map_html.render(_map())
+
+        self.assertIn("symbols`", out)
+        self.assertIn("the rest are not reached from any page", out)
+        self.assertIn("const FILE_TOTALS = new Map(\n  FILES.map(", out)
+
+
+class PathNumberingTests(SimpleTestCase):
+    def test_each_hop_is_numbered_and_the_last_one_says_so(self):
+        # Five unlabelled boxes down a rule do not say which end is the browser and which
+        # is the database, and a reader tracing a bug needs to know which way round.
+        out = map_html.render(_map())
+
+        self.assertIn('<span class="hn">${step}</span>', out)
+        self.assertIn('<span class="hs">last</span>', out)
+        self.assertIn("Path — browser to backend · ${path.length} hop", out)
