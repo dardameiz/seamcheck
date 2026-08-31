@@ -24,11 +24,37 @@ pip install seamcheck
 seamcheck map
 ```
 
-**Scope, so nobody has to guess:** the backend reader is **Django** today. Everything else —
-JavaScript, CSS, DOM, templates, and the runtime probe — is framework-agnostic already.
-Measured on a real 511,000-line project: **96.7% of the symbols it builds are not Django-specific.**
-Adding a backend is one adapter, not a rewrite. Rails, Laravel, FastAPI and Express are the
-planned order; none of them exist yet, and this line will say so until they do.
+## What it reads, exactly
+
+No guessing, and no "supports Python" hand-waving — a framework is either read or it is not.
+
+**Backends**
+
+| Framework | Language | Status |
+|---|---|---|
+| **Django** | Python | ✅ **routes, views, models, ASGI, `{% url %}`, `reverse()`** — two modes: ask Django (exact), or parse `urls.py` as text so a cloned repo scans with nothing installed (**95% of declared routes**) |
+| **FastAPI** | Python | ✅ **routes and handlers** — decorators, `APIRouter` prefixes, `include_router` nesting, sub-app `mount()`, and prefixes held in settings. Validated on three cloned repos incl. a 717-file production app |
+| Express · Fastify | JavaScript | ⏳ planned — an Express app is plain JS and **the syntax tree is already built**; nothing yet looks for `app.get()` |
+| Next.js | TypeScript | ⏳ planned — its routes are the **filesystem**, so no parser is needed, but its files are `.ts` (see below) |
+| Laravel | PHP | ⏳ planned — `routes/web.php` is a flat list, and **Blade templates already work** |
+| Rails | Ruby | ⏳ planned — `config/routes.rb` is a DSL; ERB needs one regex |
+
+**Frontends**
+
+| What | Status |
+|---|---|
+| **JavaScript** — `.js`, `.mjs`, inline `<script>` | ✅ `fetch`, `sendBeacon`, `querySelector`, `classList`, `dataset` |
+| **CSS** — files and inline `<style>` | ✅ selectors, custom properties, `[data-*]` attribute selectors |
+| **Templates** — Django, Jinja, **Twig**, **Blade**, **ERB**, Handlebars | ✅ ids, classes and `data-` attributes. Measured identical across all six: the scanner reads HTML *attributes*, and an attribute is an attribute whatever generated it |
+| **TypeScript** — `.ts`, `.tsx` | ❌ **not read at all.** Not discovered, and the bundled parser cannot strip type annotations |
+| **React / JSX** | ❌ `.jsx` fails to parse, and `className={styles.x}` is computed rather than literal, so the DOM half needs new extractors, not just a parser |
+
+A scan **tells you** when a file could not be parsed, rather than silently dropping it.
+
+**Why the backend list is short and the rest is not:** of ~36,800 symbols in a real scan,
+about 1,000 are server-side. The other **97%** never reads the backend at all, and neither
+does the runtime probe — it patches `fetch` and `querySelector` in a browser that has no idea
+what served the page. Adding a backend is one adapter, not a rewrite.
 
 ![The connectivity map](docs/images/map.png)
 
@@ -327,17 +353,22 @@ the URL carries a random token so nothing on your network stumbles into it.
 
 Written down because a tool that hides its blind spots is worse than no tool:
 
-- **The backend reader is Django only.** The frontend half does not care what served the
-  page, but until a second adapter ships, a Rails or Express project gets the JS/CSS/DOM
-  half and no routes.
-- **Vanilla JS.** No React or Vue component graph yet; JSX is not parsed.
+- **Two backends: Django and FastAPI.** A Rails, Laravel or Express project gets the
+  JS/CSS/DOM half and no routes — and with no route list, every `fetch` is reported
+  unresolved, so the scan says that out loud rather than showing a confident wrong answer.
+- **No TypeScript.** `.ts` and `.tsx` are not read at all. That takes Next.js and NestJS
+  with it, since both are TypeScript by default.
+- **Vanilla JS.** No React or Vue component graph; `.jsx` does not parse, and React builds
+  the DOM differently enough that it needs new extractors rather than just a parser.
 - **Celery, Redis, WebSockets and Stripe aren't traced.** Anything reached only through
   those is invisible, and the UI says so rather than showing a confident zero.
 - **A URL built at runtime** stays `uncertain`. The prefix is recorded, never a guess.
-- **It has been measured against one real project** — a 511,000-line Django app. That's one
-  more than most tools at this stage and far fewer than you'd want; a corpus of public repos
-  is the next job. See [How accurate is it?](#how-accurate-is-it) for what the one
-  measurement actually says.
+- **Precision has been measured against one real project** — a 511,000-line Django app.
+  Route extraction has since been checked against three cloned FastAPI repositories, but
+  precision on code we did not write is still unmeasured, and it will be lower.
+- **Recall is completely unmeasured.** A wrong `connected` is invisible by construction.
+
+See [How accurate is it?](#how-accurate-is-it) for exactly what the one measurement says.
 
 ## How accurate is it?
 
