@@ -313,3 +313,80 @@ framework-free today — a second reason to land the probe first.
 
 Django's URLconf — a tree with `include()`, namespaces, converters and `urlpatterns +=` — is
 **the hardest one in the table, and it is the one already done.**
+
+---
+
+## The gaps, ranked by measured demand (2026-09-01)
+
+Percentages are [Stack Overflow 2025](https://survey.stackoverflow.co/2025/technology/),
+all respondents. They overlap and cannot be summed; they rank, they do not add.
+
+### Axis 1 — backends not read
+
+| framework | language | demand | cost | note |
+|---|---|---|---|---|
+| **Flask** | Python | **14.4%** | **small** | `@app.route('/x')` — the FastAPI reader nearly does it already. Takes Python to 3/3 |
+| **Laravel** | PHP | 8.9% | small | `routes/web.php` is a flat list; **Blade already works** on the frontend |
+| **ASP.NET Core** | C# | **19.7%** | large | The single biggest gap. `[HttpGet("x")]` attributes + `MapGet()`. A new language: no parser, no ecosystem knowledge |
+| **Spring Boot** | Java | 14.7% | large | `@GetMapping` on `@RestController`. Same story as C# |
+| **WordPress** | PHP | 13.6% | medium | `register_rest_route()` and `add_action()` — string dispatch, which is axis 3's technique |
+| **Rails** | Ruby | 5.9% | medium | `config/routes.rb` is a DSL; `resources :books` expands by a table. ERB needs one regex |
+| **Symfony** | PHP | 4.0% | small | `#[Route('/x')]` attributes, structured |
+| **Deno / Nuxt** | TS | 4.0% each | small | Both are close to adapters that exist |
+
+**Order that follows the evidence, not the ambition:** Flask (cheapest × highest demand of
+the cheap ones) → Laravel + Symfony (PHP arrives with Blade/Twig already working) → Rails.
+**ASP.NET Core and Spring Boot are the honest ceiling** of a Python-hosted tool: each is a
+new language runtime, and shipping a bad reader for 19.7% of developers is worse than
+shipping none.
+
+### Axis 3 — transports, which no framework list contains
+
+These are how code gets reached **without an HTTP request**, and nothing in this category
+is covered by any competing tool. They do not appear in a survey because they are not
+frameworks — which is exactly why they are unclaimed ground.
+
+| transport | the seam | why it matters |
+|---|---|---|
+| **Stripe** | `'payment_intent.succeeded'` ↔ a webhook branch | An event enabled in Stripe with no handler is **money silently dropped** |
+| **Celery** | `.delay('send_email')` ↔ `@shared_task` | A beat entry naming a task that does not exist raises and never runs — the 14-day silent outage class |
+| **GraphQL** | a client query field ↔ the schema | **saleor is GraphQL-first and this tool found 9 REST routes.** A query naming a field the schema dropped is the same bug as a dead `fetch`, and far more common in modern apps |
+| **tRPC** | `trpc.user.byId.query()` ↔ the router | TypeScript-native RPC, ubiquitous in the Next.js world the adapters now read |
+| **Next.js Server Actions** | `'use server'` ↔ the form that posts to it | A modern seam with no HTTP route to inspect at all |
+| **WebSockets** | `send({type:'push.submit'})` ↔ a consumer method | A type nobody handles is silently ignored — no error anywhere |
+| **Redis pub/sub** | `publish('scores')` ↔ `subscribe('scores')` | A publisher with no subscriber |
+| **Django signals** | `signal.send()` ↔ `@receiver` | Receivers are extracted; senders are not |
+| **OpenAPI spec** | the spec ↔ the routes | Where a repo ships one, routes come **free** and the spec can be checked against reality |
+| **Env vars** | `os.environ['X']` ↔ `.env.example` | A variable read in code that nothing documents |
+| **i18n keys** | `t('cart.empty')` ↔ the catalogue | A key that renders as its own name in production |
+
+**GraphQL is the one I would move up.** It is a genuine blind spot on a whole class of
+modern app, the seam is identical in shape to the one already solved, and a schema is a
+machine-readable contract — the easiest oracle in the whole plan.
+
+---
+
+## Product work the corpus and the screenshots put on the list
+
+### Say which backend and language a map is of
+Now that a scan can read five frameworks and three languages — and a monorepo can hold
+**two backends at once** (cal.com is Next.js + NestJS; immich is NestJS + FastAPI +
+Express) — the map should label what it read and how sure it was. The data exists:
+`select_all()` already returns every adapter with its confidence. Show it per node group
+and in the header, so "Backend Internals" reads "NestJS · TypeScript" rather than a generic
+noun.
+
+### History, not just a diff
+`Changes` compares against **one** baseline and is empty without it. What is missing is a
+**series**: every scan appended to a small file (commit, date, counts by status, findings by
+kind), and a chart of it. That is the sentence no tool in this category can say — *"unused
+CSS fell from 4,340 to 1,802 over six weeks"* — and it turns a scan from a verdict into a
+trend. Cheap to store (a few hundred bytes per scan), and `snapshot.py` already knows how to
+key by commit.
+
+### A code reader worth reading
+The snippet popover shows one line. A person reading a finding wants the file, syntax
+highlighted, scrolled to the line, with the other findings in that file marked in the
+gutter. The map already knows every symbol's file and line; what is missing is the file's
+text and a highlighter. Highlight.js from the allowed CDN, or a small tokeniser shipped
+inline for offline use.
