@@ -168,3 +168,57 @@ class CssTokenMatchTests(SimpleTestCase):
         edges = match_css_tokens([], [_token("--ghost", "css_token_use")])
 
         self.assertEqual([e.status for e in edges], [Status.UNRESOLVED])
+
+
+class MultiWriterFamilyTests(SimpleTestCase):
+    """Sixty files writing one container is an architecture, not sixty bugs."""
+
+    def _write(self, label, path):
+        return Symbol(id=f"dom_selector:id:{label}:{path}:1", kind="dom_selector", label=label,
+                      sub="id:write", file=path, line=1, status=Status.UNCERTAIN,
+                      snippet="", chain=[], note="")
+
+    def test_two_writers_in_one_directory_is_still_the_bug(self):
+        # The classic case. Concentration alone must not excuse it.
+        found = detect_multi_writers([
+            self._write("total", "js/a.js"), self._write("total", "js/b.js"),
+        ])
+
+        self.assertEqual(len(found), 1)
+        self.assertIs(found[0].status, Status.UNRESOLVED)
+        self.assertIn("Whichever runs last wins", found[0].note)
+
+    def test_many_writers_concentrated_in_one_directory_is_a_family(self):
+        # Measured on a real project: 62 files write `main-push-area`, 61 of them in
+        # buttons/js, because it has ~60 button types each rendering into the same
+        # container. Reporting that as the overwrite bug is crying wolf on a chosen pattern.
+        found = detect_multi_writers([
+            self._write("area", f"buttons/js/b{n}.js") for n in range(20)
+        ])
+
+        self.assertEqual(len(found), 1)
+        self.assertIs(found[0].status, Status.UNCERTAIN)
+        self.assertIn("sibling implementations", found[0].note)
+        self.assertIn("buttons/js", found[0].note)
+
+    def test_many_writers_spread_across_the_codebase_is_a_free_for_all(self):
+        # Both conditions are needed: forty writers scattered everywhere IS worth flagging.
+        found = detect_multi_writers([
+            self._write("stat", f"dir{n}/mod{n}.js") for n in range(20)
+        ])
+
+        self.assertIs(found[0].status, Status.UNRESOLVED)
+
+    def test_one_writer_is_never_flagged(self):
+        self.assertEqual(detect_multi_writers([self._write("x", "js/a.js")]), [])
+
+    def test_two_files_sharing_a_basename_are_two_writers(self):
+        # Writers used to be counted by basename, so push_arena/stats.js and js/stats.js
+        # collapsed into one and the element was never checked. A false negative of the
+        # invisible kind: nothing in the output hints a check was skipped.
+        found = detect_multi_writers([
+            self._write("total", "push_arena/stats.js"), self._write("total", "js/stats.js"),
+        ])
+
+        self.assertEqual(len(found), 1)
+        self.assertIs(found[0].status, Status.UNRESOLVED)

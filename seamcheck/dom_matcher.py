@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 from seamcheck.graph import Edge, Status, Symbol
 
@@ -11,6 +11,24 @@ _MULTI_WRITER_NOTE = (
     "More than one file writes this element. Whichever runs last wins, which is how a "
     "display bug survives being 'fixed' in one of them. Pick one canonical owner and "
     "route the others through it."
+)
+
+# Above this many writers, and this concentrated in one directory, the writers are not
+# competing - they are siblings implementing one interface against a shared container.
+# Measured: the project this was tuned on has 62 files writing `main-push-area`, 61 of them
+# in buttons/js, because it has ~60 button types and each renders into the same area. That
+# is an architecture, and reporting it as the two-writers-overwrite-each-other bug is the
+# tool crying wolf on a pattern the author chose on purpose.
+#
+# Both conditions are needed. Two writers in one directory is the classic bug; forty
+# writers spread across the codebase is a genuine free-for-all worth flagging.
+_FAMILY_MIN_WRITERS = 5
+_FAMILY_CONCENTRATION = 0.8
+_FAMILY_NOTE = (
+    "{count} files write this element, {top} of them in {directory}. That concentration is "
+    "a family of sibling implementations sharing one container - a plugin pattern - not two "
+    "writers overwriting each other. Not claimed as a finding; worth knowing when you change "
+    "who owns this element."
 )
 
 
@@ -44,19 +62,36 @@ def match_dom_selectors(dom_attrs: list[Symbol], dom_selectors: list[Symbol]) ->
 
 def detect_multi_writers(dom_selectors: list[Symbol]) -> list[Symbol]:
     writers: dict[str, set[str]] = defaultdict(set)
+    # Whole paths, not basenames: the directory is what tells a family apart from a fight,
+    # and two same-named files in different directories are two writers either way.
+    paths: dict[str, set[str]] = defaultdict(set)
     evidence: dict[str, Symbol] = {}
     for selector in dom_selectors:
         if not selector.sub.endswith(":write") or selector.label == "<dynamic>":
             continue
         writers[selector.label].add(os.path.basename(selector.file))
+        paths[selector.label].add(selector.file)
         evidence.setdefault(selector.label, selector)
 
     flagged: list[Symbol] = []
     for label, files in sorted(writers.items()):
-        if len(files) < 2:
+        # Gated on distinct PATHS, not basenames. Counting basenames meant two different
+        # files with the same name - push_arena/stats.js and js/stats.js - collapsed into
+        # one writer and the element was never flagged at all. A false negative, and the
+        # invisible kind: nothing in the output hints that a check was skipped.
+        if len(paths[label]) < 2:
             continue
         sample = evidence[label]
         ordered = sorted(files)
+
+        # One file counted once however many writes it makes.
+        by_directory = Counter(os.path.dirname(path) for path in paths[label])
+        top_directory, top_count = by_directory.most_common(1)[0]
+        family = (
+            len(paths[label]) >= _FAMILY_MIN_WRITERS
+            and top_count / len(paths[label]) >= _FAMILY_CONCENTRATION
+        )
+
         flagged.append(
             Symbol(
                 id=f"multi_writer_element:{label}",
@@ -65,10 +100,15 @@ def detect_multi_writers(dom_selectors: list[Symbol]) -> list[Symbol]:
                 sub=_base_sub(sample),
                 file=sample.file,
                 line=sample.line,
-                status=Status.UNRESOLVED,
+                status=Status.UNCERTAIN if family else Status.UNRESOLVED,
                 snippet=sample.snippet,
                 chain=ordered,
-                note=f"{_MULTI_WRITER_NOTE} Writers: {', '.join(ordered)}.",
+                note=(
+                    _FAMILY_NOTE.format(count=len(paths[label]), top=top_count,
+                                       directory=top_directory or 'one directory')
+                    if family
+                    else f"{_MULTI_WRITER_NOTE} Writers: {', '.join(ordered)}."
+                ),
             )
         )
     return flagged
