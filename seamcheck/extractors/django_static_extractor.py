@@ -32,6 +32,7 @@ import ast
 import pathlib
 
 from seamcheck.graph import Edge, Status, Symbol
+from seamcheck.nodetools import report
 
 _PATH_CALLS = frozenset({"path", "re_path", "url"})
 _INCLUDE_CALLS = frozenset({"include"})
@@ -54,6 +55,10 @@ def _literal(node: ast.AST) -> str | None:
     return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
 
 
+_VENDORED = {"node_modules", ".git", "site-packages", "__pycache__", ".venv", "venv",
+             "build", "dist", "migrations", ".tox"}
+
+
 def module_file(repo_root: pathlib.Path, dotted: str) -> pathlib.Path | None:
     """`pointless.api_urls` -> the file, without importing anything.
 
@@ -62,12 +67,18 @@ def module_file(repo_root: pathlib.Path, dotted: str) -> pathlib.Path | None:
     else's routing table and following it would report their code as this project's.
     """
     parts = dotted.split(".")
-    for candidate in (
-        repo_root.joinpath(*parts).with_suffix(".py"),
-        repo_root.joinpath(*parts, "__init__.py"),
-    ):
-        if candidate.is_file():
-            return candidate
+    # The dotted name is relative to whatever is on sys.path, which is not necessarily the
+    # repository root. A src/ layout is the standard packaging layout, and the largest
+    # Django project in the corpus uses it: ROOT_URLCONF is "sentry.conf.urls" and the file
+    # is src/sentry/conf/urls.py. Looking only at the root read ZERO routes from 1.7M lines.
+    for prefix in ((), ("src",), ("lib",), ("app",), ("backend",), ("server",)):
+        base = repo_root.joinpath(*prefix)
+        for candidate in (
+            base.joinpath(*parts).with_suffix(".py"),
+            base.joinpath(*parts, "__init__.py"),
+        ):
+            if candidate.is_file():
+                return candidate
     return None
 
 
@@ -121,6 +132,16 @@ def _pattern_calls(tree: ast.Module) -> list[ast.Call]:
     dropped them.
     """
     found: list[ast.Call] = []
+    # A large URLconf factors repeated route sets into a helper and splats the result:
+    # `urlpatterns = [*create_group_urls("sentry-api-0-group"), ...]`. The path() calls are
+    # then in the helper's body, not in the assignment, and reading only the assignment
+    # found 123 of Sentry's routes instead of its routing table. Following a helper defined
+    # in the SAME module is bounded and needs no imports.
+    helpers = {
+        node.name: node for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+    }
+    entered: set[str] = set()
 
     def _collect(node: ast.AST) -> None:
         if isinstance(node, ast.Call):
@@ -131,6 +152,14 @@ def _pattern_calls(tree: ast.Module) -> list[ast.Call]:
             if name in _WRAPPER_CALLS or name in _INCLUDE_CALLS:
                 for argument in node.args:
                     _collect(argument)
+                return
+            # A helper that BUILDS routes. Entered once: recursion here would be a hang on
+            # somebody else's repository, which is worse than missing a route.
+            helper = helpers.get(name) if name else None
+            if helper is not None and name not in entered:
+                entered.add(name)
+                for statement in helper.body:
+                    _collect(statement)
                 return
         for child in ast.iter_child_nodes(node):
             _collect(child)
@@ -227,7 +256,25 @@ def extract_urls_views_static(
         # The package this file lives in, for resolving its relative imports.
         imports = _import_map(tree, dotted.rpartition(".")[0])
 
-        for call in _pattern_calls(tree):
+        # A URLconf that only re-exports someone else's patterns - `from sentry.web.urls
+        # import urlpatterns` is the whole of Sentry's ROOT_URLCONF - has no path() call of
+        # its own. Following the import is the difference between 1.7M lines of Django
+        # reading as zero routes and reading as its actual routing table.
+        calls = _pattern_calls(tree)
+        if not calls:
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.ImportFrom) or not node.module:
+                    continue
+                if not any(alias.name == "urlpatterns" for alias in node.names):
+                    continue
+                source = node.module
+                if node.level:
+                    package = dotted.rsplit(".", node.level)[0] if "." in dotted else ""
+                    source = f"{package}.{source}".strip(".") if source else package
+                _walk_module(source, prefix)
+            return
+
+        for call in calls:
             route = _literal(call.args[0]) if call.args else None
             if route is None:
                 continue
@@ -289,4 +336,25 @@ def extract_urls_views_static(
             edges.append(Edge(from_id=url_id, to_id=view_id, status=Status.CONNECTED))
 
     _walk_module(urlconf_module, "")
+
+    # How much of the routing table this actually reached. A big project assembles
+    # urlpatterns from lists held in other modules - `*workflow_urls.organization_urlpatterns`
+    # - and following that is dataflow analysis, not text reading. Sentry has 22 urls.py
+    # files and this reaches a handful, so presenting the result as the routing table would
+    # be a confident wrong answer about 1.7M lines of Django.
+    on_disk = {
+        path for path in root.rglob("urls.py")
+        if not any(part in _VENDORED for part in path.parts)
+    }
+    reached = {module_file(root, dotted) for dotted in visited}
+    missed = len(on_disk - {path for path in reached if path is not None})
+    if missed and len(on_disk) > 2 and missed >= len(on_disk) / 2:
+        report(
+            "django-partial-urlconf",
+            "read %s of %s urls.py files: the rest are not reachable from ROOT_URLCONF by "
+            "reading text, usually because urlpatterns is assembled from lists held in "
+            "other modules. Routes defined there are NOT in this graph, and a call to one "
+            "of them will look unresolved.",
+            len(on_disk) - missed, len(on_disk),
+        )
     return symbols, edges, names

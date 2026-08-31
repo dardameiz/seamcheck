@@ -24,11 +24,12 @@ import pathlib
 import re
 
 from seamcheck.adapters.base import ServerScan
+from seamcheck.adapters.discovery import SKIP_DIRS
 from seamcheck.graph import Edge, Status, Symbol
 
 _ROUTE_FILES = ("route", "page")            # App Router
 _EXTENSIONS = (".ts", ".tsx", ".js", ".jsx", ".mjs")
-_SKIP = {"node_modules", ".next", ".git", "dist", "build", "out", "coverage"}
+_SKIP = SKIP_DIRS
 
 # `export async function GET(...)` / `export const POST = ...` - the App Router's contract.
 _METHOD_RE = re.compile(
@@ -50,7 +51,8 @@ def _app_dirs(repo_root: str) -> list[pathlib.Path]:
     for depth in range(_MAX_DEPTH + 1):
         candidates = [base] if depth == 0 else base.glob("/".join(["*"] * depth))
         for candidate in candidates:
-            if not candidate.is_dir() or any(part in _SKIP for part in candidate.parts):
+            relative = candidate.relative_to(base) if candidate.is_relative_to(base) else candidate
+            if not candidate.is_dir() or any(part in _SKIP for part in relative.parts):
                 continue
             if any((candidate / name).is_file() for name in
                    ("next.config.js", "next.config.mjs", "next.config.ts", "next.config.cjs")):
@@ -154,7 +156,7 @@ class NextJSAdapter:
             for path in sorted(root.rglob("*")):
                 if not path.is_file() or path.suffix not in _EXTENSIONS:
                     continue
-                if any(part in _SKIP for part in path.parts):
+                if any(part in _SKIP for part in path.relative_to(root).parts):
                     continue
                 if kind == "app" and path.stem not in _ROUTE_FILES:
                     continue

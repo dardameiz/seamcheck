@@ -47,11 +47,38 @@ def select(repo_root: str, config: dict) -> tuple[ServerAdapter, float]:
         raise ValueError(
             f"Unknown server_adapter {forced!r}. Available: {', '.join(available())}"
         )
-    ranked = sorted(
+    return _ranked(repo_root, config)[0]
+
+
+# Below this, a signal is incidental - a sample app, a stray dependency - and the adapter
+# should not be run. Above it, the framework is really present.
+_CONFIDENT = 0.5
+
+
+def _ranked(repo_root: str, config: dict) -> list[tuple[ServerAdapter, float]]:
+    return sorted(
         ((adapter, adapter.detect(repo_root, config or {})) for adapter in ADAPTERS),
         key=lambda pair: -pair[1],
     )
-    return ranked[0]
 
 
-__all__ = ["ADAPTERS", "ServerAdapter", "ServerScan", "available", "select"]
+def select_all(repo_root: str, config: dict) -> list[tuple[ServerAdapter, float]]:
+    """Every adapter that confidently fits, not just the best one.
+
+    A large monorepo is not one application. cal.com serves a Next.js front end AND a
+    NestJS API from the same repository; picking a single winner threw away every route
+    of whichever one lost, and the loser was decided by registration order. Reading both
+    is not a compromise - it is what the repository actually serves.
+
+    Falls back to the single best adapter when nothing clears the bar, so a project the
+    readers do not recognise still gets a scan rather than an empty graph.
+    """
+    forced = (config or {}).get("server_adapter")
+    if forced:
+        return [select(repo_root, config)]
+    ranked = _ranked(repo_root, config)
+    confident = [pair for pair in ranked if pair[1] >= _CONFIDENT]
+    return confident or ranked[:1]
+
+
+__all__ = ["ADAPTERS", "ServerAdapter", "ServerScan", "available", "select", "select_all"]

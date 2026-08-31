@@ -13,4 +13,4 @@ node_modules/
 docs/mockups/_build/
 
 # Cloned third-party repositories used to validate accuracy. Never committed.
-corpus/
+# corpus/ now lives outside the repo (see tools/corpus.py)

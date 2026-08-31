@@ -20,6 +20,7 @@ import os
 import pathlib
 
 from seamcheck.adapters.base import ServerScan
+from seamcheck.adapters.discovery import root_urlconf
 from seamcheck.extractors.asgi_extractor import extract_asgi_routes
 from seamcheck.extractors.django_extractor import extract_django_urls_views, route_name_index
 from seamcheck.extractors.django_models_extractor import extract_django_models
@@ -41,6 +42,11 @@ class DjangoAdapter:
         if config.get("urlconf_module"):
             return 0.95
         root = pathlib.Path(repo_root)
+        # A ROOT_URLCONF assignment IS a Django project, and reading it needs no import -
+        # which matters because the largest Django repositories keep it several levels
+        # down (sentry: src/sentry/conf/server.py) and cannot be imported anyway.
+        if root_urlconf(repo_root):
+            return 0.9
         score = 0.0
         if (root / "manage.py").is_file():
             score += 0.6
@@ -51,7 +57,7 @@ class DjangoAdapter:
         return round(min(score, 1.0), 3)
 
     def scan(self, repo_root: str, config: dict, progress) -> ServerScan:
-        urlconf = config.get("urlconf_module")
+        urlconf = config.get("urlconf_module") or root_urlconf(repo_root)
         if not urlconf:
             # No URLconf means no routes, and no routes means every fetch would be reported
             # unresolved. An empty scan says nothing rather than saying something false.

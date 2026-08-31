@@ -19,12 +19,16 @@ import os
 import pathlib
 
 from seamcheck.adapters.base import ServerScan
+from seamcheck.adapters.discovery import SKIP_DIRS, declares
 from seamcheck.extractors.js_extractor import _parse_files, _walk
 from seamcheck.graph import Edge, Status, Symbol
 
 _METHODS = ("Get", "Post", "Put", "Delete", "Patch", "Options", "Head", "All")
 _EXTENSIONS = (".ts", ".mts", ".cts")
-_SKIP = {"node_modules", ".git", "dist", "build", "coverage", ".next", "corpus"}
+# One shared list, so a directory that must never be scanned is excluded from
+# every adapter at once. A missing name here is not a wrong answer, it is a scan
+# that walks a vendored checkout - which turned a 75-second suite into ten minutes.
+_SKIP = SKIP_DIRS
 
 
 def _literal(node: dict | None) -> str | None:
@@ -94,13 +98,11 @@ class NestJSAdapter:
     name = "nestjs"
 
     def detect(self, repo_root: str, config: dict) -> float:
-        package = pathlib.Path(repo_root, "package.json")
-        if package.is_file():
-            try:
-                if '"@nestjs/core"' in package.read_text(encoding="utf-8", errors="replace"):
-                    return 0.95
-            except OSError:
-                pass
+        # Not just the root manifest: immich declares @nestjs/core in server/package.json,
+        # and reading only the root made a large production NestJS app look like a FastAPI
+        # project with five routes.
+        if declares(repo_root, "@nestjs/core"):
+            return 0.95
         for path in _files(repo_root, limit=300):
             try:
                 text = pathlib.Path(path).read_text(encoding="utf-8", errors="replace")

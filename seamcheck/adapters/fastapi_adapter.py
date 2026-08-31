@@ -22,9 +22,12 @@ which matches nothing and would mark every call to it unresolved.
 from __future__ import annotations
 
 import ast
+import os
 import pathlib
+import re
 
 from seamcheck.adapters.base import ServerScan
+from seamcheck.adapters.discovery import SKIP_DIRS
 from seamcheck.graph import Edge, Status, Symbol
 
 _UNMOUNTED_NOTE = (
@@ -39,10 +42,23 @@ _METHODS = ("get", "post", "put", "delete", "patch", "options", "head", "trace")
 
 # Directories that are never the application under scan. A vendored copy of FastAPI's own
 # examples inside site-packages would otherwise contribute hundreds of phantom routes.
-_SKIP = {
-    ".git", ".venv", "venv", "env", "node_modules", "site-packages", "__pycache__",
-    "build", "dist", ".tox", ".mypy_cache", ".pytest_cache", "migrations",
-}
+# One shared list, so a directory that must never be scanned is excluded from
+# every adapter at once. A missing name here is not a wrong answer, it is a scan
+# that walks a vendored checkout - which turned a 75-second suite into ten minutes.
+_SKIP = SKIP_DIRS
+
+
+_IMPORT_RE = re.compile(r"^\s*(?:from\s+fastapi(?:\.\w+)*\s+import\b|import\s+fastapi\b)", re.M)
+
+
+def _is_test(path: str) -> bool:
+    """Test files hold fixtures that LOOK like applications and are not one."""
+    name = os.path.basename(path)
+    parts = pathlib.Path(path).parts
+    return (
+        name.startswith("test_") or name.endswith("_test.py")
+        or "tests" in parts or "test" in parts or name == "conftest.py"
+    )
 
 
 def _string(node: ast.AST | None) -> str | None:
@@ -243,16 +259,24 @@ class FastAPIAdapter:
     name = "fastapi"
 
     def detect(self, repo_root: str, config: dict) -> float:
-        """Confidence by artefact: an import of FastAPI, and a decorator that routes."""
+        """Confidence by artefact: an import of FastAPI, and a decorator that routes.
+
+        The import has to be a real import statement at the start of a line, and it has to
+        be in a file that is not a test. A quoted `'from fastapi import FastAPI'` inside a
+        test fixture is a string, not an application - and matching it made this project
+        detect ITSELF as a FastAPI app, then scan its own tree on every scan.
+        """
         imports = decorators = False
         for path in _python_files(repo_root, limit=400):
+            if _is_test(path):
+                continue
             try:
                 text = pathlib.Path(path).read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
             if "fastapi" not in text.lower():
                 continue
-            if "from fastapi import" in text or "import fastapi" in text:
+            if _IMPORT_RE.search(text):
                 imports = True
             if any(f".{method}(" in text for method in _METHODS) and "@" in text:
                 decorators = True
@@ -408,9 +432,18 @@ class FastAPIAdapter:
 
 
 def _python_files(repo_root: str, limit: int | None = None) -> list[str]:
+    """Every first-party .py file, excluding vendored trees.
+
+    Exclusions are checked RELATIVE to the repository root. Checking the absolute path
+    meant a project that happens to live under a directory called `build` or `tmp` - or a
+    checkout inside this project's own `corpus/` - skipped every one of its own files and
+    reported no routes at all.
+    """
+    base = pathlib.Path(repo_root)
     found: list[str] = []
-    for path in sorted(pathlib.Path(repo_root).rglob("*.py")):
-        if any(part in _SKIP or part.startswith(".") for part in path.parts):
+    for path in sorted(base.rglob("*.py")):
+        relative = path.relative_to(base) if path.is_relative_to(base) else path
+        if any(part in _SKIP or part.startswith(".") for part in relative.parts):
             continue
         found.append(str(path))
         if limit and len(found) >= limit:

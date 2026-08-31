@@ -6,7 +6,7 @@ import ast
 import dataclasses
 import pathlib
 
-from seamcheck.adapters import select
+from seamcheck.adapters import select_all
 from seamcheck.attribution import attribute_by_feature
 from seamcheck.classifier import classify
 from seamcheck.dom_matcher import (
@@ -149,22 +149,28 @@ def run_scan(
     # The one framework-specific component in the whole pipeline. Everything below this
     # block - JavaScript, CSS, DOM, templates, matching, classification - reads the graph
     # and never the backend, which is why 97% of a real scan is already framework-agnostic.
-    adapter, _confidence = select(repo_root, {
+    adapter_config = {
         "urlconf_module": urlconf_module,
         "first_party_prefixes": first_party_prefixes,
         "asgi_file": asgi_file,
         "app_labels": app_labels,
         "static_urls": static_urls,
-        "server_adapter": server_adapter,
-    })
-    server = adapter.scan(repo_root, {
-        "urlconf_module": urlconf_module,
-        "first_party_prefixes": first_party_prefixes,
-        "asgi_file": asgi_file,
-        "app_labels": app_labels,
-        "static_urls": static_urls,
-    }, progress)
-    server_symbols, routing_edges = server.symbols, server.edges
+    }
+    chosen = select_all(repo_root, {**adapter_config, "server_adapter": server_adapter})
+    adapter = chosen[0][0]
+    server_symbols: list = []
+    routing_edges: list = []
+    route_names: dict[str, str] = {}
+    seen_ids: set[str] = set()
+    for one, _confidence in chosen:
+        part = one.scan(repo_root, adapter_config, progress)
+        for symbol in part.symbols:
+            if symbol.id not in seen_ids:
+                seen_ids.add(symbol.id)
+                server_symbols.append(symbol)
+        routing_edges.extend(part.edges)
+        # First adapter wins a name collision: it is the more confident one.
+        route_names = {**part.route_names, **route_names}
     if not server_symbols:
         # Silence here would be the worst possible failure: with no routes, every fetch
         # target resolves to nothing and is reported unresolved - actively wrong on 100%
@@ -197,7 +203,7 @@ def run_scan(
     # counted as reaching a route, so every server-rendered page read as unmeasured.
     reference_symbols, reference_edges = extract_url_references(
         template_files or [], sorted(entry_point_files or []),
-        server.route_names, server_symbols,
+        route_names, server_symbols,
     )
     symbols += reference_symbols
     edges += reference_edges

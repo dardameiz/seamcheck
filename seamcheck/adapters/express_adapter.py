@@ -20,6 +20,7 @@ import os
 import pathlib
 
 from seamcheck.adapters.base import ServerScan
+from seamcheck.adapters.discovery import SKIP_DIRS, declares
 from seamcheck.extractors.js_extractor import _parse_files, _walk
 from seamcheck.graph import Edge, Status, Symbol
 from seamcheck.nodetools import report
@@ -28,11 +29,13 @@ _METHODS = ("get", "post", "put", "delete", "patch", "options", "head", "all")
 
 # `app.get('view engine')` is Express's SETTINGS reader, not a route. One argument and no
 # handler, and the string has no leading slash - that is how it is told apart.
-_SKIP_DIRS = {
-    ".git", "node_modules", "dist", "build", "coverage", "__pycache__", ".next",
-    ".nuxt", "out", "vendor", "bower_components", ".cache", "corpus",
-}
-_EXTENSIONS = (".js", ".mjs", ".cjs")
+# One shared list, so a directory that must never be scanned is excluded from
+# every adapter at once. A missing name here is not a wrong answer, it is a scan
+# that walks a vendored checkout - which turned a 75-second suite into ten minutes.
+_SKIP_DIRS = SKIP_DIRS
+# TypeScript included: an Express app written in TypeScript is still an Express app, and
+# the parser reads .ts now. Reading only .js walked 223 files of a 20,263-file project.
+_EXTENSIONS = (".js", ".mjs", ".cjs", ".ts", ".mts", ".cts")
 
 _UNMOUNTED_NOTE = (
     "This route is declared on a Router that nothing in the source mounts, so the path shown "
@@ -77,7 +80,9 @@ def _files(repo_root: str, limit: int | None = None) -> list[str]:
     for root, directories, names in os.walk(repo_root):
         directories[:] = [d for d in directories if d not in _SKIP_DIRS and not d.startswith(".")]
         for name in sorted(names):
-            if name.endswith(_EXTENSIONS) and not name.endswith((".min.js", ".test.js", ".spec.js")):
+            if name.endswith(_EXTENSIONS) and not name.endswith(
+                (".min.js", ".test.js", ".spec.js", ".d.ts", ".test.ts", ".spec.ts")
+            ):
                 found.append(os.path.join(root, name))
                 if limit and len(found) >= limit:
                     return found
@@ -251,14 +256,8 @@ class ExpressAdapter:
     name = "express"
 
     def detect(self, repo_root: str, config: dict) -> float:
-        package = pathlib.Path(repo_root, "package.json")
-        declared = ""
-        if package.is_file():
-            try:
-                declared = package.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                declared = ""
-        if '"express"' in declared or '"fastify"' in declared:
+        # n8n declares express in packages/cli/package.json, not at the root.
+        if declares(repo_root, "express", "fastify"):
             return 0.9
         for path in _files(repo_root, limit=200):
             try:

@@ -32,17 +32,60 @@ from __future__ import annotations
 import argparse
 import collections
 import json
+import os
 import pathlib
 import subprocess
 import sys
 import time
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-CORPUS = ROOT / "corpus"
+# OUTSIDE the repository, deliberately. Cloned third-party code inside the project is
+# scanned by the project's own tests - nine million lines of somebody else's source turned
+# a 75-second suite into four minutes - and it is not part of this codebase in any sense.
+CORPUS = pathlib.Path(
+    os.environ.get("SEAMCHECK_CORPUS", ROOT.parent / "seamcheck-corpus")
+)
 
 # Chosen for SHAPES not for stars: a template, a production app, a tutorial-shaped app.
 # Every entry is permissively licensed so quoting a line in a bug report is uncontroversial.
 REPOS = [
+    # --- deliberately large, to find what only shows up at scale -------------------
+    {
+        "name": "sentry",
+        "url": "https://github.com/getsentry/sentry",
+        "adapter": "django",
+        "why": "one of the largest Django apps in the open - thousands of routes",
+    },
+    {
+        "name": "saleor",
+        "url": "https://github.com/saleor/saleor",
+        "adapter": "django",
+        "why": "large Django, GraphQL-first - few REST routes by design",
+    },
+    {
+        "name": "cal.com",
+        "url": "https://github.com/calcom/cal.com",
+        "adapter": "nextjs",
+        "why": "a very large Next.js monorepo - the hardest routing tree in the corpus",
+    },
+    {
+        "name": "immich",
+        "url": "https://github.com/immich-app/immich",
+        "adapter": "nestjs",
+        "why": "large production NestJS, TypeScript throughout",
+    },
+    {
+        "name": "n8n",
+        "url": "https://github.com/n8n-io/n8n",
+        "adapter": "express",
+        "why": "a very large TypeScript monorepo on Express",
+    },
+    {
+        "name": "open-webui",
+        "url": "https://github.com/open-webui/open-webui",
+        "adapter": "fastapi",
+        "why": "large FastAPI backend with a Svelte front end",
+    },
     {
         "name": "full-stack-fastapi-template",
         "url": "https://github.com/fastapi/full-stack-fastapi-template",
@@ -106,6 +149,24 @@ REPOS = [
 ]
 
 
+_VENDORED = {"node_modules", ".git", "dist", "build", "coverage", ".next", "vendor",
+             "site-packages", "__pycache__", ".venv", "venv"}
+
+
+def _count_lines(root: pathlib.Path, patterns: tuple[str, ...]) -> int:
+    total = 0
+    for pattern in patterns:
+        for path in root.rglob(pattern):
+            if any(part in _VENDORED for part in path.parts):
+                continue
+            try:
+                with path.open("rb") as handle:
+                    total += sum(1 for _ in handle)
+            except OSError:
+                continue
+    return total
+
+
 def _run(command: list[str], cwd: pathlib.Path | None = None, timeout: int = 600):
     return subprocess.run(
         command, cwd=cwd, capture_output=True, text=True, timeout=timeout, check=False
@@ -136,41 +197,54 @@ def scan_one(repo: dict) -> dict:
         return {"name": repo["name"], "gate1": "not cloned"}
 
     sys.path.insert(0, str(ROOT))
-    from seamcheck.adapters import select
+    from seamcheck.adapters import select_all
     from seamcheck.graph import Status
     from seamcheck.progress import null
 
     row: dict = {"name": repo["name"], "expected": repo["adapter"]}
     started = time.time()
     try:
-        adapter, confidence = select(str(target), {})
-        row["detected"] = adapter.name
-        row["confidence"] = confidence
-        server = adapter.scan(str(target), {"static_urls": True}, null())
-        routes = [s for s in server.symbols if s.kind == "url"]
+        # Every adapter that confidently fits, because a large monorepo is not one
+        # application: cal.com serves a Next.js front end and a NestJS API, and immich
+        # pairs a NestJS server with a FastAPI machine-learning service.
+        chosen = select_all(str(target), {})
+        row["detected"] = "+".join(adapter.name for adapter, _ in chosen)
+        row["confidence"] = chosen[0][1]
+        symbols = []
+        seen = set()
+        for adapter, _ in chosen:
+            for symbol in adapter.scan(str(target), {"static_urls": True}, null()).symbols:
+                if symbol.id not in seen:
+                    seen.add(symbol.id)
+                    symbols.append(symbol)
+        routes = [s for s in symbols if s.kind == "url"]
         row["routes"] = len(routes)
-        row["views"] = sum(1 for s in server.symbols if s.kind == "view")
+        row["views"] = sum(1 for s in symbols if s.kind == "view")
         # A route the adapter could not place is the honest outcome, not a failure: it
         # means the path is decided at runtime. Tracked because a RISING share of these
         # across a corpus is the signal that an adapter is missing a mounting idiom.
         row["uncertain"] = sum(1 for s in routes if s.status is Status.UNCERTAIN)
         row["gate1"] = "ok"
         row["gate2"] = "ok" if row["routes"] else "NO ROUTES"
-        counts = collections.Counter(s.status.value for s in server.symbols)
+        counts = collections.Counter(s.status.value for s in symbols)
         row["by_status"] = dict(counts)
         # Count source files in the language the adapter actually reads. Counting only
         # *.py made every JavaScript repo look like it had zero source and tripped the
         # implausibility gate on a correct scan - the gate was measuring the harness.
+        primary = row["detected"].split("+")[0]
         patterns = {
             "django": ("*.py",), "fastapi": ("*.py",),
             "express": ("*.js", "*.mjs", "*.cjs", "*.ts"),
             "nextjs": ("*.ts", "*.tsx", "*.js", "*.jsx"),
-        }.get(row["detected"], ("*.py", "*.js", "*.ts"))
+        }.get(primary, ("*.py", "*.js", "*.ts", "*.tsx"))
         row["files"] = sum(
             1 for pattern in patterns for path in target.rglob(pattern)
             if "node_modules" not in path.parts
         )
         row["gate4"] = "ok" if row["routes"] < max(row["files"] * 20, 100) else "IMPLAUSIBLE"
+        # Lines of source, so a claim about scale has a number behind it rather than an
+        # adjective. Counted in the languages the adapter reads, excluding vendored trees.
+        row["lines"] = _count_lines(target, patterns)
     except Exception as error:  # noqa: BLE001 - a crash IS the result of gate 1
         row["gate1"] = f"CRASH: {type(error).__name__}: {str(error)[:90]}"
     row["seconds"] = round(time.time() - started, 1)
@@ -180,18 +254,26 @@ def scan_one(repo: dict) -> dict:
 def scan(only: str | None = None) -> None:
     rows = [scan_one(repo) for repo in REPOS if not only or only == repo["name"]]
     width = max((len(row["name"]) for row in rows), default=10)
-    print(f"\n  {'repo':<{width}}  {'detected':<10} {'routes':>7} {'views':>6} "
-          f"{'unsure':>7} {'py':>6} {'sec':>5}  gates")
-    print("  " + "-" * (width + 60))
+    detected_width = max((len(row.get("detected", "")) for row in rows), default=10)
+    print(f"\n  {'repo':<{width}}  {'detected':<{detected_width}} {'routes':>7} {'views':>6} "
+          f"{'unsure':>7} {'files':>7} {'lines':>10} {'sec':>6}  gates")
+    print("  " + "-" * (width + 76))
     for row in rows:
         if row.get("gate1") != "ok":
             print(f"  {row['name']:<{width}}  {row['gate1']}")
             continue
         mark = "1" + ("2" if row["gate2"] == "ok" else "-") + ("4" if row["gate4"] == "ok" else "-")
-        flag = "" if row["detected"] == row["expected"] else f"  (expected {row['expected']})"
-        print(f"  {row['name']:<{width}}  {row['detected']:<10} {row['routes']:>7,} "
-              f"{row['views']:>6,} {row['uncertain']:>7,} {row['files']:>6,} "
-              f"{row['seconds']:>5}  {mark}{flag}")
+        flag = "" if row["expected"] in row["detected"] else f"  (expected {row['expected']})"
+        print(f"  {row['name']:<{width}}  {row['detected']:<{detected_width}} {row['routes']:>7,} "
+              f"{row['views']:>6,} {row['uncertain']:>7,} {row['files']:>7,} "
+              f"{row['lines']:>10,} {row['seconds']:>6}  {mark}{flag}")
+    done = [row for row in rows if row.get("gate1") == "ok"]
+    if done:
+        print("  " + "-" * (width + 76))
+        print(f"  {'TOTAL':<{width}}  {len(done):<10} "
+              f"{sum(r['routes'] for r in done):>7,} {sum(r['views'] for r in done):>6,} "
+              f"{sum(r['uncertain'] for r in done):>7,} {sum(r['files'] for r in done):>7,} "
+              f"{sum(r['lines'] for r in done):>10,}")
     (CORPUS / "results.json").write_text(json.dumps(rows, indent=2), encoding="utf-8")
     print(f"\n  wrote {CORPUS / 'results.json'}")
     print("  Gate 3 - are the findings plausible - is a human reading a sample.")
