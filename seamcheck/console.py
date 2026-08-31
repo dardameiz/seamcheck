@@ -80,6 +80,18 @@ def _rows(graph: Graph, kinds: tuple[str, ...], *, findings_only: bool = False) 
     return rows
 
 
+# Kinds only Django produces. Their presence is evidence of the framework, which is a
+# better answer than a hardcoded name now that five backends can fill this section - a
+# FastAPI project being told about its "Django Internals" is the tool not reading its own
+# output.
+_DJANGO_ONLY = frozenset({"admin_action", "signal_receiver", "template_tag", "management_command"})
+
+
+def _backend_title(graph) -> str:
+    kinds = {symbol.kind for symbol in graph.symbols}
+    return "Django Internals" if kinds & _DJANGO_ONLY else "Backend Internals"
+
+
 def _side_counts(graph: Graph, kinds: tuple[str, ...]) -> dict[str, int]:
     wanted = set(kinds)
     counts = {status.value: 0 for status in Status}
@@ -113,9 +125,9 @@ def build_console(graph: Graph, report: Report) -> Console:
             rows=_rows(graph, ("multi_writer_element", "dom_selector", "dom_attr"), findings_only=True),
         ),
         Section(
-            "django", "Django Internals",
-            "URLs, views, models, and the entry points Django calls without an HTTP "
-            "request: signals, admin actions, template tags.",
+            "backend", _backend_title(graph),
+            "Routes, handlers, models, and the entry points the framework calls without "
+            "an HTTP request: signals, admin actions, template tags.",
             rows=_rows(graph, ("url", "view", "model", "signal_receiver", "admin_action", "template_tag")),
         ),
         Section(

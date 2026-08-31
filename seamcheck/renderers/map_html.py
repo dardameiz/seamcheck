@@ -112,6 +112,15 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overf
 .legendbar .k i { width:9px; height:9px; border-radius:2px; border:1.5px solid; flex:none;
             transform:translateY(1px); }
 .legendbar .k em { font-style:normal; color:var(--muted); }
+/* The key was already the vocabulary of the map; making it the filter means the control
+   and its explanation are the same object, instead of a second control that repeats it. */
+button.k { background:none; border:0; padding:2px 6px; margin:-2px -6px; border-radius:5px;
+  font:inherit; cursor:pointer; }
+button.k:hover { background:var(--chip); }
+button.k[aria-pressed="true"] { background:var(--chip); outline:1px solid var(--line); }
+button.k[aria-pressed="true"] em { color:var(--ink); }
+.legendbar .hint { color:var(--muted); font-style:italic; }
+.legendbar.filtering .hint { display:none; }
 .legendbar .connected i { border-color:var(--ok); }
 .legendbar .unresolved i { border-color:var(--crit); }
 .legendbar .unused i { border-color:var(--warn); }
@@ -464,10 +473,19 @@ const SECTION_KINDS = {
   map: null,
   boundary: new Set(["module", "js_call", "fetch_target", "url", "view", "json_field"]),
   dom: new Set(["dom_attr", "dom_selector", "multi_writer_element"]),
-  django: new Set(["url", "view", "model", "admin_action", "signal_receiver",
-                   "template_tag", "management_command"]),
+  backend: new Set(["url", "view", "model", "admin_action", "signal_receiver",
+                    "template_tag", "management_command"]),
   css: new Set(["css_selector", "css_token_def", "css_token_use"]),
 };
+
+// Empty means "every status". A Set rather than a single value because "show me the
+// unresolved AND the unused" - the two that are actionable - is the common ask.
+const statusFilter = new Set();
+
+const ROWS_PER_PAGE = 60;
+// Panel state lives here rather than beside the panel code: the canvas reads `mode` to
+// decide its lens, and fillPages() runs before the panel section of this file is reached.
+let mode = "map", cq = "", cstatus = "", shown = ROWS_PER_PAGE, asList = false;
 
 const svg = document.getElementById("cv");
 const sheet = document.getElementById("detail");
@@ -500,7 +518,8 @@ function fillPages(counts) {
       heading = key;
       group = `<optgroup label="${esc(p.title)}${p.where ? " · " + esc(p.where) : ""}">`;
     }
-    const tail = counts ? `${counts[i]} changed` : `${p.nodes.length} nodes`;
+    const drawn = lensed(p).length;
+    const tail = counts ? `${counts[i]} changed` : `${drawn} node${drawn === 1 ? "" : "s"}`;
     group += `<option value="${i}">${esc(p.page)} — ${tail}</option>`;
   });
   if (group) out.push(group + "</optgroup>");
@@ -512,6 +531,40 @@ pages.onchange = e => {
   current = Number(e.target.value); focus = null; view = {x:0, y:0, k:1};
   closeSheet(); draw();
 };
+
+// Clicking a colour in the key filters the canvas to that status. Toggling, so several
+// can be on at once, and clicking the last one off restores everything rather than
+// leaving an empty canvas that reads as "nothing here".
+const colourkey = document.getElementById("colourkey");
+colourkey.addEventListener("click", event => {
+  const button = event.target.closest("button.k[data-status]");
+  if (!button) return;
+  const status = button.dataset.status;
+  if (statusFilter.has(status)) statusFilter.delete(status);
+  else statusFilter.add(status);
+  syncStatusKey();
+  focus = null;
+  fillPages();
+  draw();
+});
+
+function syncStatusKey() {
+  colourkey.classList.toggle("filtering", statusFilter.size > 0);
+  colourkey.querySelectorAll("button.k[data-status]").forEach(button => {
+    button.setAttribute("aria-pressed", statusFilter.has(button.dataset.status) ? "true" : "false");
+  });
+}
+syncStatusKey();
+
+// The nodes a page contributes under the current lens AND status filter. One function,
+// because the page selector's count and the canvas must agree: a dropdown that promises
+// "16 nodes" over a canvas showing two is the tool lying about its own view.
+function lensed(p) {
+  const kinds = SECTION_KINDS[mode];
+  return p.nodes.filter(n =>
+    (!kinds || n.kind === "page" || kinds.has(n.kind)) &&
+    (!statusFilter.size || n.kind === "page" || statusFilter.has(n.status)));
+}
 
 // Which nodes to draw. Without a focus a page shows only its modules - one page here
 // has 839 symbols of a single kind, which stacked into a column 28,000px tall and was
@@ -572,9 +625,7 @@ function visible(p) {
   // Everything this page touches, in one canvas. Showing only modules until a reader
   // drilled in hid the whole point: which symbols connect and which stand alone.
   if (!focus) {
-    const kinds = SECTION_KINDS[mode];
-    return capping(new Set(p.nodes.filter(n => !kinds || n.kind === "page" || kinds.has(n.kind))
-                                  .map(n => n.id)));
+    return capping(new Set(lensed(p).map(n => n.id)));
   }
   const adj = new Map();
   p.edges.forEach(e => {
@@ -1158,8 +1209,6 @@ function whyOncePerRun(rows) {
 // answer "how many, of what kind, where" - a switch, not a separate page.
 const D = CONSOLE, panel = document.getElementById("panel");
 const pgwrap = document.getElementById("pgwrap"), viewer = document.getElementById("vw");
-const ROWS_PER_PAGE = 60;
-let mode = "map", cq = "", cstatus = "", shown = ROWS_PER_PAGE, asList = false;
 const listToggle = document.getElementById("aslist");
 listToggle.onclick = () => { asList = !asList; switchTo(mode); };
 // Overview opens, because "how is this project doing" is the question someone has when
@@ -1436,6 +1485,18 @@ function renderPanel() {
       <div class="gap">${esc(sec.unavailable)}</div>`;
     return;
   }
+  // Offer only statuses this section actually contains. A findings list holds nothing
+  // connected by definition, so offering "connected" gave a filter that could only ever
+  // answer "No rows match" - the control implying data that cannot exist.
+  const counts = {};
+  sec.rows.forEach(r => { counts[r.status] = (counts[r.status] || 0) + 1; });
+  // Counts come from the WHOLE section where the scan sent them, not from the sample the
+  // page holds - a filter that says "unused (12)" when the section has 2,380 of them is
+  // describing the payload rather than the codebase.
+  const totals = sec.status_totals || counts;
+  const present = ["unresolved", "unused", "uncertain", "connected"].filter(v => totals[v]);
+  if (cstatus && !counts[cstatus]) cstatus = "";
+
   const needle = cq.toLowerCase();
   const rows = sec.rows.filter(r => (!cstatus || r.status === cstatus) &&
     (!needle || (r.label + " " + r.file + " " + r.kind).toLowerCase().includes(needle)));
@@ -1443,10 +1504,11 @@ function renderPanel() {
   const notes = whyOncePerRun(page);
   panel.innerHTML = `<h2>${esc(sec.title)}</h2><p class="blurb">${esc(sec.blurb)}</p>
     <div class="tools">
-      <input id="cq" type="search" placeholder="Filter ${rows.length} rows" value="${esc(cq)}">
+      <input id="cq" type="search" placeholder="Filter ${sec.rows.length} rows" value="${esc(cq)}">
       <select id="cst"><option value="">any status</option>
-        ${["unresolved","unused","uncertain","connected"].map(v =>
-          `<option value="${v}"${v === cstatus ? " selected" : ""}>${v}</option>`).join("")}
+        ${present.map(v =>
+          `<option value="${v}"${v === cstatus ? " selected" : ""}>${v} (${totals[v].toLocaleString()})</option>`
+        ).join("")}
       </select></div>
     ${page.map((r, i) => `<div class="row"><span class="badge ${esc(r.status)}">${esc(r.status)}</span>
        <div class="t">${esc(r.label)}</div>
@@ -1477,6 +1539,10 @@ function switchTo(next) {
   mode = next;
   rail.querySelectorAll(".nv").forEach(el =>
     el.setAttribute("aria-current", el.dataset.key === next));
+  // The lens changes which nodes are drawn, so the page selector's counts change with it.
+  // Leaving them alone promised "16 nodes" over a canvas showing two - the view disagreeing
+  // with the control that chose it.
+  fillPages();
   // A section with a lens draws on the canvas; one without (Overview, and the sections no
   // extractor feeds yet) has nothing to draw and falls back to its rows.
   if (mode !== "map") { fileFilter = null; fileQuery = mode === "files" ? fileQuery : ""; }
@@ -1586,13 +1652,34 @@ def _console_payload(console) -> str:
     # Rows carry a snippet the panel never draws, and a section can hold well over a
     # thousand of them - together a megabyte and a half on a page meant to open on a
     # phone. Send a screenful, and say so when a section is longer than what was sent.
+    #
+    # A share PER STATUS, not the first N overall. Rows arrive worst-first, so a flat cut
+    # sent 400 unresolved rows and nothing else - and the status filter then offered a
+    # choice between "unresolved" and "unresolved", with `unused` and `uncertain`
+    # unreachable in the UI even though the section counted thousands of them.
     limit = 400
+    per_status = 150
 
     def _section(section):
         out = asdict(section)
         rows = out.pop("rows")
-        out["rows"] = [{k: v for k, v in row.items() if k != "snippet"} for row in rows[:limit]]
+        kept, seen = [], {}
+        for row in rows:
+            status = row.get("status")
+            if seen.get(status, 0) >= per_status and len(kept) >= limit:
+                continue
+            seen[status] = seen.get(status, 0) + 1
+            if len(kept) >= limit and seen[status] > per_status:
+                continue
+            kept.append(row)
+        out["rows"] = [{k: v for k, v in row.items() if k != "snippet"} for row in kept]
         out["total"] = len(rows)
+        # The true shape of the whole section, so the filter can show real counts and say
+        # when what it holds is a sample rather than the lot.
+        totals: dict[str, int] = {}
+        for row in rows:
+            totals[row.get("status")] = totals.get(row.get("status"), 0) + 1
+        out["status_totals"] = totals
         return out
 
     data = {
@@ -1642,12 +1729,17 @@ def render(connectivity_map: ConnectivityMap, console=None, files=None,
         '<input id="q" type="search" placeholder="Filter">'
         '<span id="qn" class="qn"></span></div>',
         '<div class="legendbar" id="colourkey">'
-        '<span class="k connected"><i></i>connected<em>something reaches it, evidence attached</em></span>'
-        '<span class="k unresolved"><i></i>unresolved<em>something reaches for it and it is not there</em></span>'
-        '<span class="k unused"><i></i>unused<em>both ends observable, nothing uses it</em></span>'
-        '<span class="k uncertain"><i></i>uncertain<em>no evidence either way \u2014 not a claim it is dead</em></span>'
+        '<button type="button" class="k connected" data-status="connected"><i></i>connected'
+        '<em>something reaches it, evidence attached</em></button>'
+        '<button type="button" class="k unresolved" data-status="unresolved"><i></i>unresolved'
+        '<em>something reaches for it and it is not there</em></button>'
+        '<button type="button" class="k unused" data-status="unused"><i></i>unused'
+        '<em>both ends observable, nothing uses it</em></button>'
+        '<button type="button" class="k uncertain" data-status="uncertain"><i></i>uncertain'
+        '<em>no evidence either way \u2014 not a claim it is dead</em></button>'
         '<span class="k filled"><i></i>filled in<em>= unresolved or unused. The two to look at '
         'are drawn solid, the rest as outlines.</em></span>'
+        '<span class="k hint" id="statushint">Click a colour to show only those.</span>'
         "</div>",
         '<div class="note" id="cmnote"></div>'
         '<div class="note capnote" id="capnote"></div>'

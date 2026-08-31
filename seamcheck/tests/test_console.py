@@ -43,7 +43,7 @@ class ConsoleShapeTests(SimpleTestCase):
     def test_it_has_every_section_the_spec_names(self):
         keys = [s.key for s in self.console.sections]
 
-        for expected in ("changes", "boundary", "dom", "django", "css", "findings"):
+        for expected in ("changes", "boundary", "dom", "backend", "css", "findings"):
             self.assertIn(expected, keys)
 
     def test_backend_and_frontend_are_counted_separately(self):
@@ -62,7 +62,40 @@ class ConsoleShapeTests(SimpleTestCase):
 
         self.assertEqual([r.status for r in findings.rows], ["unresolved", "unused"])
 
-    def test_django_internals_includes_models(self):
-        django = next(s for s in self.console.sections if s.key == "django")
+    def test_backend_internals_includes_models(self):
+        django = next(s for s in self.console.sections if s.key == "backend")
 
         self.assertIn("model", {r.kind for r in django.rows})
+
+
+class BackendSectionTitleTests(SimpleTestCase):
+    """The section is named after evidence, not after a hardcoded framework.
+
+    Five backends can fill it now, and telling a FastAPI user about their "Django
+    Internals" is the tool failing to read its own output.
+    """
+
+    @staticmethod
+    def _graph(*kinds):
+        from seamcheck.graph import Graph, Status, Symbol
+        return Graph(symbols=[
+            Symbol(id=f"{k}:x", kind=k, label="x", sub="", file="a.py", line=1,
+                   status=Status.CONNECTED, snippet="", chain=[], note="")
+            for k in kinds
+        ], edges=[])
+
+    def _title(self, *kinds):
+        from seamcheck.console import _backend_title
+        return _backend_title(self._graph(*kinds))
+
+    def test_django_only_kinds_name_django(self):
+        self.assertEqual(self._title("url", "view", "admin_action"), "Django Internals")
+
+    def test_signal_receivers_name_django(self):
+        self.assertEqual(self._title("url", "signal_receiver"), "Django Internals")
+
+    def test_routes_and_views_alone_are_not_django(self):
+        self.assertEqual(self._title("url", "view"), "Backend Internals")
+
+    def test_an_empty_graph_is_not_django(self):
+        self.assertEqual(self._title(), "Backend Internals")

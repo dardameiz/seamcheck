@@ -233,14 +233,15 @@ def build_page_map(page: str, files: set[str], graph: Graph, adjacency: dict[str
 # status so the reds inside it are still the reds.
 UNREACHED_PAGE = "unreached"
 UNREACHED_GROUPS: tuple[tuple[str, str, frozenset[str]], ...] = (
-    ("django", "Django-side — reached by Django, not by a page",
+    ("backend", "Reached by the framework, never by a browser page — routes, handlers, "
+                "models, signal receivers",
      frozenset({"url", "view", "model", "admin_action", "signal_receiver",
                 "template_tag", "management_command"})),
-    ("js", "JavaScript no page bundle pulls in",
+    ("js", "JavaScript that no page's bundle imports",
      frozenset({"js_call", "fetch_target", "dom_selector", "multi_writer_element", "module"})),
-    ("css", "Stylesheet rules and tokens nothing on a page matched",
+    ("css", "Stylesheet rules and design tokens that nothing on a page matched",
      frozenset({"css_selector", "css_token_def", "css_token_use"})),
-    ("template", "Template elements no page's JavaScript selects",
+    ("template", "Template elements that no page's JavaScript selects",
      frozenset({"dom_attr"})),
 )
 UNREACHED_OTHER = ("other", "Everything else the scan found off the page graph")
