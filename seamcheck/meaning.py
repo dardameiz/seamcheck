@@ -116,6 +116,12 @@ _SPECIFIC: dict[str, tuple[str, str]] = {
         "Fine for something styled but never scripted. A `data-` attribute nothing reads "
         "is usually a leftover.",
     ),
+    "dom_attr|unresolved": (
+        "A template renders this element and no stylesheet rule matches its id or class.",
+        "Usually fine: an element can be a JavaScript hook, styled by a parent or "
+        "descendant rule, or styled inline. Worth a look only when you expected it to be "
+        "styled and it is not.",
+    ),
     # detect_multi_writers() hardcodes Status.UNRESOLVED, and the generic unresolved text
     # ("something reaches for this and it is not there") is the opposite of true here: the
     # element exists and is found by MORE than one writer. The status is a known misfit -

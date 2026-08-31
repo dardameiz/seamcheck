@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import pathlib
 import re
 from dataclasses import replace
 
@@ -21,6 +22,10 @@ _CSS_TOOLS = os.path.join(os.path.dirname(__file__), os.pardir, "css_tools")
 # yields "md", which matches no template class.
 _SELECTOR_TOKEN_RE = re.compile(r"([#.])((?:\\.|[\w-])+)")
 _CSS_ESCAPE_RE = re.compile(r"\\(.)")
+# `[data-state="open"] { ... }` styles an element BY that attribute, which is a use of it.
+# The selector reader only ever matched # and . tokens, so 27 attribute selectors on the
+# project measured were invisible and the attributes they style looked unread.
+_ATTRIBUTE_SELECTOR_RE = re.compile(r"\[\s*data-([\w-]+)")
 
 
 def parse_css_files(css_files: list[str]) -> list[dict]:
@@ -137,3 +142,36 @@ def css_imports(css_files: list[str]) -> dict[str, list[str]]:
         record["path"]: [rule["params"].strip("'\" ") for rule in record.get("imports", [])]
         for record in parse_css_files(css_files)
     }
+
+
+def extract_css_attribute_selectors(css_files: list[str]) -> list[Symbol]:
+    """`[data-x]` selectors, as reaches-for-an-element rather than as style rules.
+
+    Emitted as dom_selectors so they match template data attributes through the same
+    matcher a `querySelector('[data-x]')` goes through - a stylesheet and a script asking
+    for the same attribute are the same claim, and deserve the same answer.
+    """
+    symbols: list[Symbol] = []
+    seen: set[str] = set()
+    for path in css_files:
+        try:
+            text = pathlib.Path(path).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for match in _ATTRIBUTE_SELECTOR_RE.finditer(text):
+            name = match.group(1)
+            line = text.count("\n", 0, match.start()) + 1
+            symbol_id = f"dom_selector:data:{name}:{path}:{line}"
+            if symbol_id in seen:
+                continue
+            seen.add(symbol_id)
+            symbols.append(
+                Symbol(
+                    id=symbol_id, kind="dom_selector", label=name, sub="data:css",
+                    file=path, line=line, status=Status.UNCERTAIN,
+                    snippet=f"[data-{name}]", chain=[os.path.basename(path)],
+                    note="A stylesheet selects on this attribute. Evidence that it is used; "
+                         "the verdict belongs to the attribute, not to this rule.",
+                )
+            )
+    return symbols

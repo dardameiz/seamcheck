@@ -15,7 +15,11 @@ from seamcheck.dom_matcher import (
     match_dom_selectors,
 )
 from seamcheck.extractors.asgi_extractor import extract_asgi_routes
-from seamcheck.extractors.css_extractor import extract_css, extract_template_css
+from seamcheck.extractors.css_extractor import (
+    extract_css,
+    extract_css_attribute_selectors,
+    extract_template_css,
+)
 from seamcheck.extractors.django_extractor import extract_django_urls_views, route_name_index
 from seamcheck.extractors.django_models_extractor import extract_django_models
 from seamcheck.extractors.dom_js_extractor import (
@@ -207,6 +211,8 @@ def run_scan(
     # never in a template, and reading definitions from templates alone made every query
     # for one of those look like a query for nothing.
     js_dom_attrs = extract_js_dom_definitions(js_files, template_files or [])
+    # A stylesheet asking for [data-x] is asking for the same thing a script does.
+    dom_selectors += extract_css_attribute_selectors(css_files or [])
 
     progress.step("matching DOM, CSS and tokens")
     if dom_attrs or dom_selectors or css_symbols:

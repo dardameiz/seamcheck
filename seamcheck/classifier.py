@@ -50,6 +50,18 @@ _UNPROVEN_UNUSED_NOTE = (
 # So the status stays `uncertain` and the note carries what changed: it now names every
 # reference kind that WAS searched, which is a far more useful thing to hand a reader than
 # an admission that the tool had not looked.
+# A status word with nothing beside it is the thing this tool exists not to produce, and
+# 49% of one project's `uncertain` symbols carried no explanation at all. Where a kind ends
+# uncertain for a reason the matcher knows and the symbol does not, the reason is attached
+# here rather than left to the reader to infer.
+_UNCERTAIN_NOTES = {
+    "css_selector": (
+        "Nothing references this rule, but its name could be assembled at runtime from a "
+        "prefix that does appear in the JavaScript - so it is live and unprovable at once, "
+        "and calling it dead would be a guess."
+    ),
+}
+
 _NO_CALLER_EVIDENCE_NOTE = (
     "Searched and not found: fetch() calls, {% url %} tags, reverse(), redirect(), "
     "<a href>, form actions and HTMX attributes. Not claimed unused - a route can be "
@@ -69,6 +81,11 @@ def _from_edges(symbol: Symbol, incoming: dict, outgoing: dict) -> Symbol:
         if status is Status.UNUSED and symbol.kind in _UNPROVEN_UNUSED_KINDS:
             return replace(symbol, status=Status.UNCERTAIN, note=symbol.note or _UNPROVEN_UNUSED_NOTE)
         return replace(symbol, status=status)
+    # Nothing but UNCERTAIN edges. The loop above never reaches this case - it walks only
+    # the three decisive statuses - so a symbol held back on purpose fell through with no
+    # explanation, which is the one thing a status word must never do here.
+    if not symbol.note and symbol.kind in _UNCERTAIN_NOTES:
+        return replace(symbol, note=_UNCERTAIN_NOTES[symbol.kind])
     return symbol
 
 

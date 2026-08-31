@@ -9,6 +9,19 @@ from seamcheck.extractors.js_extractor import _parse_files, _walk
 from seamcheck.graph import Status, Symbol
 
 _SELECTOR_CALLEES = frozenset({"getElementById", "querySelector", "querySelectorAll", "closest"})
+# The other two ways JavaScript reaches a data attribute. Only `[data-x]` selector syntax
+# was read, so a template's `data-can-change` looked like an attribute nothing touches while
+# the code read it as `dataset.canChange` or `getAttribute("data-can-change")` - 584 of them
+# on the project measured, every one sitting in `uncertain` with no explanation at all.
+_ATTRIBUTE_CALLEES = frozenset(
+    {"getAttribute", "setAttribute", "hasAttribute", "removeAttribute"}
+)
+_CAMEL_BOUNDARY = re.compile(r"(?<!^)(?=[A-Z])")
+
+
+def _dataset_name(camel: str) -> str:
+    """`buttonType` -> `button-type`, the HTML mapping the browser itself applies."""
+    return _CAMEL_BOUNDARY.sub("-", camel).lower()
 
 # Assigning to one of these, or to anything under .style / .dataset, mutates the element.
 _WRITE_PROPERTIES = frozenset(
@@ -124,11 +137,45 @@ def _dom_selectors_in(path: str, ast_root: dict, line_offset: int = 0) -> list[S
     writing = _writing_call_ids(ast_root)
     basename = os.path.basename(path)
 
+    def _data_access(name: str, line, enclosing: str, snippet: str) -> None:
+        symbols.append(
+            Symbol(
+                id=f"dom_selector:data:{name}:{path}:{line}", kind="dom_selector",
+                label=name, sub="data:read", file=path, line=line,
+                status=Status.UNCERTAIN, snippet=snippet,
+                chain=[basename, enclosing] if enclosing else [basename],
+                note="Reads a data attribute. Evidence that the attribute is used; the "
+                     "verdict belongs to the attribute, not to this read.",
+            )
+        )
+
     for node, enclosing in _walk(ast_root):
+        raw = ((node.get("loc") or {}).get("start") or {}).get("line")
+        at = (raw + line_offset) if raw else raw
+
+        # el.dataset.buttonType -> the data-button-type attribute
+        if node.get("type") == "MemberExpression":
+            owner = node.get("object") or {}
+            if (owner.get("property") or {}).get("name") == "dataset":
+                accessed = (node.get("property") or {}).get("name")
+                if accessed:
+                    _data_access(_dataset_name(accessed), at, enclosing,
+                                 f"dataset.{accessed}")
+
         if node.get("type") != "CallExpression":
             continue
         callee = node.get("callee") or {}
         callee_name = (callee.get("property") or {}).get("name")
+
+        # getAttribute("data-can-change") and friends
+        if callee_name in _ATTRIBUTE_CALLEES:
+            first = (node.get("arguments") or [{}])[0]
+            if first.get("type") == "Literal" and isinstance(first.get("value"), str):
+                raw_name = first["value"]
+                if raw_name.startswith("data-") and len(raw_name) > 5:
+                    _data_access(raw_name[5:], at, enclosing,
+                                 f"{callee_name}('{raw_name}')")
+
         if callee_name not in _SELECTOR_CALLEES:
             continue
 
@@ -381,7 +428,10 @@ def extract_js_class_usages(
             Symbol(
                 id=symbol_id, kind="dom_selector", label=name, sub="class:apply", file=path,
                 line=line, status=Status.UNCERTAIN, snippet=snippet,
-                chain=[basename, enclosing] if enclosing else [basename], note="",
+                chain=[basename, enclosing] if enclosing else [basename],
+                note="JavaScript puts this class on an element. Carried as evidence that a "
+                     "rule of the same name is live, not as a claim about this line - so it "
+                     "is uncertain by design, and never a finding.",
             )
         )
 
@@ -452,7 +502,10 @@ def extract_js_class_usages(
                         id=symbol_id, kind="dom_selector", label=stem, sub="class:stem",
                         file=path, line=line, status=Status.UNCERTAIN,
                         snippet=f"a '{stem}...' class name assembled at runtime",
-                        chain=[os.path.basename(path)], note="",
+                        chain=[os.path.basename(path)],
+                        note="A class-name PREFIX, not a class. It is the only trace in the "
+                             "source that a family of names is assembled here, which is what "
+                             "stops rules for the whole names being called dead.",
                     )
                 )
 

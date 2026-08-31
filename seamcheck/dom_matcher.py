@@ -47,6 +47,7 @@ def match_dom_selectors(dom_attrs: list[Symbol], dom_selectors: list[Symbol]) ->
         attrs_by_key.setdefault((attr.sub, attr.label), attr)
 
     edges: list[Edge] = []
+    reached: set[str] = set()
     for selector in dom_selectors:
         # A runtime-built selector names nothing checkable, and a class JavaScript
         # applies needs no template attribute to match - the JS creates the element.
@@ -54,9 +55,20 @@ def match_dom_selectors(dom_attrs: list[Symbol], dom_selectors: list[Symbol]) ->
             continue
         matched = attrs_by_key.get((_base_sub(selector), selector.label))
         if matched:
+            reached.add(matched.id)
             edges.append(Edge(from_id=selector.id, to_id=matched.id, status=Status.CONNECTED))
         else:
             edges.append(Edge(from_id=selector.id, to_id=selector.id, status=Status.UNRESOLVED))
+
+    # A data attribute is reached exactly four ways, and all four are read now: dataset.x,
+    # getAttribute("data-x"), a [data-x] selector in JavaScript, and a [data-x] selector in
+    # a stylesheet. So "nothing reads this" is a measurement here, where for an id or a
+    # class it would not be - those are also reached by CSS cascade and by markup this scan
+    # does not model. 516 of these sat in `uncertain` with no explanation at all, which is
+    # the one thing a status word must never do.
+    for attr in dom_attrs:
+        if _base_sub(attr) == "data" and attr.id not in reached:
+            edges.append(Edge(from_id=attr.id, to_id=attr.id, status=Status.UNUSED))
     return edges
 
 
