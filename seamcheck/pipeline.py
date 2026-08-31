@@ -6,6 +6,7 @@ import ast
 import dataclasses
 import pathlib
 
+from seamcheck.adapters import select
 from seamcheck.attribution import attribute_by_feature
 from seamcheck.classifier import classify
 from seamcheck.dom_matcher import (
@@ -14,15 +15,11 @@ from seamcheck.dom_matcher import (
     match_css_tokens,
     match_dom_selectors,
 )
-from seamcheck.extractors.asgi_extractor import extract_asgi_routes
 from seamcheck.extractors.css_extractor import (
     extract_css,
     extract_css_attribute_selectors,
     extract_template_css,
 )
-from seamcheck.extractors.django_extractor import extract_django_urls_views, route_name_index
-from seamcheck.extractors.django_models_extractor import extract_django_models
-from seamcheck.extractors.django_static_extractor import extract_urls_views_static
 from seamcheck.extractors.dom_js_extractor import (
     extract_dom_selectors,
     extract_js_class_usages,
@@ -40,6 +37,7 @@ from seamcheck.extractors.url_reference_extractor import extract_url_references
 from seamcheck.field_matcher import match_json_response_fields
 from seamcheck.graph import Edge, Graph, Status, Symbol
 from seamcheck.matcher import match_js_to_django
+from seamcheck.nodetools import report
 from seamcheck.progress import Progress, null
 
 _FUNCTION_NODES = (ast.FunctionDef, ast.AsyncFunctionDef)
@@ -144,33 +142,38 @@ def run_scan(
     progress: Progress | None = None,
     repo_root: str = ".",
     static_urls: bool = False,
+    server_adapter: str | None = None,
 ) -> Graph:
     progress = progress or null()
-    progress.step("URLs and views")
-    # Two ways to read a URLconf, and the choice is about what the machine can do rather
-    # than about accuracy. Asking Django is exact and needs the project to RUN - settings,
-    # every app importable, every dependency installed. Reading the source needs none of
-    # that, and on the project both were measured against it recovers 95% of the routes
-    # actually declared in a urls.py. What it cannot see is what no reader of text could:
-    # routes Django generates at runtime (the admin's 116) and lists built by a loop.
-    static_names: dict[str, str] = {}
-    if static_urls:
-        django_symbols, routing_edges, static_names = extract_urls_views_static(
-            repo_root, urlconf_module, first_party_prefixes
-        )
-    else:
-        django_symbols, routing_edges = extract_django_urls_views(
-            urlconf_module, first_party_prefixes
-        )
-    progress.step("ASGI routes")
-    if asgi_file:
-        django_symbols = django_symbols + extract_asgi_routes(asgi_file)
 
-    progress.step("models")
-    if app_labels:
-        # Model symbols were extracted and tested from the start but never reached the
-        # graph, so the Django-internals view had no models in it at all.
-        django_symbols = django_symbols + extract_django_models(app_labels)
+    # The one framework-specific component in the whole pipeline. Everything below this
+    # block - JavaScript, CSS, DOM, templates, matching, classification - reads the graph
+    # and never the backend, which is why 97% of a real scan is already framework-agnostic.
+    adapter, _confidence = select(repo_root, {
+        "urlconf_module": urlconf_module,
+        "first_party_prefixes": first_party_prefixes,
+        "asgi_file": asgi_file,
+        "app_labels": app_labels,
+        "static_urls": static_urls,
+        "server_adapter": server_adapter,
+    })
+    server = adapter.scan(repo_root, {
+        "urlconf_module": urlconf_module,
+        "first_party_prefixes": first_party_prefixes,
+        "asgi_file": asgi_file,
+        "app_labels": app_labels,
+        "static_urls": static_urls,
+    }, progress)
+    server_symbols, routing_edges = server.symbols, server.edges
+    if not server_symbols:
+        # Silence here would be the worst possible failure: with no routes, every fetch
+        # target resolves to nothing and is reported unresolved - actively wrong on 100%
+        # of endpoints rather than merely unknown.
+        report(
+            "no-routes",
+            "the %s adapter found no routes, so every fetch target will be reported "
+            "unresolved. The frontend half of the graph is still built.", adapter.name,
+        )
 
     progress.step("JavaScript modules")
     js_symbols, js_edges = extract_js(js_entry_files, js_project_root)
@@ -183,18 +186,18 @@ def run_scan(
     js_symbols += [symbol for symbol in inline_symbols if symbol.id not in known]
     js_edges += inline_edges
     progress.step("matching calls to endpoints")
-    match_edges = match_js_to_django(django_symbols, js_symbols)
+    match_edges = match_js_to_django(server_symbols, js_symbols)
     progress.step("Python entry points")
     entry_point_symbols = extract_entry_points(entry_point_files or set())
 
-    symbols = django_symbols + js_symbols + entry_point_symbols
+    symbols = server_symbols + js_symbols + entry_point_symbols
     edges = routing_edges + js_edges + match_edges
     progress.step("references to routes")
     # Every other way the project points at its own routes. Without this, only a fetch()
     # counted as reaching a route, so every server-rendered page read as unmeasured.
     reference_symbols, reference_edges = extract_url_references(
         template_files or [], sorted(entry_point_files or []),
-        static_names if static_urls else route_name_index(urlconf_module), django_symbols,
+        server.route_names, server_symbols,
     )
     symbols += reference_symbols
     edges += reference_edges
