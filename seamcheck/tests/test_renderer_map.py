@@ -27,8 +27,31 @@ class MapRenderTests(SimpleTestCase):
         out = map_html.render(_map())
 
         for forbidden in ("<link", "<img", "<iframe", "url(", "@import", "srcset",
-                          "fetch(", "XMLHttpRequest", "importScripts", "<script src"):
+                          "XMLHttpRequest", "importScripts", "<script src"):
             self.assertNotIn(forbidden, out)
+
+    def test_the_only_request_it_can_make_is_same_origin_and_asked_for(self):
+        """The code viewer reads a file from the server that served this page.
+
+        `fetch(` was forbidden outright, which was the right guard while the page made no
+        requests at all. The promise it protects is that opening the page phones nobody -
+        not that a reader clicking "code" cannot be shown the file they clicked on. So the
+        letter moves and the promise does not: every fetch must be built from
+        location.pathname, so it can only ever reach the origin the page came from, and
+        the viewer must refuse to try at all under file://.
+        """
+        import re
+
+        out = map_html.render(_map())
+
+        calls = re.findall(r"fetch\(([^\n]*)", out)
+        self.assertTrue(calls, "the viewer should make exactly one kind of request")
+        for call in calls:
+            self.assertIn("location.pathname", call,
+                          "a fetch that is not built from this page's own path")
+            self.assertNotIn("http", call, "a fetch naming an absolute URL")
+        self.assertIn('location.protocol === "file:"', out,
+                      "the viewer must fall back rather than request under file://")
 
     def test_every_external_url_is_an_anchor_and_opens_away_from_the_report(self):
         import re

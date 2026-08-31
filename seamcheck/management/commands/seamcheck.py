@@ -370,9 +370,13 @@ class Command(BaseCommand):
         self._wrote(path, text, open_it=options.get("open_it") and not serving)
 
         if serving:
+            from seamcheck.api import LAST_MAP_FILES
+
             self._serve(
                 text, fmt, tunnel=options["tunnel"], local_only=options["local_only"],
                 open_it=options.get("open_it"),
+                sources=set(LAST_MAP_FILES) if fmt == "map" else None,
+                repo_root=repo_root,
             )
 
     def _wrote(self, path, text: str, open_it: bool = False):
@@ -456,14 +460,18 @@ class Command(BaseCommand):
             "each of them changed - re-run `seamcheck map` to pick it up."
         )
 
-    def _serve(self, text, fmt, tunnel=False, local_only=False, open_it=False):
+    def _serve(self, text, fmt, tunnel=False, local_only=False, open_it=False,
+               sources=None, repo_root: str = ""):
         """Hold the report open until interrupted, and name every way in."""
         from seamcheck.serve import public_tunnel, serve_addresses
 
         if fmt == "json":
             raise CommandError("--serve renders a page; use --format map or html.")
 
-        server, addresses = serve_addresses(text, host="127.0.0.1" if local_only else "0.0.0.0")
+        server, addresses = serve_addresses(
+            text, host="127.0.0.1" if local_only else "0.0.0.0",
+            sources=sources, repo_root=repo_root,
+        )
         self.stdout.write("")
         self.stdout.write(f"  open   {addresses['local']}")
         if "lan" in addresses:

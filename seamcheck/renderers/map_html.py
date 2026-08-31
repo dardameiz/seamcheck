@@ -250,6 +250,22 @@ svg.nolabels .nd text { display:none; }
             background:var(--sunk); color:var(--ink); white-space:pre;
             font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
 #codebody { tab-size:4; }
+/* The listing. A grid rather than a <pre> so the gutter can carry a status stripe without
+   the line numbers being selectable along with the code a reader wants to copy. */
+.listing { font-variant-ligatures:none; }
+.listing .ln { display:grid; grid-template-columns:auto 1fr; gap:14px; padding:0 14px;
+  border-left:3px solid transparent; white-space:pre; }
+.listing .num { color:var(--muted); user-select:none; text-align:right; opacity:.7; }
+.listing .here { background:var(--chip); border-left-color:var(--accent); }
+.listing .here .num { color:var(--ink); opacity:1; }
+.listing .mark.unresolved { border-left-color:var(--crit); }
+.listing .mark.unused { border-left-color:var(--warn); }
+.listing .mark.uncertain { border-left-color:var(--dim); }
+.listing .s { color:#9ecbff; font-style:normal; }
+.listing .c { color:var(--muted); font-style:italic; }
+.listing .n { color:#f8c555; font-style:normal; }
+.listing .k { color:#c792ea; font-style:normal; }
+#codenote { padding:6px 14px 10px; color:var(--muted); font-size:11px; }
 
 .sheet .x { position:absolute; top:8px; right:10px; width:30px; height:30px;
             border-radius:8px; border:1px solid var(--line); background:var(--bg);
@@ -945,12 +961,137 @@ function hop(id, here, step, total) {
 // Code opens on request, over the page. Inline, one chain filled the panel with six
 // listings a reader had not asked for and had to scroll past to see the shape of the path.
 const codebox = document.getElementById("codebox");
-function showCode(id) {
+// A finding is one line, and one line is never enough to judge it. The viewer fetches the
+// WHOLE file from the server this page is being served by - the same origin, the same
+// token, an allowlist of exactly the files the scan named - numbers every line, highlights
+// the one in question, and marks every OTHER finding in the same file in the gutter, so a
+// reader sees at once whether they are looking at one problem or a pattern.
+//
+// Opened as a bare file:// document there is no server to ask, so it falls back to the
+// snippet and says why. That degradation is the reason the file is still self-contained.
+const SOURCE_CACHE = new Map();
+
+// Enough highlighting to read by, in about thirty lines: strings, comments, numbers and
+// keywords. A real highlighter is a megabyte and this page already carries one.
+const KEYWORDS = new Set([
+  "async","await","break","case","catch","class","const","continue","def","del","elif",
+  "else","except","export","extends","finally","for","from","function","global","if",
+  "import","in","is","lambda","let","new","not","or","and","pass","raise","return","self",
+  "static","super","switch","this","throw","try","typeof","var","while","with","yield",
+  "True","False","None","true","false","null","undefined","interface","type","enum",
+  "public","private","protected","implements","namespace","declare","readonly",
+]);
+
+// ONE pass over the raw line, not a stack of replaces over the escaped one. Chaining
+// regexes was the obvious version and it corrupted itself: escaping turned an apostrophe
+// into `&#x27;`, the string rule wrapped that, and then the NUMBER rule matched the 39
+// inside the entity and the keyword rule matched the `class` in the tag it had just
+// written. The output was HTML source printed as code. A scanner cannot do that, because
+// each token's text is escaped exactly once, after it is known what the token is.
+function highlight(line) {
+  let out = "";
+  let i = 0;
+  const emit = (cls, text) => { out += cls ? `<i class="${cls}">${esc(text)}</i>` : esc(text); };
+  while (i < line.length) {
+    const ch = line[i];
+    const two = line.slice(i, i + 2);
+    if (two === "//" || ch === "#") { emit("c", line.slice(i)); break; }
+    if (two === "/*") {
+      const end = line.indexOf("*/", i + 2);
+      emit("c", end === -1 ? line.slice(i) : line.slice(i, end + 2));
+      i = end === -1 ? line.length : end + 2;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") {
+      let j = i + 1;
+      while (j < line.length && line[j] !== ch) j += line[j] === "\\" ? 2 : 1;
+      emit("s", line.slice(i, Math.min(j + 1, line.length)));
+      i = j + 1;
+      continue;
+    }
+    if (ch >= "0" && ch <= "9") {
+      let j = i;
+      while (j < line.length && /[\w.]/.test(line[j])) j++;
+      emit("n", line.slice(i, j));
+      i = j;
+      continue;
+    }
+    if (/[A-Za-z_$]/.test(ch)) {
+      let j = i;
+      while (j < line.length && /[\w$]/.test(line[j])) j++;
+      const word = line.slice(i, j);
+      emit(KEYWORDS.has(word) ? "k" : "", word);
+      i = j;
+      continue;
+    }
+    emit("", ch);
+    i += 1;
+  }
+  return out;
+}
+
+function findingsIn(file) {
+  // Every other thing the scan claims about this file, so the gutter can mark them.
+  const marks = new Map();
+  PAGES.forEach(p => p.nodes.forEach(node => {
+    if (node.file === file && node.line && node.status !== "connected") {
+      marks.set(node.line, node.status);
+    }
+  }));
+  return marks;
+}
+
+function renderSource(file, text, line, title) {
+  const marks = findingsIn(file);
+  const lines = text.split("\n");
+  const width = String(lines.length).length;
+  const body = lines.map((raw, i) => {
+    const number = i + 1;
+    const mark = marks.get(number);
+    const cls = ["ln", number === line ? "here" : "", mark ? "mark " + mark : ""].join(" ");
+    return `<div class="${cls}" id="L${number}"><span class="num">${
+      String(number).padStart(width, " ")}</span><span class="src">${highlight(raw)}</span></div>`;
+  }).join("");
+  document.getElementById("codetitle").textContent = title;
+  const holder = document.getElementById("codebody");
+  holder.innerHTML = `<div class="listing">${body}</div>`;
+  const target = document.getElementById("L" + line);
+  if (target) target.scrollIntoView({block: "center"});
+  const other = marks.size - (marks.has(line) ? 1 : 0);
+  document.getElementById("codenote").textContent = other
+    ? `${lines.length} lines · ${other} other finding${other === 1 ? "" : "s"} in this file, marked in the gutter`
+    : `${lines.length} lines`;
+}
+
+async function showCode(id) {
   const n = byId.get(id); if (!n) return;
-  document.getElementById("codetitle").textContent =
-    n.label + (n.file ? "  —  " + n.file + (n.line ? ":" + n.line : "") : "");
-  document.getElementById("codebody").textContent = n.context || n.snippet || "";
+  const title = n.label + (n.file ? "  —  " + n.file + (n.line ? ":" + n.line : "") : "");
   codebox.hidden = false;
+  document.getElementById("codetitle").textContent = title;
+  document.getElementById("codenote").textContent = "";
+  const fallback = () => {
+    document.getElementById("codebody").textContent = n.context || n.snippet || "";
+    document.getElementById("codenote").textContent =
+      "Showing the snippet: the whole file is available when this map is served " +
+      "(seamcheck map), not when it is opened as a file.";
+  };
+  if (!n.file || location.protocol === "file:") { fallback(); return; }
+  document.getElementById("codebody").textContent = "Loading " + n.file + " …";
+  try {
+    let text = SOURCE_CACHE.get(n.file);
+    if (text === undefined) {
+      const response = await fetch(location.pathname.replace(/\/$/, "") +
+        "/source?path=" + encodeURIComponent(n.file));
+      if (!response.ok) throw new Error(String(response.status));
+      const data = await response.json();
+      if (data.error) throw new Error(data.error);
+      text = data.text;
+      SOURCE_CACHE.set(n.file, text);
+    }
+    renderSource(n.file, text, n.line, title);
+  } catch {
+    fallback();
+  }
 }
 document.getElementById("codeclose").onclick = () => { codebox.hidden = true; };
 codebox.onclick = e => { if (e.target === codebox) codebox.hidden = true; };
@@ -1841,6 +1982,7 @@ def render(connectivity_map: ConnectivityMap, console=None, files=None,
         '<div class="codebox" id="codebox" hidden><div class="codecard">'
         '<div class="codehead"><span id="codetitle"></span>'
         '<button id="codeclose" type="button" aria-label="Close">\u00d7</button></div>'
+        '<div id="codenote"></div>'
         '<pre id="codebody"></pre></div></div>',
         '<aside class="sheet" id="detail" hidden>'
         '<button class="x" id="dx" type="button" aria-label="Close">\u00d7</button>'

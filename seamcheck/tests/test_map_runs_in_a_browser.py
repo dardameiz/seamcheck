@@ -190,3 +190,61 @@ class TrendChartRenders(MapRunsInABrowser):
         state = self._open(self._series(7))
         self.assertEqual(state["dots"], 0)
         self.assertIn("1 scan recorded", state["body"])
+
+
+class SyntaxHighlighting(MapRunsInABrowser):
+    """The highlighter must never print its own markup as if it were source.
+
+    The first version chained regexes over the ESCAPED line: escaping turned an apostrophe
+    into `&#x27;`, the string rule wrapped that, and then the number rule matched the 39
+    inside the entity while the keyword rule matched the `class` in the tag it had just
+    written. A line of JavaScript rendered as a soup of `&class="c">#class="n">39;`.
+    """
+
+    def _highlight(self, lines: list[str]) -> list[str]:
+        from playwright.sync_api import sync_playwright
+
+        url = self._render()
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch()
+            except Exception as error:  # pragma: no cover
+                raise unittest.SkipTest(f"no chromium: {error}") from None
+            page = browser.new_page()
+            page.goto(url, wait_until="load")
+            page.wait_for_timeout(200)
+            out = page.evaluate("lines => lines.map(l => highlight(l))", lines)
+            browser.close()
+        return out
+
+    def test_markup_never_leaks_into_the_rendered_code(self):
+        source = [
+            "const banner = document.getElementById('cookieConsentBanner');",
+            'banner.classList.add("translate-y-0");',
+            "# a python comment with 'quotes' and 39",
+            "const n = 39; // trailing comment",
+            "const t = `template ${x} literal`;",
+        ]
+        for rendered in self._highlight(source):
+            with self.subTest(rendered=rendered[:60]):
+                # The only markup allowed is the highlighter's own one-letter spans.
+                self.assertNotIn('&class', rendered)
+                self.assertNotIn('#class', rendered)
+                stripped = rendered.replace('<i class="s">', "").replace('<i class="c">', "")
+                stripped = stripped.replace('<i class="n">', "").replace('<i class="k">', "")
+                stripped = stripped.replace("</i>", "")
+                self.assertNotIn("<i", stripped, "an unexpected tag was emitted")
+                self.assertNotIn("class=", stripped, "markup rendered as source text")
+
+    def test_source_characters_that_are_html_are_escaped(self):
+        rendered = self._highlight(["if (a < b && c > d) { return '<script>'; }"])[0]
+        self.assertIn("&lt;", rendered)
+        self.assertIn("&amp;", rendered)
+        self.assertNotIn("<script>", rendered)
+
+    def test_a_string_is_marked_and_a_keyword_outside_it_is_too(self):
+        rendered = self._highlight(["const x = 'const';"])[0]
+        self.assertIn('<i class="k">const</i>', rendered)
+        self.assertIn('<i class="s">', rendered)
+        # The keyword inside the string belongs to the string, not to the keyword rule.
+        self.assertEqual(rendered.count('<i class="k">const</i>'), 1)

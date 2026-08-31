@@ -356,6 +356,12 @@ def _page_files(repo_root: str) -> dict[str, set[str]]:
     }
 
 
+# The files the last rendered map named. The viewer fetches source over the same server
+# the map is served from, and an ALLOWLIST is what makes that safe: the set of files the
+# scan actually saw, rather than a document root somebody can walk out of.
+LAST_MAP_FILES: set[str] = set()
+
+
 def _render_map(repo_root: str, ref: str, progress: Progress | None = None) -> str:
     progress = progress or null()
     js_entry_files, _ = _js_roots(_config(), repo_root)
@@ -404,6 +410,10 @@ def _render_map(repo_root: str, ref: str, progress: Progress | None = None) -> s
     except OSError:  # a read-only checkout still gets a map
         series = summarise_trend([])
     progress.step("rendering")
+    LAST_MAP_FILES.clear()
+    LAST_MAP_FILES.update(
+        symbol.file for symbol in graph.symbols if symbol.file
+    )
     return map_html.render(
         build_map(graph, page_files, git_sha=sha,
                   baseline=baseline, baseline_sha=baseline_sha if baseline else None,
