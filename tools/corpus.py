@@ -94,8 +94,8 @@ REPOS = [
     {
         "name": "nestjs-realworld",
         "url": "https://github.com/lujakob/nestjs-realworld-example-app",
-        "adapter": "django",
-        "why": "NestJS - no adapter yet, so nothing should confidently claim it",
+        "adapter": "nestjs",
+        "why": "NestJS decorators - impossible to read before the parser work",
     },
     {
         "name": "nodebb",
