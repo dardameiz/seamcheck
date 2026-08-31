@@ -61,7 +61,7 @@ can't tell."
 
 ## What it found in the project it was built on
 
-Not hypotheticals. Real bugs, in a real 36,000-symbol codebase, found while writing this:
+Not hypotheticals. Real bugs, in a 511,000-line Django codebase, found while writing this:
 
 - Five CSS custom properties in a **loaded** stylesheet that resolve to nothing —
   `--text-primary`, `--border-color` and friends. Those declarations render nothing today.
@@ -294,13 +294,20 @@ Written down because a tool that hides its blind spots is worse than no tool:
 - **Celery, Redis, WebSockets and Stripe aren't traced.** Anything reached only through
   those is invisible, and the UI says so rather than showing a confident zero.
 - **A URL built at runtime** stays `uncertain`. The prefix is recorded, never a guess.
-- **It has been measured against one real project.** Mine. That's one more than most tools
-  at this stage and far fewer than you'd want. What that measurement says:
+- **It has been measured against one real project** — a 511,000-line Django app. That's one
+  more than most tools at this stage and far fewer than you'd want; a corpus of public repos
+  is the next job. See [How accurate is it?](#how-accurate-is-it) for what the one
+  measurement actually says.
 
 ## How accurate is it?
 
-Every one of the 1,455 findings on a 38,000-symbol project was hand-assigned a root cause —
-no sampling, nothing left as "probably fine". The first pass came out at **~73% precision**,
+Measured on one real Django + vanilla-JS app: **511,000 lines across 1,505 files** — 376 URL
+routes, 328 views, 267 templates, 283 JavaScript modules, 161 stylesheets. Seamcheck reads
+that as **38,010 symbols** (a symbol is one named thing: a route, a function, a selector, a
+design token).
+
+Every one of the **1,455 findings** it reported was hand-assigned a root cause — no
+sampling, nothing left as "probably fine". The first pass came out at **~73% precision**,
 which is the number most tools in this space never publish because nobody measures it.
 
 Then the four causes of the other 27% got fixed:

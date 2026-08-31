@@ -54,9 +54,10 @@ after `--` is forwarded to the management command untouched.
 
 ## Accuracy
 
-Measured, not asserted. All 1,455 findings on a 38,000-symbol project were hand-assigned a
-root cause: ~73% precision on the first pass, ~97% after the four causes of the remainder
-were fixed. Per category: `css_token_use` 100%, `dom_selector` 98%, `css_token_def` 97%,
+Measured, not asserted. On one real Django + vanilla-JS app of 511,000 lines across 1,505
+files (376 URL routes, 328 views, 267 templates, 283 JS modules), which the scan reads as
+38,010 symbols: all 1,455 findings were hand-assigned a root cause, giving ~73% precision on
+the first pass and ~97% after the four causes of the remainder were fixed. Per category: `css_token_use` 100%, `dom_selector` 98%, `css_token_def` 97%,
 `dom_attr` 93%. One project so far, so treat it as a floor with an unknown ceiling.
 
 ## Reading the output
