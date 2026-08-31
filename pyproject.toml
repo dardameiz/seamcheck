@@ -9,7 +9,7 @@ build-backend = "hatchling.build"
 [project]
 name = "seamcheck"
 version = "0.5.0"
-description = "Find the code your project no longer connects to - and the connections it only thinks it has."
+description = "Find the code your project no longer connects to - and the connections it only thinks it has. A frontend-to-backend seam checker with a visual map."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"
@@ -18,10 +18,13 @@ authors = [{ name = "dardameiz" }]
 # framing of who this is for: people shipping code an assistant wrote, who need to know
 # which of it is wired to anything.
 keywords = [
-  "django", "static-analysis", "dead-code", "unused-code", "connectivity",
-  "code-map", "dependency-graph", "codebase-visualization",
+  # The seam is the product; Django is the backend it currently reads. Ordered so the
+  # first thing a search engine sees is what the tool is FOR, not what it happens to parse.
+  "static-analysis", "dead-code", "unused-code", "connectivity", "code-map",
+  "dependency-graph", "codebase-visualization", "frontend-backend", "api-contract",
+  "django", "javascript", "css",
   "mcp", "mcp-server", "ai-code-review", "llm-generated-code", "vibe-coding",
-  "agent-tools", "ci", "code-quality", "javascript", "css",
+  "agent-tools", "ci", "code-quality", "technical-debt",
 ]
 # No "License :: OSI Approved ::" classifier: PEP 639 replaced it with the
 # License-Expression field above, and PyPI rejects a distribution carrying both.

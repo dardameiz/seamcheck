@@ -6,10 +6,16 @@
 
 **Your AI wrote 400 lines. Which of them are actually wired to anything?**
 
-Seamcheck reads a Django + JavaScript project and tells you what connects to what — which
-`fetch()` lands on which view, which template element the JS is reaching for, which CSS
-rule nothing has referenced since 2023. Then it tells you what it *couldn't* work out,
-which turns out to be the part that matters.
+Seamcheck reads a web project and tells you what connects to what — which `fetch()` lands on
+which route, which template element the JS is reaching for, which CSS rule nothing has
+referenced since 2023. Then it tells you what it *couldn't* work out, which turns out to be
+the part that matters.
+
+**The bug it exists for lives between languages.** `catalogue.js` is valid JavaScript.
+`urls.py` is valid Python. A linter for either says both files are fine — and they are. The
+defect is that one names a route the other does not serve, and it only exists *between* them.
+Every tool in this space works inside one language and stops at its boundary; that boundary
+is where this class of bug lives.
 
 No SaaS. No upload. One command, one HTML file, and an exit code for CI.
 
@@ -17,6 +23,12 @@ No SaaS. No upload. One command, one HTML file, and an exit code for CI.
 pip install seamcheck
 seamcheck map
 ```
+
+**Scope, so nobody has to guess:** the backend reader is **Django** today. Everything else —
+JavaScript, CSS, DOM, templates, and the runtime probe — is framework-agnostic already.
+Measured on a real 511,000-line project: **96.7% of the symbols it builds are not Django-specific.**
+Adding a backend is one adapter, not a rewrite. Rails, Laravel, FastAPI and Express are the
+planned order; none of them exist yet, and this line will say so until they do.
 
 ![The connectivity map](docs/images/map.png)
 
@@ -315,7 +327,10 @@ the URL carries a random token so nothing on your network stumbles into it.
 
 Written down because a tool that hides its blind spots is worse than no tool:
 
-- **Django + vanilla JS.** No React, Vue, or TypeScript yet.
+- **The backend reader is Django only.** The frontend half does not care what served the
+  page, but until a second adapter ships, a Rails or Express project gets the JS/CSS/DOM
+  half and no routes.
+- **Vanilla JS.** No React or Vue component graph yet; JSX is not parsed.
 - **Celery, Redis, WebSockets and Stripe aren't traced.** Anything reached only through
   those is invisible, and the UI says so rather than showing a confident zero.
 - **A URL built at runtime** stays `uncertain`. The prefix is recorded, never a guess.

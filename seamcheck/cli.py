@@ -117,6 +117,28 @@ COMMANDS: dict[str, Command] = {
         takes_number="--backfill",
         number_default="20",
     ),
+    "observe": Command(
+        args=["--observe"],
+        summary="Drive the running app and record what it really queried and fetched.",
+        detail=(
+            "A third of a real graph is runtime-built: a selector assembled from a "
+            "variable, a fetch target concatenated at call time. No reader of source will "
+            "ever resolve those - it is the floor of what static analysis can know.\n\n"
+            "The browser knows. This visits the app with a probe installed ahead of its own "
+            "scripts, and records every selector actually queried (and whether it found "
+            "anything), every URL actually requested, and every class actually applied.\n\n"
+            "The evidence is keyed to the current commit and says nothing about pages the "
+            "run did not visit - a route nobody clicked leaves no trace and looks exactly "
+            "like one that is broken. Everything it promotes is labelled as observed for "
+            "that reason. Needs the app running, and `pip install 'seamcheck[observe]'`."
+        ),
+        examples=[
+            ("seamcheck observe", "visit every page the graph knows about"),
+            ("seamcheck observe -- --base-url http://localhost:8000", "somewhere else"),
+            ("seamcheck observe http://127.0.0.1:8080/store/", "just these pages"),
+            ("seamcheck observe -- --shots OTHER/shots", "...and screenshot each one"),
+        ],
+    ),
     "config": Command(
         args=["--show-config"],
         summary="Show the paths a scan will use, and where each came from.",

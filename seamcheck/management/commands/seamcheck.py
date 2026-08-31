@@ -82,6 +82,20 @@ class Command(BaseCommand):
             help="Open the written file in your browser when it is done.",
         )
         parser.add_argument(
+            "--observe", nargs="*", metavar="URL",
+            help="Drive the running app in a browser and record what it actually queried "
+                 "and fetched. With no URLs, visits the pages the graph knows about at "
+                 "--base-url.",
+        )
+        parser.add_argument(
+            "--base-url", default="http://127.0.0.1:8080",
+            help="Where the application is running, for --observe.",
+        )
+        parser.add_argument(
+            "--shots", default=None, metavar="DIR",
+            help="With --observe, also screenshot each page into DIR.",
+        )
+        parser.add_argument(
             "--show-config", action="store_true",
             help="Print the config a scan would use, and where each value came from.",
         )
@@ -109,6 +123,8 @@ class Command(BaseCommand):
             # other path (bare --check, --since, the no-flags summary) silently ignores
             # it - "wrote the report" that never happened is worse than an error.
             raise CommandError("--out only applies together with --format (or --json).")
+        if options["observe"] is not None:
+            return self._observe(options)
         if options["show_config"]:
             return self._show_config(options["repo_root"])
         if options["triage"]:
@@ -147,6 +163,73 @@ class Command(BaseCommand):
         if options["check"] or options["since"]:
             return self._check(options)
         return self._summary(options)
+
+    def _observe(self, options):
+        """Record what a browser actually did, and keep it beside the scan.
+
+        Separate from the scan on purpose. Everything else here reads files and works on a
+        machine that will never open a browser; this needs the application to RUN, so it is
+        enrichment and never a prerequisite.
+        """
+        from seamcheck.browser import BrowserUnavailable, observe_pages
+        from seamcheck.observe import merge, save
+        from seamcheck.snapshot import current_git_sha
+
+        repo_root = options["repo_root"]
+        urls = list(options["observe"])
+        if not urls:
+            bar = self._progress(options, api.SCAN_STEPS)
+            graph = api.scan(repo_root, bar)
+            bar.finish()
+            urls = self._page_urls(graph, options["base_url"])
+            if not urls:
+                raise CommandError(
+                    "No page URLs found in the graph to visit. Pass them explicitly: "
+                    "seamcheck observe http://127.0.0.1:8080/ http://127.0.0.1:8080/store/"
+                )
+        self.stdout.write(f"Visiting {len(urls)} page(s) with the probe installed.")
+        try:
+            observations = observe_pages(urls, shots_dir=options["shots"])
+        except BrowserUnavailable as error:
+            raise CommandError(str(error)) from error
+
+        try:
+            sha = current_git_sha(repo_root)
+        except Exception:  # noqa: BLE001 - observations are still worth keeping
+            sha = "unknown"
+        path = save(observations, repo_root, sha)
+        folded = merge(observations)
+        failed = [o for o in observations if o.screenshot.startswith("error:")]
+
+        self.stdout.write("")
+        for bucket in ("selectors", "fetches", "classes"):
+            self.stdout.write(f"  {len(folded[bucket]):>6,}  distinct {bucket} observed")
+        blind = sum(1 for row in folded["selectors"].values() if not row.get("hits"))
+        self.stdout.write(
+            f"  {blind:>6,}  selectors that ran and found NOTHING - live nulls, not guesses"
+        )
+        if failed:
+            self.stdout.write(f"\n  {len(failed)} page(s) failed to load:")
+            for o in failed[:5]:
+                self.stdout.write(f"    {o.page}  {o.screenshot}")
+        self.stdout.write(f"\n  wrote  {path}")
+        self.stdout.write(
+            "  Evidence is keyed to this commit, and says nothing about pages the run did "
+            "not visit."
+        )
+
+    def _page_urls(self, graph, base_url: str) -> list[str]:
+        """Routes a person can open: served by a view, not an API path, no parameters."""
+        base = base_url.rstrip("/")
+        urls = []
+        for symbol in graph.symbols:
+            if symbol.kind != "url" or "<" in symbol.label or symbol.label.startswith("^"):
+                continue
+            path = symbol.label.strip("/")
+            if path.startswith(("api/", "admin/")) or path.endswith((".txt", ".xml", ".js")):
+                continue
+            urls.append(f"{base}/{path}" if path else f"{base}/")
+        return sorted(set(urls))
 
     def _show_config(self, repo_root):
         """What the scan will use, and why - because detection must not be a black box.
