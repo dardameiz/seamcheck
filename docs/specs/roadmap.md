@@ -62,8 +62,75 @@ Today: vanilla JavaScript, read with acorn. Already framework-agnostic — a `fe
 | React / Vue | component graph, so a dead component is findable; JSX `className` | large |
 | HTMX | `hx-get`/`hx-post` — **already read** by the URL reference extractor | done |
 
-**Not urgent.** Knip covers dead JS/TS modules well and is free; it does not cover the seam,
-and neither does anything else. The seam works today on any client that uses `fetch`.
+**Not urgent** was the earlier reading, and measurement has now moved it. Knip covers dead
+JS/TS modules well and is free; it does not cover the seam, and neither does anything else.
+But "the seam works on any client that uses `fetch`" is only true of clients we can *parse*.
+
+### Measured: what the bundled parser actually reads
+
+```
+_JS_EXTENSIONS = ('.js', '.mjs', '.jsx')      <- no .ts, no .tsx
+```
+
+| file | discovered | parsed | |
+|---|---|---|---|
+| `plain.js` | ✅ | ✅ | works |
+| `express.js` | ✅ | ✅ | **a Node backend parses today** |
+| `react.jsx` | ✅ | ❌ | in the list, acorn core has no JSX |
+| `types.ts` | ❌ | ❌ | not even discovered |
+| `react.tsx` | ❌ | ❌ | neither |
+
+**TypeScript coverage is zero.** Not discovered, and acorn cannot strip type annotations
+even if it were. Since essentially every modern frontend is JS or TS, this is the single
+largest gap in the tool — and it takes Next.js and NestJS with it, both TS by default.
+
+**This is also how the silent-failure bug was found.** `.jsx` was discovered, failed to
+parse, and was dropped by `if "ast" in record` with no `else`; the whole scan ran inside
+`quiet()`, which disables WARNING logging. So a React project produced almost no JavaScript
+symbols and still reported success. Fixed: parse failures now print to stderr regardless of
+quiet, once per subject, naming the count and files.
+
+### React is not a parser problem
+
+Adding JSX parsing is necessary and nowhere near sufficient, because React does not use the
+seams this tool reads:
+
+| what we read | what React does |
+|---|---|
+| `class="cart"` in a template | `className={styles.cart}` — **computed**, not a literal |
+| `querySelector('#cart')` | refs; React owns the DOM |
+| a `.css` file with rules | CSS Modules, styled-components, Tailwind |
+
+The `fetch` ↔ route seam survives React **untouched**. The DOM/CSS seam — 97% of the symbol
+volume — does not. React's equivalents are real and equally valuable, but they are **new
+extractors, not a new parser**: a component imported and never rendered, a `styles.foo` that
+no CSS Module defines, a prop passed that the component does not accept.
+
+### Revised client plan, in cost order
+
+| step | what it unblocks | cost |
+|---|---|---|
+| 1. `acorn-jsx` | `.jsx`/`.tsx` syntax parses at all | small — pure-JS official plugin |
+| 2. TS type-stripper (`sucrase`, pure JS) then acorn | **all of TypeScript**, incl. Next.js and NestJS | medium — **the gate on everything modern** |
+| 3. Node route adapter | Express, Fastify; Next's filesystem routes need no parser | small, and step 3 is why step 1–2 pay |
+| 4. React DOM extractors | component graph, CSS Modules, props | **a project, not a task** |
+
+---
+
+## Axis 1b — JavaScript backends
+
+The cheapest adapter in the entire plan, because **the AST is already built**. An Express app
+is plain JavaScript; we parse the file today and simply never look for `app.get('/x', h)`.
+
+| framework | route shape | cost |
+|---|---|---|
+| Express / Fastify | `app.get('/api/orders/', handler)` | small — pattern-match an AST we have |
+| **Next.js App Router** | the **filesystem**: `app/api/orders/route.ts` → `/api/orders` | **smallest of all — a directory walk, no parsing** |
+| NestJS | `@Get('orders')` under `@Controller('api')` | medium — compose two decorators |
+
+Next.js is the interesting one: its routes need no parser at all, so the adapter is trivial —
+but its files are `.ts`, so it is **blocked entirely on the TypeScript gate above.** That
+single dependency decides the order of the whole client axis.
 
 ---
 
