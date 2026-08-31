@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+import sys
 
 logger = logging.getLogger(__name__)
 
@@ -24,11 +25,30 @@ logger = logging.getLogger(__name__)
 _reported: set[str] = set()
 
 
-def _report(what: str, message: str, *args) -> None:
+def report(what: str, message: str, *args) -> None:
+    """Tell the user a parser failed, once per subject, on stderr.
+
+    Not only via `logging`: the CLI runs the entire scan inside `quiet()`, which disables
+    WARNING-level logging so the host project's start-up noise stays out of the output.
+    That is right for someone else's warnings and catastrophic for our own - a scan that
+    silently produced zero JavaScript symbols looks exactly like a clean one, and a tool
+    whose whole claim is that it never asserts more than its evidence cannot ship a
+    failure mode where missing evidence reads as a pass.
+
+    stdout carries the data, so diagnostics go to stderr and stay pipeable either way.
+    """
     if what in _reported:
         return
     _reported.add(what)
     logger.warning(message, *args)
+    try:
+        print("seamcheck: " + (message % args if args else message), file=sys.stderr)
+    except (TypeError, ValueError):  # a malformed format string must not kill the scan
+        print("seamcheck: " + message, file=sys.stderr)
+
+
+# Kept for callers inside this module; `report` is the name other modules use.
+_report = report
 
 
 def parser_path(directory: str, name: str) -> str:

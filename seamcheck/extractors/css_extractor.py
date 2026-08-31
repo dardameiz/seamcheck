@@ -9,7 +9,7 @@ import re
 from dataclasses import replace
 
 from seamcheck.graph import Status, Symbol
-from seamcheck.nodetools import parser_path, run_parser
+from seamcheck.nodetools import parser_path, report, run_parser
 
 _FALLBACK_NOTE = (
     "Resolves to the fallback written into the var() call; no definition is required. "
@@ -32,10 +32,20 @@ def parse_css_files(css_files: list[str]) -> list[dict]:
     existing = [path for path in css_files if os.path.isfile(path)]
     if not existing:
         return []
-    return [
+    records = [
         json.loads(line)
         for line in run_parser(parser_path(_CSS_TOOLS, "parse_css"), existing, "CSS")
     ]
+    unreadable = [r.get("path", "?") for r in records if "error" in r]
+    if unreadable:
+        shown = ", ".join(os.path.basename(path) for path in unreadable[:3])
+        report(
+            "css-parse-failures",
+            "%s CSS file(s) could not be parsed and contributed no rules (%s%s). Selectors "
+            "defined in them will look undefined, and classes they style will look unused.",
+            len(unreadable), shown, ", ..." if len(unreadable) > 3 else "",
+        )
+    return records
 
 
 def _symbol(kind: str, label: str, sub: str, path: str, line, snippet: str) -> Symbol:

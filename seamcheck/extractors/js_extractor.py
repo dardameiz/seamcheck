@@ -10,7 +10,7 @@ import shutil
 import tempfile
 
 from seamcheck.graph import Edge, Status, Symbol
-from seamcheck.nodetools import parser_path, run_parser
+from seamcheck.nodetools import parser_path, report, run_parser
 
 _JS_TOOLS = os.path.join(os.path.dirname(__file__), os.pardir, "js_tools")
 _JS_EXTENSIONS = (".js", ".mjs", ".jsx")
@@ -78,10 +78,27 @@ def _parse_files(paths: list[str]) -> dict[str, dict]:
     if not paths:
         return {}
     parsed: dict[str, dict] = {}
+    failed: list[str] = []
     for line in run_parser(parser_path(_JS_TOOLS, "parse_js"), paths, "JavaScript"):
         record = json.loads(line)
         if "ast" in record:
             parsed[record["path"]] = record["ast"]
+        else:
+            # A file the parser could not read used to vanish here without a word. Every
+            # symbol in it then went missing from a scan that still reported success --
+            # the exact shape of bug this tool exists to find. The parser is acorn, which
+            # does not speak TypeScript or JSX, so on a React or TS codebase this is not
+            # an edge case: it is every file.
+            failed.append(record.get("path", "?"))
+    if failed:
+        shown = ", ".join(os.path.basename(path) for path in failed[:3])
+        report(
+            "js-parse-failures",
+            "%s JavaScript file(s) could not be parsed and contributed no symbols (%s%s). "
+            "Anything they reference will look unused. The bundled parser reads .js/.mjs "
+            "only -- TypeScript and JSX are not supported yet.",
+            len(failed), shown, ", ..." if len(failed) > 3 else "",
+        )
     return parsed
 
 
