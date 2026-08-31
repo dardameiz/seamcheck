@@ -120,6 +120,29 @@ button.k:hover { background:var(--chip); }
 button.k[aria-pressed="true"] { background:var(--chip); outline:1px solid var(--line); }
 button.k[aria-pressed="true"] em { color:var(--ink); }
 .legendbar .hint { color:var(--muted); font-style:italic; }
+
+/* The trend. Deliberately a plain SVG polyline rather than a charting library: the page
+   already carries a megabyte of graph and the shape of eight numbers does not need one. */
+.trend { margin:14px 0 22px; }
+.trend svg { width:100%; height:180px; display:block; background:var(--panel);
+  border:1px solid var(--line); border-radius:8px; }
+.trend .band { fill:var(--crit); opacity:.10; }
+.trend .line { fill:none; stroke:var(--crit); stroke-width:2; }
+.trend .dot { fill:var(--crit); }
+.trend .grid { stroke:var(--line); stroke-width:1; }
+.trend .lbl { fill:var(--muted); font-size:10px; }
+.headline { font-size:15px; margin:0 0 4px; color:var(--ink); }
+.headline b { font-size:19px; }
+.headline .down { color:var(--ok); }
+.headline .up { color:var(--crit); }
+.movers { display:grid; gap:2px; margin:10px 0 0; }
+.movers .m { display:grid; grid-template-columns:1fr auto auto; gap:12px; padding:5px 8px;
+  border-bottom:1px solid var(--line); font-size:12px; align-items:baseline; }
+.movers .m:last-child { border-bottom:0; }
+.movers .num { font-variant-numeric:tabular-nums; color:var(--muted); }
+.movers .chg { font-variant-numeric:tabular-nums; font-weight:600; }
+.movers .chg.down { color:var(--ok); }
+.movers .chg.up { color:var(--crit); }
 .legendbar.filtering .hint { display:none; }
 .legendbar .connected i { border-color:var(--ok); }
 .legendbar .unresolved i { border-color:var(--crit); }
@@ -1478,6 +1501,7 @@ function renderPanel() {
     return;
   }
   if (mode === "overview") { panel.innerHTML = overviewHtml(); return; }
+  if (mode === "changes") { panel.innerHTML = changesHtml(); return; }
   const sec = D.sections.find(x => x.key === mode);
   if (!sec) return;
   if (sec.unavailable) {
@@ -1533,6 +1557,67 @@ function renderPanel() {
   };
   const more = document.getElementById("cmore");
   if (more) more.onclick = () => { shown += ROWS_PER_PAGE * 4; renderPanel(); };
+}
+
+// The trend. Answers the question a single before-and-after cannot: which way is this
+// going. A codebase gets one row per scan, so the chart is real history rather than two
+// points and a hopeful line between them.
+function trendChart(entries) {
+  const W = 720, H = 180, PAD = 30;
+  const values = entries.map(e => e.findings);
+  const top = Math.max(...values, 1);
+  const x = i => PAD + (entries.length < 2 ? 0 : i * (W - PAD * 2) / (entries.length - 1));
+  const y = v => H - PAD - (v / top) * (H - PAD * 2);
+  const points = entries.map((e, i) => `${x(i)},${y(e.findings)}`).join(" ");
+  const area = `${PAD},${H - PAD} ${points} ${x(entries.length - 1)},${H - PAD}`;
+  const ticks = [0, Math.round(top / 2), top];
+  return `<svg viewBox="0 0 ${W} ${H}" role="img"
+    aria-label="findings over ${entries.length} scans, ${values[0]} to ${values[values.length - 1]}">
+    ${ticks.map(t => `<line class="grid" x1="${PAD}" x2="${W - PAD}" y1="${y(t)}" y2="${y(t)}"/>
+      <text class="lbl" x="4" y="${y(t) + 3}">${n(t)}</text>`).join("")}
+    <polygon class="band" points="${esc(area)}"/>
+    <polyline class="line" points="${esc(points)}"/>
+    ${entries.map((e, i) => `<circle class="dot" cx="${x(i)}" cy="${y(e.findings)}" r="3">
+      <title>${esc(e.sha.slice(0, 12))} · ${esc(e.at.slice(0, 10))} · ${n(e.findings)} findings</title>
+    </circle>`).join("")}
+    <text class="lbl" x="${PAD}" y="${H - 8}">${esc(entries[0].at.slice(0, 10))}</text>
+    <text class="lbl" x="${W - PAD}" y="${H - 8}" text-anchor="end">${
+      esc(entries[entries.length - 1].at.slice(0, 10))}</text>
+  </svg>`;
+}
+
+function changesHtml() {
+  const sec = D.sections.find(x => x.key === "changes");
+  const entries = (SERIES && SERIES.entries) || [];
+  const head = `<h2>Changes</h2>`;
+  if (entries.length < 2) {
+    // One scan is not a trend, and saying so beats drawing a line through a single point.
+    return head + `<p class="blurb">Every scan is recorded. Once there are two, this
+      becomes a trend line and the list of what moved most.</p>
+      <div class="gap">${entries.length ? "1 scan recorded so far." : "No scans recorded yet."}
+      Run a scan on another commit and come back.</div>`;
+  }
+  const delta = SERIES.delta;
+  const dir = delta < 0 ? "down" : "up";
+  const word = delta < 0 ? "fewer" : "more";
+  const first = SERIES.first, last = SERIES.last;
+  return head + `<p class="blurb">Findings across every scan recorded, oldest first.</p>
+    <p class="headline"><b class="${dir}">${n(Math.abs(delta))} ${word}</b> findings than the
+      first recorded scan — ${n(first.findings)} on ${esc(first.at.slice(0, 10))}
+      to ${n(last.findings)} on ${esc(last.at.slice(0, 10))}, across ${n(SERIES.span)} scans.</p>
+    <div class="trend">${trendChart(entries)}</div>
+    ${SERIES.movers.length ? `<h3 class="sub">What moved</h3><div class="movers">
+      ${SERIES.movers.map(m => `<div class="m">
+        <span>${esc(m.kind)}</span>
+        <span class="num">${n(m.from)} → ${n(m.to)}</span>
+        <span class="chg ${m.change < 0 ? "down" : "up"}">${m.change < 0 ? "" : "+"}${n(m.change)}</span>
+      </div>`).join("")}</div>` : ""}
+    ${sec && sec.rows && sec.rows.length ? `<h3 class="sub">Against the baseline</h3>` +
+      sec.rows.slice(0, 40).map(r => `<div class="row">
+        <span class="badge ${esc(r.status)}">${esc(r.status)}</span>
+        <div class="t">${esc(r.label)}</div>
+        <div class="w">${esc(r.kind)}${r.file ? " · " + loc(r.file, r.line) : ""}</div></div>`).join("")
+      : ""}`;
 }
 
 function switchTo(next) {
@@ -1691,7 +1776,7 @@ def _console_payload(console) -> str:
 
 
 def render(connectivity_map: ConnectivityMap, console=None, files=None,
-           repo_root: str = "", editor: str | None = None) -> str:
+           repo_root: str = "", editor: str | None = None, series=None) -> str:
     mode = (
         f"diff vs {_esc(connectivity_map.baseline_sha[:12])}"
         if connectivity_map.baseline_sha
@@ -1763,6 +1848,7 @@ def render(connectivity_map: ConnectivityMap, console=None, files=None,
         "</main></div></div>",
         f"<script>const MAPDATA={_payload(connectivity_map)};</script>",
         f"<script>const CONSOLE={_console_payload(console)};</script>",
+        f"<script>const SERIES={json.dumps(series or {'entries': []}).replace('</', '<\\/')};</script>",
         f"<script>const FILES={json.dumps(files or []).replace('</', '<\\/')};</script>",
         # Locations are stored relative to the repo; an editor URL needs an absolute
         # path. Ship the root once and let the page join, rather than absolutising

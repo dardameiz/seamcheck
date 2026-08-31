@@ -392,6 +392,17 @@ def _render_map(repo_root: str, ref: str, progress: Progress | None = None) -> s
     page_files = _page_files(repo_root)
     progress.step("commit history")
     commits = commit_series(repo_root)
+    # One row per scan, appended. This is the only place a series can be built from - a
+    # scan that is not recorded is a data point nobody can get back - and it is cheap
+    # enough (a few hundred bytes) that not recording it would be the odd choice.
+    from seamcheck.trend import load as load_trend
+    from seamcheck.trend import record as record_trend
+    from seamcheck.trend import trend as summarise_trend
+    try:
+        record_trend(graph, sha, repo_root)
+        series = summarise_trend(load_trend(repo_root))
+    except OSError:  # a read-only checkout still gets a map
+        series = summarise_trend([])
     progress.step("rendering")
     return map_html.render(
         build_map(graph, page_files, git_sha=sha,
@@ -414,4 +425,5 @@ def _render_map(repo_root: str, ref: str, progress: Progress | None = None) -> s
         ],
         repo_root=os.path.abspath(repo_root),
         editor=_config().get("editor"),
+        series=series,
     )

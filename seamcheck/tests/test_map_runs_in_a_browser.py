@@ -22,14 +22,18 @@ from seamcheck.graph import Edge, Graph, Status, Symbol
 
 
 def _console_for(graph):
-    """A console section set, so the panel and its filters render too."""
+    """A console section set, so the panel, its filters and the nav render too.
+
+    Built without a try/except on purpose: swallowing the failure here produced a page
+    with no navigation at all, and three tests that failed looking for a nav item rather
+    than telling us the console never built.
+    """
     from seamcheck.console import build_console
     from seamcheck.report import build_report
 
-    try:
-        return build_console(build_report(graph), graph)
-    except Exception:  # pragma: no cover - the panel is optional to this test
-        return None
+    return build_console(graph, build_report(
+        graph=graph, diff=None, entries=[], git_sha="0" * 12,
+    ))
 
 
 def _fixture_graph() -> Graph:
@@ -59,14 +63,14 @@ class MapRunsInABrowser(SimpleTestCase):
         except ImportError:  # pragma: no cover - depends on the optional extra
             raise unittest.SkipTest("playwright is not installed (the observe extra)") from None
 
-    def _render(self) -> str:
+    def _render(self, series=None) -> str:
         from seamcheck.mapdata import build_map
         from seamcheck.renderers.map_html import render
 
         graph = _fixture_graph()
         pages = {"orders-main": {s.id for s in graph.symbols}}
         connectivity = build_map(graph, pages, git_sha="0" * 12)
-        html = render(connectivity, console=_console_for(graph))
+        html = render(connectivity, console=_console_for(graph), series=series)
         path = pathlib.Path(tempfile.mkdtemp()) / "map.html"
         path.write_text(html, encoding="utf-8")
         return path.as_uri()
@@ -131,3 +135,58 @@ class MapRunsInABrowser(SimpleTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TrendChartRenders(MapRunsInABrowser):
+    """The series is the sentence no tool in this category can say; it has to draw."""
+
+    @staticmethod
+    def _series(*counts):
+        from seamcheck.trend import Entry, trend
+        return trend([
+            Entry(sha=str(i) * 40, at=f"2026-0{i + 1}-01T00:00:00", symbols=100,
+                  findings=c, by_status={"unused": c}, by_kind={"css_selector": c})
+            for i, c in enumerate(counts)
+        ])
+
+    def _open(self, series):
+        from playwright.sync_api import sync_playwright
+
+        url = self._render(series)
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch()
+            except Exception as error:  # pragma: no cover
+                raise unittest.SkipTest(f"no chromium: {error}") from None
+            page = browser.new_page()
+            errors: list[str] = []
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.goto(url, wait_until="load")
+            page.wait_for_timeout(250)
+            page.click('#nav .nv[data-key="changes"]')
+            page.wait_for_timeout(200)
+            state = page.evaluate("""() => ({
+                dots: document.querySelectorAll('.trend .dot').length,
+                line: document.querySelectorAll('.trend .line').length,
+                headline: (document.querySelector('.headline') || {}).textContent || '',
+                movers: document.querySelectorAll('.movers .m').length,
+                body: document.querySelector('#panel').textContent,
+            })""")
+            browser.close()
+        self.assertEqual(errors, [], f"the trend view raised: {errors}")
+        return state
+
+    def test_a_series_draws_a_point_per_scan(self):
+        state = self._open(self._series(40, 31, 24, 12))
+        self.assertEqual(state["dots"], 4)
+        self.assertEqual(state["line"], 1)
+        self.assertIn("28 fewer", state["headline"])
+        self.assertEqual(state["movers"], 1)
+
+    def test_a_rise_is_reported_as_a_rise(self):
+        self.assertIn("15 more", self._open(self._series(10, 25))["headline"])
+
+    def test_one_scan_says_so_instead_of_drawing_a_line(self):
+        state = self._open(self._series(7))
+        self.assertEqual(state["dots"], 0)
+        self.assertIn("1 scan recorded", state["body"])
