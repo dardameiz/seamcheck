@@ -281,6 +281,14 @@ svg.nolabels .nd text { display:none; }
 .colophon { margin:26px 0 0; padding-top:14px; border-top:1px solid var(--line);
             color:var(--muted); font-size:12px; line-height:1.6; max-width:70ch; }
 .colophon a { color:var(--sig); }
+.colophon p { margin:0 0 11px; }
+/* GitHub's own sponsor card is an embedded frame, which would make this file phone
+   github.com every time it is opened - from a document listing a private repo's paths,
+   often over a LAN or a tunnel. "One file, no network" is the promise; a link keeps it. */
+.sponsor { display:inline-block; text-decoration:none; font-size:12.5px; font-weight:600;
+           padding:7px 13px; border-radius:8px; border:1px solid #ea4aaa;
+           color:#ea4aaa !important; }
+.sponsor:hover { background:var(--sig-fill); }
 .tree { font-family:ui-monospace,Menlo,monospace; font-size:12.5px; }
 .tree summary { cursor:pointer; padding:3px 0; color:var(--muted); }
 .fl { display:flex; align-items:center; gap:8px; padding:3px 0; cursor:pointer;
@@ -1231,13 +1239,15 @@ function overviewHtml() {
         Any <code>file:line</code> anywhere here opens in your editor.</li>
     </ol></div>
 
-    <p class="colophon">Built by
-      <a href="https://github.com/dardameiz/seamcheck" target="_blank" rel="noreferrer">Seamcheck</a>
-      — free, MIT, no company behind it. If it found you something,
-      <a href="https://github.com/sponsors/dardameiz" target="_blank" rel="noreferrer">sponsoring it</a>
-      is the clearest signal it is worth continuing. Got a finding wrong?
-      <a href="https://github.com/dardameiz/seamcheck/issues" target="_blank" rel="noreferrer">Say so</a>
-      — that is worth more.</p>`;
+    <div class="colophon">
+      <p>Built by
+        <a href="https://github.com/dardameiz/seamcheck" target="_blank" rel="noreferrer">Seamcheck</a>
+        — free, MIT, no company behind it. Got a finding wrong?
+        <a href="https://github.com/dardameiz/seamcheck/issues" target="_blank" rel="noreferrer">Say so</a>
+        — that is worth more than money.</p>
+      <a href="https://github.com/sponsors/dardameiz" class="sponsor"
+         target="_blank" rel="noreferrer">\u2665 Sponsor Seamcheck</a>
+    </div>`;
 }
 
 // A folder tree, the shape the repository actually has. The map is rooted at pages,

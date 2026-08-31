@@ -1,5 +1,9 @@
 # Seamcheck
 
+[![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-ea4aaa?logo=github&logoColor=white)](https://github.com/sponsors/dardameiz)
+[![PyPI](https://img.shields.io/pypi/v/seamcheck?color=0b6bcb)](https://pypi.org/project/seamcheck/)
+[![License](https://img.shields.io/badge/license-MIT-informational)](LICENSE)
+
 **Your AI wrote 400 lines. Which of them are actually wired to anything?**
 
 Seamcheck reads a Django + JavaScript project and tells you what connects to what — which
