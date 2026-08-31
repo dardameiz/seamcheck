@@ -116,6 +116,20 @@ _SPECIFIC: dict[str, tuple[str, str]] = {
         "Fine for something styled but never scripted. A `data-` attribute nothing reads "
         "is usually a leftover.",
     ),
+    # detect_multi_writers() hardcodes Status.UNRESOLVED, and the generic unresolved text
+    # ("something reaches for this and it is not there") is the opposite of true here: the
+    # element exists and is found by MORE than one writer. The status is a known misfit -
+    # this is a design finding, not a reachability one, and the four statuses are a
+    # reachability axis - but it is genuinely actionable, so it stays in the findings list
+    # rather than being demoted to uncertain and quietly dropped from the CI gate. Logged
+    # OPEN in CONSOLIDATED-FINDINGS; the explanation is correct in the meantime.
+    "multi_writer_element|unresolved": (
+        "More than one JavaScript file writes to this same element.",
+        "Two writers on one element is the classic source of flicker and of a value that "
+        "reverts: they overwrite each other in whatever order they happen to run. Decide "
+        "which one owns it and route the others through it. Not a broken reference - the "
+        "element is there, and found twice.",
+    ),
     "multi_writer_element|uncertain": (
         "More than one JavaScript file writes to this same element.",
         "Two writers on one element is the classic source of flicker and of a value that "
