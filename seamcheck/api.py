@@ -410,6 +410,8 @@ def _render_map(repo_root: str, ref: str, progress: Progress | None = None) -> s
     except OSError:  # a read-only checkout still gets a map
         series = summarise_trend([])
     progress.step("rendering")
+    from seamcheck.pipeline import LAST_ADAPTERS
+
     LAST_MAP_FILES.clear()
     LAST_MAP_FILES.update(
         symbol.file for symbol in graph.symbols if symbol.file
@@ -436,4 +438,5 @@ def _render_map(repo_root: str, ref: str, progress: Progress | None = None) -> s
         repo_root=os.path.abspath(repo_root),
         editor=_config().get("editor"),
         series=series,
+        adapters=list(LAST_ADAPTERS),
     )

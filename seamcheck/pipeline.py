@@ -46,6 +46,16 @@ _FUNCTION_NODES = (ast.FunctionDef, ast.AsyncFunctionDef)
 # first one starts. Steps are reported even when their input is empty - a phase that
 # had nothing to do still happened, and a bar whose total changes as it runs is worse
 # than one that moves in uneven jumps. test_progress pins this list against reality.
+# The language each adapter reads, for the label. Not derived from the adapter, because
+# the adapter's job is routes and this is a fact about the ecosystem it belongs to.
+ADAPTER_LANGUAGE = {
+    "django": "Python", "fastapi": "Python", "flask": "Python",
+    "express": "JavaScript", "nestjs": "TypeScript", "nextjs": "TypeScript",
+}
+
+# Filled by the last run_scan: [{name, confidence, language}], highest confidence first.
+LAST_ADAPTERS: list[dict] = []
+
 SCAN_PHASES = (
     "URLs and views",
     "ASGI routes",
@@ -159,6 +169,14 @@ def run_scan(
     }
     chosen = select_all(repo_root, {**adapter_config, "server_adapter": server_adapter})
     adapter = chosen[0][0]
+    # What this scan actually read, so the map can say so. A monorepo is not one
+    # application - cal.com serves Next.js and NestJS from one repository - and a reader
+    # looking at "Backend Internals" deserves to know which backend, in which language.
+    LAST_ADAPTERS.clear()
+    LAST_ADAPTERS.extend(
+        {"name": one.name, "confidence": confidence, "language": ADAPTER_LANGUAGE.get(one.name, "")}
+        for one, confidence in chosen
+    )
     server_symbols: list = []
     routing_edges: list = []
     route_names: dict[str, str] = {}

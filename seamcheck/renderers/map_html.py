@@ -120,6 +120,7 @@ button.k:hover { background:var(--chip); }
 button.k[aria-pressed="true"] { background:var(--chip); outline:1px solid var(--line); }
 button.k[aria-pressed="true"] em { color:var(--ink); }
 .legendbar .hint { color:var(--muted); font-style:italic; }
+.meta .read { color:var(--ink); }
 
 /* The trend. Deliberately a plain SVG polyline rather than a charting library: the page
    already carries a megabyte of graph and the shape of eight numbers does not need one. */
@@ -1801,6 +1802,24 @@ switchTo(OPENS_ON);
 """
 
 
+def _adapter_label(adapters) -> str:
+    """What the scan read, named. "Backend Internals" is a noun; this says whose.
+
+    Five frameworks across three languages can fill that section now, and a monorepo can
+    hold two at once - cal.com serves Next.js and NestJS from one repository. A reader
+    looking at a route deserves to know which backend put it there without inferring it
+    from the shape of the paths.
+    """
+    if not adapters:
+        return ""
+    parts = []
+    for adapter in adapters:
+        name = adapter.get("name", "")
+        language = adapter.get("language", "")
+        parts.append(f"{name} · {language}" if language else name)
+    return ' · <span class="read">' + html_lib.escape(" + ".join(parts)) + "</span>"
+
+
 def _esc(value) -> str:
     return html_lib.escape(str(value if value is not None else ""))
 
@@ -1917,7 +1936,8 @@ def _console_payload(console) -> str:
 
 
 def render(connectivity_map: ConnectivityMap, console=None, files=None,
-           repo_root: str = "", editor: str | None = None, series=None) -> str:
+           repo_root: str = "", editor: str | None = None, series=None,
+           adapters=None) -> str:
     mode = (
         f"diff vs {_esc(connectivity_map.baseline_sha[:12])}"
         if connectivity_map.baseline_sha
@@ -1942,7 +1962,8 @@ def render(connectivity_map: ConnectivityMap, console=None, files=None,
         '<div class="content">'
         '<header class="top">',
         f'<div class="brand"><b>Seamcheck</b>'
-        f'<span class="meta">HEAD {_esc(connectivity_map.git_sha[:12])} · {_esc(mode)}</span>'
+        f'<span class="meta">HEAD {_esc(connectivity_map.git_sha[:12])} · {_esc(mode)}'
+        f'{_adapter_label(adapters)}</span>'
         f"</div>",
         '<div class="filters onlymob"><label class="wide"><span>View</span>'
         '<select id="vw"></select></label></div>',

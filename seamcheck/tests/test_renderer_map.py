@@ -692,3 +692,30 @@ class ColophonTests(SimpleTestCase):
         for chunk in out.split('<a href="https://github.com')[1:]:
             self.assertIn('target="_blank"', chunk[:200])
             self.assertIn('rel="noreferrer"', chunk[:200])
+
+
+class AdapterLabelTests(SimpleTestCase):
+    """The map says which backend and language it read.
+
+    "Backend Internals" is a noun; five frameworks across three languages can fill that
+    section now, and a monorepo can hold two at once - cal.com serves Next.js and NestJS
+    from one repository. A reader should not have to infer it from the shape of the paths.
+    """
+
+    def test_one_adapter_is_named_with_its_language(self):
+        out = map_html.render(_map(), adapters=[
+            {"name": "django", "confidence": 0.95, "language": "Python"}])
+        self.assertIn("django · Python", out)
+
+    def test_a_monorepo_names_every_adapter_that_read_it(self):
+        out = map_html.render(_map(), adapters=[
+            {"name": "nestjs", "confidence": 0.95, "language": "TypeScript"},
+            {"name": "nextjs", "confidence": 0.95, "language": "TypeScript"}])
+        self.assertIn("nestjs · TypeScript + nextjs · TypeScript", out)
+
+    def test_no_adapters_adds_nothing_rather_than_an_empty_label(self):
+        self.assertNotIn('class="read"', map_html.render(_map(), adapters=[]))
+
+    def test_an_adapter_with_no_language_is_still_named(self):
+        out = map_html.render(_map(), adapters=[{"name": "rails", "confidence": 0.9}])
+        self.assertIn("rails", out)
