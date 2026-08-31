@@ -437,7 +437,9 @@ def parse_js_source(source: str) -> dict:
         handle.write(source)
         temporary_path = handle.name
     try:
-        return _parse_files([temporary_path]).get(temporary_path, {})
+        # A snippet held in memory has no filename worth naming, and its caller treats an
+        # empty result as "could not read this" already.
+        return _parse_files([temporary_path], report_failures=False).get(temporary_path, {})
     finally:
         os.unlink(temporary_path)
 

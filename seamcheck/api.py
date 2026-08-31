@@ -9,6 +9,7 @@ import pathlib
 
 from seamcheck.diff import DiffResult, diff_graphs
 from seamcheck.graph import Graph, Status, relativise
+from seamcheck.nodetools import report as _notify
 from seamcheck.pipeline import SCAN_PHASES, run_scan
 from seamcheck.progress import Progress, null
 from seamcheck.roots import discover_css_files, discover_js_roots, tailwind_classes
@@ -130,7 +131,7 @@ def scan(
         discover_css_files(_css_root_dir, tailwind_path) if _css_root_dir else []
     )
 
-    return relativise(run_scan(
+    scanned = relativise(run_scan(
         urlconf_module=config["urlconf_module"],
         js_entry_files=js_entry_files,
         js_project_root=js_project_root,
@@ -149,6 +150,36 @@ def scan(
             config.get("static_urls", False) if static_urls is None else static_urls
         ),
     ), repo_root)
+    return _with_observations(scanned, repo_root)
+
+
+def _with_observations(graph: Graph, repo_root: str) -> Graph:
+    """Fold in browser evidence recorded for THIS commit, if any exists.
+
+    `seamcheck observe` wrote the evidence and `apply_observations` knew how to merge it,
+    and nothing ever called the second with the first: the probe saved a file that no scan
+    read. A third of a real graph is runtime-built, so that gap was the whole reason those
+    symbols stayed `uncertain` no matter how much was observed.
+
+    Keyed by commit, and silent when there is nothing to apply - a cloned repository can
+    never be observed, and must scan exactly as it does today.
+    """
+    try:
+        from seamcheck.observe import load, merge
+        from seamcheck.provenance import apply_observations
+
+        observations = load(repo_root, current_git_sha(repo_root))
+    except Exception:  # noqa: BLE001 - evidence is enrichment; never fail a scan for it
+        return graph
+    if not observations:
+        return graph
+    _notify(
+        "observations",
+        "applied browser evidence from %s page(s) recorded for this commit. Pages the run "
+        "did not visit are unaffected - silence about a path is not evidence about it.",
+        len(observations),
+    )
+    return apply_observations(graph, merge(observations))
 
 
 def explain(graph: Graph, symbol_id: str) -> str:

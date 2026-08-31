@@ -28,7 +28,8 @@ _CSS_ESCAPE_RE = re.compile(r"\\(.)")
 _ATTRIBUTE_SELECTOR_RE = re.compile(r"\[\s*data-([\w-]+)")
 
 
-def parse_css_files(css_files: list[str]) -> list[dict]:
+def parse_css_files(css_files: list[str], *, report_failures: bool = True) -> list[dict]:
+    """Parse each stylesheet. `report_failures=False` when the caller has better names."""
     existing = [path for path in css_files if os.path.isfile(path)]
     if not existing:
         return []
@@ -37,7 +38,7 @@ def parse_css_files(css_files: list[str]) -> list[dict]:
         for line in run_parser(parser_path(_CSS_TOOLS, "parse_css"), existing, "CSS")
     ]
     unreadable = [r.get("path", "?") for r in records if "error" in r]
-    if unreadable:
+    if unreadable and report_failures:
         shown = ", ".join(os.path.basename(path) for path in unreadable[:3])
         report(
             "css-parse-failures",
@@ -98,6 +99,27 @@ def extract_css(css_files: list[str]) -> list[Symbol]:
 
 _STYLE_BLOCK_RE = re.compile(r"<style[^>]*>(.*?)</style>", re.S | re.I)
 
+# A template's <style> block is not necessarily CSS. On the reference project one block
+# carried a {% comment %} explaining why some furniture is hidden, and postcss refused the
+# whole block over it - so every selector in it looked undefined and every class it styled
+# looked unused. Same failure the inline <script> path had, same fix: blank the template
+# syntax, keep the line count, so a rule's line still points at the template.
+# The prose BETWEEN {% comment %} and {% endcomment %} has to go with the tags. Blanking
+# only the tags leaves an English paragraph sitting in the middle of a stylesheet.
+_DJANGO_COMMENT_RE = re.compile(r"\{%\s*comment\s*%\}.*?\{%\s*endcomment\s*%\}", re.S | re.I)
+_DJANGO_TAG_RE = re.compile(r"\{%.*?%\}", re.S)
+_DJANGO_VAR_RE = re.compile(r"\{\{.*?\}\}", re.S)
+
+
+def _blank(match: re.Match) -> str:
+    return "".join(character if character == "\n" else " " for character in match.group(0))
+
+
+def _neutralise_css(block: str) -> str:
+    """Template tags blanked; interpolated values become a literal postcss accepts."""
+    blanked = _DJANGO_TAG_RE.sub(_blank, _DJANGO_COMMENT_RE.sub(_blank, block))
+    return _DJANGO_VAR_RE.sub(lambda m: "0" + " " * (len(m.group(0)) - 1), blanked)
+
 
 def extract_template_css(template_files: list[str]) -> list[Symbol]:
     """CSS written inside a template's own <style> block.
@@ -129,10 +151,22 @@ def extract_template_css(template_files: list[str]) -> list[Symbol]:
                 # template a reader would open, not at an offset inside a fragment.
                 offset = source.count("\n", 0, match.start(1))
                 path = os.path.join(scratch, f"{index}-{offset}.css")
-                pathlib.Path(path).write_text(block, encoding="utf-8")
+                pathlib.Path(path).write_text(_neutralise_css(block), encoding="utf-8")
                 origins[path] = (template, offset)
 
-        for record in parse_css_files(list(origins)):
+        # Scratch files are named by index, so the generic message would name "148-70.css".
+        # The template is what a reader can open.
+        records = parse_css_files(list(origins), report_failures=False)
+        unreadable = [origins[r["path"]][0] for r in records if "error" in r]
+        if unreadable:
+            shown = ", ".join(os.path.basename(name) for name in unreadable[:3])
+            report(
+                "inline-style-parse-failures",
+                "%s inline <style> block(s) could not be parsed (%s%s). Selectors defined "
+                "only there will look undefined, and classes they style will look unused.",
+                len(unreadable), shown, ", ..." if len(unreadable) > 3 else "",
+            )
+        for record in records:
             template, offset = origins[record["path"]]
             for rule in record.get("selectors", []):
                 line = (rule["line"] + offset) if rule["line"] else None
