@@ -22,6 +22,7 @@ from seamcheck.extractors.dom_js_extractor import (
     extract_dom_selectors,
     extract_js_class_usages,
     extract_js_css_tokens,
+    extract_js_dom_definitions,
 )
 from seamcheck.extractors.entry_points_extractor import extract_entry_points
 from seamcheck.extractors.js_extractor import (
@@ -202,12 +203,29 @@ def run_scan(
     by_id.update({symbol.id: symbol for symbol in css_symbols})
     css_symbols = list(by_id.values())
 
+    # Elements the JavaScript brings into existence. Half of what a modern page renders is
+    # never in a template, and reading definitions from templates alone made every query
+    # for one of those look like a query for nothing.
+    js_dom_attrs = extract_js_dom_definitions(js_files, template_files or [])
+
     progress.step("matching DOM, CSS and tokens")
     if dom_attrs or dom_selectors or css_symbols:
         selectors = [s for s in css_symbols if s.kind == "css_selector"]
         symbols += dom_attrs + dom_selectors + css_symbols
         symbols += detect_multi_writers(dom_selectors)
-        edges += match_dom_selectors(dom_attrs, dom_selectors)
+        # Element matching sees the JS-created ones; CSS matching deliberately does not. An
+        # element JavaScript builds is often styled inline or by an injected stylesheet, so
+        # demanding a hand-written rule for it trades one false finding for another.
+        dom_edges = match_dom_selectors(dom_attrs + js_dom_attrs, dom_selectors)
+        edges += dom_edges
+        # Only the JS-created elements something actually queries become symbols. All 4,744
+        # of them did at first, and 4,511 arrived with nothing pointing at them - because
+        # JavaScript builds markup to DISPLAY, not to be queried, so "no selector reaches
+        # this div" is neither a finding nor evidence. It inflated the graph by 12% and
+        # `uncertain` by 4,511 rows that meant nothing. The 233 that resolve a query are
+        # exactly the ones worth carrying: each explains why a getElementById is not broken.
+        resolved = {edge.to_id for edge in dom_edges}
+        symbols += [attr for attr in js_dom_attrs if attr.id in resolved]
         edges += match_css_selectors(
             dom_selectors, dom_attrs, selectors, tailwind_build_classes or set()
         )

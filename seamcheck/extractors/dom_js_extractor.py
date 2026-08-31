@@ -288,6 +288,11 @@ _CLASS_LIST_METHODS = frozenset({"add", "remove", "toggle", "replace"})
 # The closing quote is optional: a template literal splits at every ${...}, so a
 # quasi routinely ends mid-attribute (`<div class="row ` before the hole).
 _CLASS_ATTR_RE = re.compile(r"""\bclass\s*=\s*["']([^"']*)(?:["']|$)""")
+# The id half of the same idea. Only classes were ever read out of generated markup, so an
+# element JavaScript builds with an id was invisible - and then every querySelector looking
+# for it reported an element no template renders.
+_ID_ATTR_RE = re.compile(r"""\bid\s*=\s*["']([^"'\s]+)["']""")
+_ID_PROPERTIES = frozenset({"id", "className"})
 # A class token is written by a human or a utility framework; anything carrying JS
 # punctuation is an interpolation fragment, not a name.
 _NOT_A_CLASS_RE = re.compile(r"""[${}()'"^,;<>=]|^\W+$""")
@@ -379,4 +384,117 @@ def extract_js_class_usages(js_files: list[str]) -> list[Symbol]:
             for name, snippet in sources:
                 _record(name, path, line, enclosing, snippet)
 
+    return symbols
+
+
+def _definition(kind_sub: str, name: str, path: str, line, enclosing: str, snippet: str) -> Symbol:
+    return Symbol(
+        id=f"dom_attr:{kind_sub}:{name}:{path}:{line}",
+        kind="dom_attr",
+        label=name,
+        sub=kind_sub,
+        file=path,
+        line=line,
+        status=Status.UNCERTAIN,
+        snippet=snippet,
+        chain=[os.path.basename(path), enclosing] if enclosing else [os.path.basename(path)],
+        note="Created by JavaScript at runtime. No template renders it, which is why a "
+             "template-only scan reported everything querying it as reaching for nothing.",
+    )
+
+
+def _definitions_in(path: str, ast_root: dict, line_offset: int = 0) -> list[Symbol]:
+    """Elements this unit of JavaScript brings into existence."""
+    symbols: list[Symbol] = []
+    seen: set[str] = set()
+
+    def _emit(sub, name, line, enclosing, snippet):
+        symbol = _definition(sub, name, path, line, enclosing, snippet)
+        if symbol.id not in seen:
+            seen.add(symbol.id)
+            symbols.append(symbol)
+
+    for node, enclosing in _walk(ast_root):
+        raw = ((node.get("loc") or {}).get("start") or {}).get("line")
+        line = (raw + line_offset) if raw else raw
+        node_type = node.get("type")
+
+        # el.id = "x"  /  el.className = "a b"
+        if node_type == "AssignmentExpression":
+            name = ((node.get("left") or {}).get("property") or {}).get("name")
+            if name in _ID_PROPERTIES:
+                for text in _literal_strings(node.get("right") or {}):
+                    if name == "id":
+                        _emit("id", text.strip(), line, enclosing, f"{name} = '{text}'")
+                    else:
+                        for token in _class_tokens(text):
+                            _emit("class", token, line, enclosing, f"{name} = '{text}'")
+
+        # { id: "x", className: "a b" } - the shape a create-element helper takes
+        elif node_type == "Property":
+            key = (node.get("key") or {}).get("name") or (node.get("key") or {}).get("value")
+            if key in ("id", "className", "class"):
+                for text in _literal_strings(node.get("value") or {}):
+                    if key == "id":
+                        _emit("id", text.strip(), line, enclosing, f"{{ {key}: '{text}' }}")
+                    else:
+                        for token in _class_tokens(text):
+                            _emit("class", token, line, enclosing, f"{{ {key}: '{text}' }}")
+
+        elif node_type == "CallExpression":
+            callee = node.get("callee") or {}
+            arguments = node.get("arguments") or []
+            if ((callee.get("property") or {}).get("name") == "setAttribute"
+                    and len(arguments) >= 2
+                    and arguments[0].get("type") == "Literal"
+                    and arguments[0].get("value") in ("id", "class")):
+                which = arguments[0]["value"]
+                for text in _literal_strings(arguments[1]):
+                    if which == "id":
+                        _emit("id", text.strip(), line, enclosing,
+                              f"setAttribute('id', '{text}')")
+                    else:
+                        for token in _class_tokens(text):
+                            _emit("class", token, line, enclosing,
+                                  f"setAttribute('class', '{text}')")
+
+        # Markup built as a string. This is how most of them arrive: 136 of 164 on the
+        # project measured came from an id= or class= inside an innerHTML template literal.
+        for text in _literal_strings(node):
+            for found in _ID_ATTR_RE.findall(text):
+                if not _NOT_A_CLASS_RE.search(found):
+                    _emit("id", found, line, enclosing, 'id="..." in generated markup')
+            for found in _CLASS_ATTR_RE.findall(text):
+                for token in _class_tokens(found):
+                    _emit("class", token, line, enclosing, 'class="..." in generated markup')
+
+    return symbols
+
+
+def extract_js_dom_definitions(
+    js_files: list[str], template_files: list[str] | None = None
+) -> list[Symbol]:
+    """Elements JavaScript creates, as element DEFINITIONS rather than class usages.
+
+    Half of what a modern page renders never appears in a template: it is built by
+    innerHTML, by a create-element helper taking `{id, className}`, or by assigning
+    `el.id`. Seamcheck read element definitions from templates alone, so every
+    `getElementById` for one of those reported an element nothing renders - 164 of 426 such
+    findings on the project this was measured against, 38% of the category.
+
+    The class half of this information was already being read, but emitted as a `class:apply`
+    USAGE - evidence that a CSS rule is live, which is a different question and deliberately
+    excluded from element matching. The ids were not read at all.
+
+    Deliberately kept out of CSS matching by the caller. An element JavaScript builds is
+    often styled inline or by an injected stylesheet, so requiring a hand-written rule for
+    it would trade one kind of false finding for another.
+    """
+    from seamcheck.extractors.js_extractor import parse_inline_blocks
+
+    symbols: list[Symbol] = []
+    for path, ast_root in _parse_files([f for f in js_files if os.path.isfile(f)]).items():
+        symbols += _definitions_in(path, ast_root)
+    for template, ast_root, offset in parse_inline_blocks(template_files or []):
+        symbols += _definitions_in(template, ast_root, line_offset=offset)
     return symbols
