@@ -1,3 +1,4 @@
+import tempfile
 from pathlib import Path
 
 from django.test import SimpleTestCase
@@ -59,3 +60,35 @@ class ScriptNoiseTests(SimpleTestCase):
         labels = {s.label for s in scan_templates([path]) if s.sub == "class"}
 
         self.assertEqual(labels, {"real-class", "other"})
+
+
+class BlockTagVersusInterpolationTests(SimpleTestCase):
+    """Two template constructs that must not be treated alike."""
+
+    def _classes(self, markup):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "t.html")
+            path.write_text(markup, encoding="utf-8")
+            return {s.label for s in scan_templates([str(path)]) if s.sub == "class"}
+
+    def test_a_block_tag_separates_names_rather_than_joining_them(self):
+        # `{% if %}` DELIMITS: this renders as "ev-watch" or "ev-watch ev-watch-wide", and
+        # ev-watch is a whole name either way. Treating it as an interpolation lost 41
+        # classes that are plainly in the markup.
+        found = self._classes('<span class="ev-watch{% if label %} ev-watch-wide{% endif %}">')
+
+        self.assertEqual(found, {"ev-watch", "ev-watch-wide"})
+
+    def test_an_interpolation_still_makes_the_touching_token_a_fragment(self):
+        # `{{ }}` INTERPOLATES: flag-icon-us is the real class; flag-icon- is a fragment.
+        found = self._classes('<i class="flag-icon flag-icon-{{ code }}">')
+
+        self.assertEqual(found, {"flag-icon"})
+
+    def test_a_value_that_is_only_an_interpolation_yields_nothing(self):
+        self.assertEqual(self._classes('<div class="{{ css_class }}">'), set())
+
+    def test_names_either_side_of_a_block_tag_both_survive(self):
+        found = self._classes('<div class="a {% if x %}b{% endif %} c">')
+
+        self.assertEqual(found, {"a", "b", "c"})

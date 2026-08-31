@@ -284,7 +284,10 @@ def extract_js_css_tokens(
     return symbols
 
 
-_CLASS_LIST_METHODS = frozenset({"add", "remove", "toggle", "replace"})
+# `contains` reads rather than writes, and it is still evidence: code asking whether an
+# element carries a class is code that knows the class exists. Excluding it reported
+# `watermelon-particle--eat` as a dead rule while watermelon.js tests for it by name.
+_CLASS_LIST_METHODS = frozenset({"add", "remove", "toggle", "replace", "contains"})
 # The closing quote is optional: a template literal splits at every ${...}, so a
 # quasi routinely ends mid-attribute (`<div class="row ` before the hole).
 _CLASS_ATTR_RE = re.compile(r"""\bclass\s*=\s*["']([^"']*)(?:["']|$)""")
@@ -350,7 +353,9 @@ def _class_stems(node: dict) -> list[str]:
     ]
 
 
-def extract_js_class_usages(js_files: list[str]) -> list[Symbol]:
+def extract_js_class_usages(
+    js_files: list[str], template_files: list[str] | None = None
+) -> list[Symbol]:
     """CSS classes JavaScript puts on elements: className, classList, setAttribute, markup.
 
     A stylesheet rule referenced only this way looks unreferenced to a scan that reads
@@ -361,6 +366,8 @@ def extract_js_class_usages(js_files: list[str]) -> list[Symbol]:
     evidence the rule is live, but twenty modules adding `.active` is normal, so these
     must not reach multi-writer detection.
     """
+    from seamcheck.extractors.js_extractor import parse_inline_blocks
+
     symbols: list[Symbol] = []
     seen: set[str] = set()
 
@@ -378,9 +385,18 @@ def extract_js_class_usages(js_files: list[str]) -> list[Symbol]:
             )
         )
 
-    for path, ast_root in _parse_files([f for f in js_files if os.path.isfile(f)]).items():
+    units = [
+        (path, ast_root, 0)
+        for path, ast_root in _parse_files([f for f in js_files if os.path.isfile(f)]).items()
+    ]
+    # Inline <script> applies classes like any other JavaScript. Reading only .js files
+    # left 46 rules that a template's own script demonstrably applies looking unreferenced.
+    units += list(parse_inline_blocks(template_files or []))
+
+    for path, ast_root, line_offset in units:
         for node, enclosing in _walk(ast_root):
-            line = ((node.get("loc") or {}).get("start") or {}).get("line")
+            raw_line = ((node.get("loc") or {}).get("start") or {}).get("line")
+            line = (raw_line + line_offset) if raw_line else raw_line
             node_type = node.get("type")
             sources: list[tuple[str, str]] = []
 

@@ -15,7 +15,15 @@ import re
 _VITE_ENTRY_RE = re.compile(
     r"(?:['\"]([\w-]+)['\"]|([A-Za-z_$][\w$]*))\s*:\s*\w+\(\s*__dirname\s*,\s*['\"]([^'\"]+)['\"]"
 )
-_STATIC_JS_RE = re.compile(r"\{%\s*static_js\s+['\"]([^'\"]+\.js)['\"]")
+# Three ways a template loads a script, not one. Only the project's own `static_js` tag
+# was read, so every file pulled in with a plain `{% static %}` - which is what Django's
+# own admin templates and anything not using the custom tag do - was never scanned at all.
+# 30 CSS rules on the project measured were reported dead while admin JS applied them.
+_STATIC_JS_RE = re.compile(
+    r"""\{%\s*static_js\s+['"]([^'"]+\.js)['"]"""
+    r"""|\{%\s*static\s+['"]([^'"]+\.js)['"]"""
+    r"""|<script[^>]*\bsrc\s*=\s*['"]/?static/([^'"]+\.js)['"]"""
+)
 
 
 def vite_entry_map(vite_config: str) -> dict[str, str]:
@@ -39,8 +47,11 @@ def static_js_by_template(templates_root: str) -> dict[str, set[str]]:
     references: dict[str, set[str]] = {}
     for template in root.rglob("*.html"):
         source = template.read_text(encoding="utf-8", errors="replace")
-        for reference in _STATIC_JS_RE.findall(source):
-            references.setdefault(reference, set()).add(str(template.relative_to(root)))
+        for groups in _STATIC_JS_RE.findall(source):
+            # One alternation, three capture groups; exactly one is non-empty per match.
+            reference = next((g for g in groups if g), None)
+            if reference:
+                references.setdefault(reference, set()).add(str(template.relative_to(root)))
     return references
 
 

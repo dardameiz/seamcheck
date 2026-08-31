@@ -191,7 +191,7 @@ def run_scan(
     # other JavaScript, and reading only .js files made 202 KB of it invisible.
     dom_selectors = (
         extract_dom_selectors(js_files, template_files or [])
-        + extract_js_class_usages(js_files)
+        + extract_js_class_usages(js_files, template_files or [])
     )
     progress.step("reading stylesheets")
     css_symbols = extract_css(css_files or [])
@@ -227,7 +227,8 @@ def run_scan(
         resolved = {edge.to_id for edge in dom_edges}
         symbols += [attr for attr in js_dom_attrs if attr.id in resolved]
         edges += match_css_selectors(
-            dom_selectors, dom_attrs, selectors, tailwind_build_classes or set()
+            dom_selectors, dom_attrs, selectors, tailwind_build_classes or set(),
+            usage_only=js_dom_attrs,
         )
         # Tokens JavaScript sets at runtime are real definitions; without them half of
         # this project's "undefined var()" findings were false.

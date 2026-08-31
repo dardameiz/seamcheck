@@ -19,8 +19,16 @@ from seamcheck.graph import Status, Symbol
 _ATTRIBUTE_RE = re.compile(
     r"""\b(id|class|data-[\w-]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'))?"""
 )
-# A value that is entirely a template expression has no literal name to match on.
-_TEMPLATE_EXPRESSION_RE = re.compile(r"\{[{%].*?[%}]\}|\$\{[^}]*\}")
+# Two different things, and treating them alike was a bug in both directions.
+#
+# `{{ value }}` and `${ x }` INTERPOLATE: `flag-icon-{{ code }}` is one name assembled at
+# runtime, and the literal `flag-icon-` is a fragment of it, not a class.
+#
+# `{% if %}` DELIMITS: `class="ev-watch{% if label %} ev-watch-wide{% endif %}"` renders as
+# `ev-watch` or `ev-watch ev-watch-wide`, and `ev-watch` is a whole name either way. Marking
+# it a fragment lost 41 classes that are plainly in the markup.
+_INTERPOLATION_RE = re.compile(r"\{\{.*?\}\}|\$\{[^}]*\}")
+_BLOCK_TAG_RE = re.compile(r"\{%.*?%\}")
 # A class token is written by a human or a utility framework. Anything carrying JS
 # punctuation came from a script block, not from markup.
 _NOT_A_CLASS_RE = re.compile(r"""[${}()'"^,;]|^\W+$""")
@@ -34,7 +42,9 @@ _EXPRESSION_MARK = "\x00"
 
 
 def _tokens(attribute: str, value: str) -> list[str]:
-    cleaned = _TEMPLATE_EXPRESSION_RE.sub(_EXPRESSION_MARK, value)
+    # Block tags become whitespace (they separate names); interpolations become the mark
+    # (they are part of one name).
+    cleaned = _INTERPOLATION_RE.sub(_EXPRESSION_MARK, _BLOCK_TAG_RE.sub(" ", value))
     if attribute == "class":
         return [
             token

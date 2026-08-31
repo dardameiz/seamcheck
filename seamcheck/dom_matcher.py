@@ -137,6 +137,7 @@ def match_css_selectors(
     dom_attrs: list[Symbol],
     css_selectors: list[Symbol],
     tailwind_build_classes: set[str],
+    usage_only: list[Symbol] | None = None,
 ) -> list[Edge]:
     """Three-way: what the DOM uses, what CSS defines, and what Tailwind generates.
 
@@ -147,6 +148,19 @@ def match_css_selectors(
     used_keys: set[tuple[str, str]] = set()
 
     edges: list[Edge] = []
+    # Elements JavaScript creates answer one of this function's two questions and not the
+    # other. "Is this CSS rule used?" - yes, a rule matching a JS-built element is used, and
+    # excluding them reported `#floating-combo-container` dead while combo_floating_text.js
+    # assigns exactly that id. "Does this element have a rule?" - not a fair question of an
+    # element usually styled inline or by an injected stylesheet, so they never get a
+    # finding of their own.
+    for symbol in list(usage_only or []):
+        if symbol.label != "<dynamic>" and _base_sub(symbol) in ("id", "class"):
+            used_keys.add((_base_sub(symbol), symbol.label))
+            defined = css_by_key.get((_base_sub(symbol), symbol.label))
+            if defined is not None:
+                edges.append(Edge(from_id=symbol.id, to_id=defined.id, status=Status.CONNECTED))
+
     for symbol in list(dom_attrs) + list(dom_selectors):
         if symbol.label == "<dynamic>" or _base_sub(symbol) not in ("id", "class"):
             continue
