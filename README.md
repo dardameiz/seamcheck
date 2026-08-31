@@ -53,6 +53,91 @@ No guessing, and no "supports Python" hand-waving — a framework is either read
 
 A scan **tells you** when a file could not be parsed, rather than silently dropping it.
 
+## What has been run against it
+
+Sixteen public repositories, cloned and scanned, chosen for **shapes** rather than stars.
+Reproduce with `python tools/corpus.py clone && python tools/corpus.py scan`.
+
+| | |
+|---|---|
+| Repositories | **16** |
+| Source files | **53,361** |
+| Lines of code | **9,370,268** |
+| Routes found | **2,355** |
+| Handlers found | **2,726** |
+| Backends exercised | Django · FastAPI · NestJS · Next.js · Express |
+| Produced routes | **15 of 16** |
+
+The largest were the useful ones — every failure below was found by adding a big repo:
+
+| repo | read as | routes | lines |
+|---|---|---|---|
+| n8n | express | **0** | 3,829,574 |
+| Sentry | django | 123 | 1,714,762 |
+| saleor | django | 9 | 847,043 |
+| Ghost | express | 242 | 765,172 |
+| cal.com | **nestjs + nextjs** | 284 | 549,591 |
+| dub | nextjs | **705** | 501,755 |
+| documenso | nextjs | 26 | 268,456 |
+| Excalidraw | nextjs | 2 | 196,936 |
+| parse-server | express | 5 | 169,896 |
+| immich | **nestjs + fastapi + express** | 195 | 169,524 |
+| NodeBB | express | 81 | 151,674 |
+| open-webui | fastapi | 490 | 113,970 |
+| Netflix/dispatch | fastapi | 151 | 83,974 |
+
+**A monorepo is not one application.** cal.com serves a Next.js front end *and* a NestJS
+API; immich pairs a NestJS server with a FastAPI machine-learning service. Every adapter
+that confidently fits is run, because picking one winner threw away the other's routes.
+
+**Three of these are read only partially, and the scan says so.** n8n routes through its
+own `@RestController` decorator, parse-server through its own `PromiseRouter` class, and
+Sentry assembles `urlpatterns` from lists held in other modules — so it reports *"read 3 of
+23 urls.py files; routes defined in the rest are NOT in this graph"* rather than presenting
+123 as the routing table of a 1.7-million-line project. A confident near-zero is the worst
+answer available, and it is the one this tool exists not to give.
+
+## How much of the market is that?
+
+Honestly: a meaningful slice of two ecosystems, and none of a third. Percentages are from
+the [2025 Stack Overflow Developer Survey](https://survey.stackoverflow.co/2025/technology/),
+all respondents (n=23,678).
+
+| framework | developers using it | read? |
+|---|---|---|
+| Next.js | 20.8% | ✅ |
+| Express | 19.9% | ✅ |
+| ASP.NET Core | 19.7% | ❌ |
+| FastAPI | 14.8% | ✅ |
+| Spring Boot | 14.7% | ❌ |
+| Flask | 14.4% | ❌ |
+| WordPress | 13.6% | ❌ |
+| Django | 12.6% | ✅ |
+| Laravel | 8.9% | ❌ |
+| NestJS | 6.7% | ✅ |
+| Fastify | 2.9% | ✅ |
+
+**These figures must not be added up.** It is a multi-select question about *developers*,
+not projects, and the answers overlap heavily — someone using Next.js very often also uses
+Express. Anyone who sums them to claim "we cover 78% of the market" is quoting a number
+that does not exist.
+
+What the table does support:
+
+- Of the **ten most-used server frameworks, Seamcheck reads four** — Next.js, Express,
+  FastAPI and Django.
+- Within the **JavaScript/TypeScript and Python** ecosystems it reads **six of the nine**
+  most-used. The gaps there are **Flask** (14.4%), Deno and Nuxt.
+- The largest single framework it cannot read is **ASP.NET Core** (19.7%), followed by
+  **Spring Boot** (14.7%). C# and Java are untouched.
+- The **front-end half does not care**: JavaScript, TypeScript, CSS, the DOM, six template
+  engines and the runtime probe work whatever serves the page. On a Rails or Laravel
+  project you get that half and no routes — and the scan says so rather than reporting
+  every `fetch` as broken.
+
+**Flask is the obvious next one** — Python, decorator-routed like FastAPI, and 14.4% of
+developers.
+
 **Why the backend list is short and the rest is not:** of ~36,800 symbols in a real scan,
 about 1,000 are server-side. The other **97%** never reads the backend at all, and neither
 does the runtime probe — it patches `fetch` and `querySelector` in a browser that has no idea
@@ -370,8 +455,10 @@ Written down because a tool that hides its blind spots is worse than no tool:
   those is invisible, and the UI says so rather than showing a confident zero.
 - **A URL built at runtime** stays `uncertain`. The prefix is recorded, never a guess.
 - **Precision has been measured against one real project** — a 511,000-line Django app.
-  Route extraction has since been checked against three cloned FastAPI repositories, but
-  precision on code we did not write is still unmeasured, and it will be lower.
+  Route extraction has since been checked against **16 cloned repositories, 9.4M lines**,
+  but *precision* on code we did not write is still unmeasured, and it will be lower.
+- **Three of those 16 are read only partially**, because they route through their own
+  helpers. The scan reports that rather than presenting a short list as complete.
 - **Recall is completely unmeasured.** A wrong `connected` is invisible by construction.
 
 See [How accurate is it?](#how-accurate-is-it) for exactly what the one measurement says.
