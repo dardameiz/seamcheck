@@ -74,7 +74,13 @@ def _static_url(node: dict | None) -> tuple[str | None, bool]:
 _FUNCTION_TYPES = ("FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression")
 
 
-def _parse_files(paths: list[str]) -> dict[str, dict]:
+def _parse_files(paths: list[str], *, report_failures: bool = True) -> dict[str, dict]:
+    """Parse each path. `report_failures=False` when the caller has better names.
+
+    Inline <script> blocks are written to a scratch directory as 0.js, 1.js, ... so the
+    generic message named temp files and blamed TypeScript. The template is what a reader
+    can actually open, so parse_inline_blocks reports its own.
+    """
     if not paths:
         return {}
     parsed: dict[str, dict] = {}
@@ -90,7 +96,7 @@ def _parse_files(paths: list[str]) -> dict[str, dict]:
             # does not speak TypeScript or JSX, so on a React or TS codebase this is not
             # an edge case: it is every file.
             failed.append(record.get("path", "?"))
-    if failed:
+    if failed and report_failures:
         shown = ", ".join(os.path.basename(path) for path in failed[:3])
         report(
             "js-parse-failures",
@@ -336,7 +342,45 @@ def extract_js(entry_files: list[str], project_root: str) -> tuple[list[Symbol],
     return symbols, edges
 
 
-_INLINE_SCRIPT_RE = re.compile(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", re.S | re.I)
+_INLINE_SCRIPT_RE = re.compile(
+    r"<script(?![^>]*\bsrc=)([^>]*)>(.*?)</script>", re.S | re.I
+)
+_SCRIPT_TYPE_RE = re.compile(r"""\btype\s*=\s*["']?([^"'\s>]+)""", re.I)
+
+# Commented-out code is not code, and prose about code is not code either. A template
+# that explains why a tag must stay put -- "it MUST stay a plain <script src> at THIS
+# position" -- was read as an inline script whose body was the rest of the paragraph,
+# because the src-detecting lookahead wants `src=` and that sentence writes `src` alone.
+_COMMENT_RES = (
+    re.compile(r"\{%\s*comment\s*%\}.*?\{%\s*endcomment\s*%\}", re.S | re.I),
+    re.compile(r"<!--.*?-->", re.S),
+)
+# `{% if %}0{% else %}null{% endif %}` is one value in the rendered page and both values
+# once the tags are stripped, which is the invalid `0null`. Only one branch can be real,
+# so keep the first and blank the alternative.
+_ELSE_BRANCH_RE = re.compile(r"\{%\s*else\s*%\}.*?(?=\{%\s*endif\s*%\})", re.S | re.I)
+
+
+def _blank(match: re.Match) -> str:
+    """Same length, same newlines, no content - so every line number still points home."""
+    return "".join(character if character == "\n" else " " for character in match.group(0))
+
+
+def _neutralise(source: str) -> str:
+    for pattern in _COMMENT_RES:
+        source = pattern.sub(_blank, source)
+    return _ELSE_BRANCH_RE.sub(_blank, source)
+
+# A <script> element is not necessarily code. `application/ld+json` is how every
+# SEO-conscious site ships structured data, `application/json` and Django's own
+# {% json_script %} carry server payloads, an importmap is configuration, and
+# text/x-template holds markup for a client-side renderer. None of them are
+# JavaScript, none of them can parse as JavaScript, and treating them as code
+# reported 24 unparseable "files" on the reference project - all of them JSON-LD.
+_JS_SCRIPT_TYPES = frozenset({
+    "", "text/javascript", "application/javascript", "text/ecmascript",
+    "application/ecmascript", "module", "text/babel", "javascript",
+})
 _DJANGO_TAG_RE = re.compile(r"\{%.*?%\}", re.S)
 _DJANGO_VAR_RE = re.compile(r"\{\{.*?\}\}", re.S)
 
@@ -359,12 +403,17 @@ def inline_script_blocks(template_files: list[str]) -> list[tuple[str, str, int]
             source = pathlib.Path(template).read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
+        source = _neutralise(source)
         for match in _INLINE_SCRIPT_RE.finditer(source):
-            body = match.group(1)
+            body = match.group(2)
             if not body.strip():
                 continue
+            declared = _SCRIPT_TYPE_RE.search(match.group(1) or "")
+            kind = (declared.group(1) if declared else "").lower()
+            if kind not in _JS_SCRIPT_TYPES:
+                continue
             cleaned = _DJANGO_VAR_RE.sub("0", _DJANGO_TAG_RE.sub("", body))
-            blocks.append((template, cleaned, source.count("\n", 0, match.start(1))))
+            blocks.append((template, cleaned, source.count("\n", 0, match.start(2))))
     return blocks
 
 
@@ -413,7 +462,19 @@ def parse_inline_blocks(template_files: list[str]) -> list[tuple[str, dict, int]
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write(source)
             paths.append(path)
-        parsed = _parse_files(paths)
+        parsed = _parse_files(paths, report_failures=False)
+        unreadable = [
+            template for path, (template, _, _) in zip(paths, blocks, strict=True)
+            if path not in parsed
+        ]
+        if unreadable:
+            shown = ", ".join(os.path.basename(name) for name in unreadable[:3])
+            report(
+                "inline-parse-failures",
+                "%s inline <script> block(s) could not be parsed and contributed no "
+                "symbols (%s%s). Anything only they reference will look unused.",
+                len(unreadable), shown, ", ..." if len(unreadable) > 3 else "",
+            )
     finally:
         shutil.rmtree(directory, ignore_errors=True)
     return [
