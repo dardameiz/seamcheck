@@ -65,6 +65,7 @@ SCAN_PHASES = (
     "matching calls to endpoints",
     "GraphQL",
     "Celery",
+    "Stripe",
     "Python entry points",
     "references to routes",
     "response fields",
@@ -231,6 +232,17 @@ def run_scan(
     celery_symbols, celery_edges = extract_celery(repo_root)
     graphql_symbols += celery_symbols
     graphql_edges += celery_edges
+
+    progress.step("Stripe")
+    # A webhook is called by Stripe's servers, so nothing in the project references it and
+    # every dead-code tool is entitled to call it unused. It is not; it is the one endpoint
+    # whose lack of callers is the design.
+    from seamcheck.extractors.stripe_extractor import extract_stripe
+
+    stripe_symbols, stripe_edges = extract_stripe(repo_root)
+    known = {symbol.id for symbol in graphql_symbols}
+    graphql_symbols += [s for s in stripe_symbols if s.id not in known]
+    graphql_edges += stripe_edges
 
     progress.step("Python entry points")
     entry_point_symbols = extract_entry_points(entry_point_files or set())
