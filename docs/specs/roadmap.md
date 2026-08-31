@@ -196,3 +196,53 @@ or the GitHub topics until the code exists and has been measured on a real proje
 one rule is that it never asserts more than its evidence; that rule binds its marketing too,
 and the first person who tries an advertised adapter and gets nothing back is right never to
 return.
+
+---
+
+## Measured: what a new backend actually costs
+
+Two experiments, run rather than estimated.
+
+**1. Does the frontend half carry over to another backend?** The template scanner was given
+the same markup as Django, Twig, Blade (PHP), ERB (Ruby) and Handlebars:
+
+| engine | ids | classes | data attrs |
+|---|---|---|---|
+| Django, Twig, Blade, ERB, Handlebars | ✅ | ✅ | ✅ |
+
+**All five identical.** It reads HTML *attributes*, and an attribute is an attribute whatever
+generated it. That is the 97% figure demonstrated rather than asserted.
+
+**2. Does it know a class is dynamic?** `class="flag flag-{{ code }}"` must yield `flag` and
+never the fragment `flag-`, or every such line is a false positive:
+
+| engine | result | |
+|---|---|---|
+| Django, Twig, **Blade** | `['flag']` | ✅ correct |
+| ERB (`<%= %>`) | `['code', 'flag', 'flag-<%=']` | ❌ two junk symbols |
+| JSX (`className`) | `[]` | ❌ finds nothing |
+
+So interpolation-awareness *is* per-engine, but it is a **regex pair, not an adapter**:
+`<%= %>` and `className=` are one line each. **Blade already works** — Laravel copied
+Django/Jinja's `{{ }}`, so PHP is the best-supported non-Django frontend by accident.
+
+**3. Is a backend adapter optional?** No. With no route list, `match_js_to_django` marks
+**100% of fetch targets `unresolved`** — not "unknown", actively wrong on every endpoint.
+The route reader is mandatory for the static seam check.
+
+**But `observe` needs no adapter at all.** A recorded `fetch` that returns 404 *is* the
+finding, in any language, with nothing parsed. That makes the runtime half genuinely
+framework-free today — a second reason to land the probe first.
+
+### Revised per-backend cost
+
+| backend | route reader | frontend | verdict |
+|---|---|---|---|
+| Laravel (PHP) | `Route::get('/x', [C::class,'m'])` — a **flat** list | Blade works today | **easier than Django** |
+| Symfony (PHP) | `#[Route('/x')]` attributes — structured | Twig works today | small |
+| FastAPI | decorators, same `ast` | n/a | smallest |
+| Rails | `config/routes.rb` DSL, `resources` expands | +1 regex for ERB | medium |
+| Express | `app.get()`, acorn already bundled | n/a | small |
+
+Django's URLconf — a tree with `include()`, namespaces, converters and `urlpatterns +=` — is
+**the hardest one in the table, and it is the one already done.**
