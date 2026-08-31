@@ -53,8 +53,19 @@ class Command(BaseCommand):
         )
         parser.add_argument(
             "--serve", action="store_true",
-            help="Serve the report to your local network so a phone can open it. "
-                 "Nothing is uploaded; the server stops when you do.",
+            help="Serve the report from this machine so a browser (and a phone on the "
+                 "same network) can open it. Nothing is uploaded; the server stops when "
+                 "you do.",
+        )
+        parser.add_argument(
+            "--no-serve", action="store_true",
+            help="With --format map: write the file and stop, instead of serving it. "
+                 "For CI and scripts, which want the artifact and not a running server.",
+        )
+        parser.add_argument(
+            "--local-only", action="store_true",
+            help="With --serve: bind loopback only, so nothing on the network can reach "
+                 "it. You lose the phone link.",
         )
         parser.add_argument(
             "--format", default=None,
@@ -209,8 +220,7 @@ class Command(BaseCommand):
                 raise SystemExit(2) from error
         bar.finish()
 
-        if options["serve"]:
-            return self._serve(text, fmt, tunnel=options["tunnel"])
+        serving = options["serve"] and not options["no_serve"]
 
         destination = options["out"]
         if destination == "-":
@@ -229,27 +239,40 @@ class Command(BaseCommand):
             key, fallback = _DOCUMENTS[fmt]
             destination = config.get(key) or fallback
 
+        # Written before it is served, not instead of. Serving used to return early, so
+        # the one command that renders the UI left nothing behind when you pressed Ctrl-C
+        # - and the artifact is the thing you commit, diff and open again tomorrow.
         path = pathlib.Path(repo_root) / destination
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
-        self._wrote(path, text, open_it=options.get("open_it"))
+        self._wrote(path, text, open_it=options.get("open_it") and not serving)
+
+        if serving:
+            self._serve(
+                text, fmt, tunnel=options["tunnel"], local_only=options["local_only"],
+                open_it=options.get("open_it"),
+            )
 
     def _wrote(self, path, text: str, open_it: bool = False):
-        """Say where it went, and give something clickable.
+        """Say where the file went.
 
-        A bare "wrote docs/maps/connectivity-map.html" leaves the reader to work out how to
-        open it. Most terminals turn a file:// URL into a link, so print one.
+        No file:// link unless there is nothing better to offer: VS Code's terminal opens
+        a file:// URL inside VS Code rather than handing it to a browser, so the one
+        "clickable" thing in the output went somewhere the reader did not ask for. An
+        http:// link, which the serving path prints, it hands straight to the browser.
         """
-        absolute = path.resolve()
         size = len(text.encode("utf-8")) / 1_000_000
-        self.stdout.write(f"wrote {path}  ({size:.1f} MB)")
-        self.stdout.write(f"open  {absolute.as_uri()}")
+        self.stdout.write(f"  wrote  {path}  ({size:.1f} MB)")
         if not open_it:
             return
+        self._open(path.resolve().as_uri())
+
+    def _open(self, url: str):
         import webbrowser
 
-        # A browser that will not open must not read as the render having failed.
-        if not webbrowser.open(absolute.as_uri()):
+        # A browser that will not open must not read as the render having failed - the
+        # link is printed either way.
+        if not webbrowser.open(url):
             self.stderr.write("could not open a browser; the link above still works.")
 
     def _exit_on_check(self, repo_root, graph=None):
@@ -311,35 +334,43 @@ class Command(BaseCommand):
             "each of them changed - re-run `seamcheck map` to pick it up."
         )
 
-    def _serve(self, text, fmt, tunnel=False):
-        """Hold the report open on the LAN until interrupted."""
-        from seamcheck.serve import public_tunnel, serve_once
+    def _serve(self, text, fmt, tunnel=False, local_only=False, open_it=False):
+        """Hold the report open until interrupted, and name every way in."""
+        from seamcheck.serve import public_tunnel, serve_addresses
 
         if fmt == "json":
             raise CommandError("--serve renders a page; use --format map or html.")
 
-        server, url = serve_once(text)
-        self.stdout.write(f"Open on any device on this network:\n\n    {url}\n")
+        server, addresses = serve_addresses(text, host="127.0.0.1" if local_only else "0.0.0.0")
+        self.stdout.write("")
+        self.stdout.write(f"  open   {addresses['local']}")
+        if "lan" in addresses:
+            self.stdout.write(f"  phone  {addresses['lan']}")
         proxy = None
         if tunnel:
             try:
                 proxy, public = public_tunnel(server.server_port)
             except RuntimeError as error:
-                # A tunnel that will not open must not take the LAN server down with it.
+                # A tunnel that will not open must not take the local server down with it.
                 self.stderr.write(str(error))
             else:
-                self.stdout.write(
-                    f"Public link, readable by anyone who has it:\n\n"
-                    f"    {public}{url[url.index('/', 8):]}\n"
-                )
+                path = addresses["local"][addresses["local"].index("/", 8):]
+                self.stdout.write(f"  public {public}{path}")
+        self.stdout.write("")
         self.stdout.write(
-            "The report is served from this machine only, for as long as this command "
-            "runs. Press Ctrl-C to stop."
+            "  Served from this machine only, for as long as this command runs."
+            if local_only else
+            "  Served from this machine, reachable by anyone on this network holding"
+            "\n  the link. Nothing is uploaded. --local-only drops the phone link and"
+            "\n  binds loopback instead."
         )
+        self.stdout.write("  Ctrl-C to stop.")
+        if open_it:
+            self._open(addresses["local"])
         try:
             server.serve_forever()
         except KeyboardInterrupt:
-            self.stdout.write("\nstopped")
+            self.stdout.write("\n  stopped")
         finally:
             server.server_close()
             if proxy is not None:

@@ -62,11 +62,33 @@ class _OneFileHandler(BaseHTTPRequestHandler):
 
 def serve_once(html: str, host: str = "0.0.0.0", port: int = 0) -> tuple[ThreadingHTTPServer, str]:
     """Start a server for one document. Returns the server and the URL to open."""
-    path = f"/{secrets.token_urlsafe(9)}"
-    handler = partial(_OneFileHandler, body=html.encode("utf-8"), path=path)
-    server = ThreadingHTTPServer((host, port), handler)
+    server, path = _bind(html, host, port)
     shown = local_ip() if host in ("0.0.0.0", "") else host
     return server, f"http://{shown}:{server.server_port}{path}"
+
+
+def _bind(html: str, host: str, port: int) -> tuple[ThreadingHTTPServer, str]:
+    path = f"/{secrets.token_urlsafe(9)}"
+    handler = partial(_OneFileHandler, body=html.encode("utf-8"), path=path)
+    return ThreadingHTTPServer((host, port), handler), path
+
+
+def serve_addresses(html: str, host: str = "0.0.0.0", port: int = 0) -> tuple[ThreadingHTTPServer, dict[str, str]]:
+    """Start the server and name every address it can be reached at.
+
+    `serve_once` answers with one URL, which was the right shape when serving was an
+    opt-in for the phone. It is now what `map` does by default, and the two addresses are
+    different answers to different questions: loopback is the one to click here (and the
+    one a VS Code terminal hands to a real browser, unlike a file:// link, which VS Code
+    opens inside itself), the LAN one is the one to type on a phone. Same port, same
+    token, so they are the same document.
+    """
+    server, path = _bind(html, host, port)
+    port_number = server.server_port
+    addresses = {"local": f"http://127.0.0.1:{port_number}{path}"}
+    if host not in ("127.0.0.1", "localhost"):
+        addresses["lan"] = f"http://{local_ip()}:{port_number}{path}"
+    return server, addresses
 
 
 _TUNNEL_URL_RE = re.compile(rb"https://[a-z0-9-]+\.trycloudflare\.com")

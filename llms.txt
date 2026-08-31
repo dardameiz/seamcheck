@@ -30,9 +30,12 @@ what it lost.
 - `seamcheck scan` — scan and summarise; also writes the snapshot the other commands diff against
 - `seamcheck check` — the CI gate. Exit 1 on new findings, 2 if the baseline is missing, 0 clean
 - `seamcheck check --since $BASE_SHA` — gate a pull request against its base commit
-- `seamcheck map` — writes one self-contained HTML file (the connectivity map plus the review
-  views) and prints the path; `--open` opens it
-- `seamcheck serve` — the same UI, opened from a phone on the same network
+- `seamcheck map` — the main one. Scans, writes one self-contained HTML file (the connectivity
+  map plus the review views), then serves it and prints a loopback link and a LAN link for a
+  phone. Blocks until Ctrl-C. `--no-serve` writes the file and exits, which is what CI and any
+  script wants; `--local-only` drops the LAN link; `--tunnel` adds a temporary public HTTPS one
+- `seamcheck serve` — the same command as `map`, under the name that reads better when the
+  phone is the point
 - `seamcheck explain <symbol-id>` — one symbol, with the source around it
 - `seamcheck report` — a markdown digest for a PR comment
 - `seamcheck backfill` — scan the last 20 commits so the map can show per-commit diffs;

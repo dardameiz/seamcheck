@@ -89,15 +89,37 @@ Seamcheck says so and gives you the Python half rather than dying.
 ## Use
 
 ```bash
-seamcheck help              # every command, one line each
-seamcheck help map          # what one command is for, with worked examples
-seamcheck scan              # scan, summary, snapshot for later diffs
+seamcheck map               # scan, then open the UI. Start here.
 seamcheck check             # exit 1 on new findings. This is the CI one.
-seamcheck map               # the UI, one self-contained HTML file
-seamcheck map --open        # ...and open it
-seamcheck serve             # ...opened from your phone
+seamcheck backfill          # give the map some commit history
+
+seamcheck help              # all nine commands
+seamcheck help map          # what one is for, with worked examples
+seamcheck scan              # the totals, no UI, no server
 seamcheck explain <id>      # one symbol, with the code around it
 ```
+
+`seamcheck map` scans, writes the UI to a file, and then **serves that file** so you get a
+link you can click:
+
+```
+  wrote  docs/maps/connectivity-map.html  (3.9 MB)
+
+  open   http://127.0.0.1:49497/SW9FfTR4XybG
+  phone  http://192.168.1.38:49497/SW9FfTR4XybG
+
+  Ctrl-C to stop.
+```
+
+Two links because they answer different questions: the first is the one to click here,
+the second is the one to type on a phone on the same wifi. It serves rather than printing
+a `file://` path because a `file://` link is not much of a link — VS Code's terminal opens
+it *inside VS Code*, and a phone can't use it at all.
+
+Nothing is uploaded. While it runs, anyone on your network holding the link can read the
+report; `--local-only` binds loopback instead and drops the phone link, `--tunnel` goes the
+other way and opens a temporary public HTTPS address. `--no-serve` writes the file and
+stops, which is what CI wants.
 
 A scan takes half a minute on a large project, so it draws a progress bar — on **stderr**,
 and only when that is a terminal. `seamcheck json > graph.json` gives you JSON and nothing
@@ -140,11 +162,14 @@ many of its declarations Seamcheck reasoned about. Because "no findings" and "ne
 looked" are not the same sentence.
 
 ```bash
-seamcheck serve            # open it from your phone
-seamcheck serve --tunnel   # ...from anywhere
+seamcheck map              # the link, and the phone link
+seamcheck map --tunnel     # ...reachable from anywhere
 ```
 
-Nothing is uploaded. `--serve` is a socket on your machine that dies with the command.
+Nothing is uploaded. The server is a socket on your machine that dies with the command,
+and the URL carries a random token so nothing on your network stumbles into it.
+(`seamcheck serve` is the same command under the name that comes to mind when the phone
+is the point.)
 
 ### Per-commit
 

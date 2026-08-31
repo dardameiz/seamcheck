@@ -6,18 +6,33 @@ from unittest import mock
 
 from django.test import SimpleTestCase
 
-from seamcheck.cli import COMMANDS, find_project, main
+from seamcheck.cli import COMMANDS, PRIMARY, find_project, main
 
 
 class HelpTests(SimpleTestCase):
-    def test_bare_help_lists_every_command(self):
+    def test_bare_help_names_every_command(self):
+        # Nine equal lines is a menu, not an answer to "what do I run" - so the three a
+        # person types get their summary and the rest are named on one line. Named, not
+        # dropped: an agent driving this uses json, explain and triage more than a human
+        # does, and a command missing from the help is a command that does not exist.
         out = io.StringIO()
         with redirect_stdout(out):
             self.assertEqual(main(["help"]), 0)
 
-        for name, entry in COMMANDS.items():
+        for name in COMMANDS:
             self.assertIn(name, out.getvalue())
-            self.assertIn(entry.summary[:30], out.getvalue())
+        for name in PRIMARY:
+            self.assertIn(COMMANDS[name].summary[:30], out.getvalue())
+
+    def test_every_command_is_reachable_from_the_listing(self):
+        # `also: scan · report · ...` is only useful if `help <name>` answers for each.
+        for name in COMMANDS:
+            with self.subTest(command=name):
+                out = io.StringIO()
+                with redirect_stdout(out):
+                    self.assertEqual(main(["help", name]), 0)
+
+                self.assertIn(f"seamcheck {name} -", out.getvalue())
 
     def test_no_arguments_prints_help_rather_than_scanning(self):
         # A scan takes half a minute and writes a snapshot. Someone typing `seamcheck`
@@ -80,7 +95,7 @@ class DispatchTests(SimpleTestCase):
 
         self.assertEqual(
             called.call_args.args,
-            ("seamcheck", "--format", "map", "--since", "main", "--out", "m.html"),
+            ("seamcheck", "--format", "map", "--serve", "--since", "main", "--out", "m.html"),
         )
 
     def test_the_check_exit_code_survives_the_wrapper(self):
@@ -185,7 +200,7 @@ class PerCommandHelpTests(SimpleTestCase):
         with _Dispatch() as run:
             main(["map", "--", "--help"])
 
-            self.assertEqual(run.args, ("seamcheck", "--format", "map", "--help"))
+            self.assertEqual(run.args, ("seamcheck", "--format", "map", "--serve", "--help"))
 
     def test_help_for_a_command_that_does_not_exist_says_so(self):
         err = io.StringIO()

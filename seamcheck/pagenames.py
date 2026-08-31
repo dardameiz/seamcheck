@@ -111,15 +111,25 @@ def _best_url(candidates: set[str], template: str) -> str:
 
 
 def page_names(repo_root: str, config: dict, graph: Graph) -> dict[str, PageName]:
-    """Map each JS root's filename stem to what to call it on screen."""
+    """Map each JS root's filename stem to what to call it on screen.
+
+    Every input here is optional, and a project missing one gets unnamed pages rather
+    than a traceback. `scan` already treated `templates_root` and the bundler config as
+    optional; `map` required them, so the same config that scanned cleanly died on a
+    KeyError the moment you asked to look at it.
+    """
     root = pathlib.Path(repo_root)
-    templates_root = str(root / config["templates_root"])
-    by_entry = vite_use_by_template(templates_root)
-    by_script = static_js_by_template(templates_root)
+    templates = config.get("templates_root")
+    templates_root = str(root / templates) if templates else ""
+    by_entry = vite_use_by_template(templates_root) if templates_root else {}
+    by_script = static_js_by_template(templates_root) if templates_root else {}
     serving = urls_by_template(graph)
 
+    vite_config = root / config.get("vite_config", "vite.config.js")
+    entries = vite_entry_map(str(vite_config)) if vite_config.is_file() else {}
+
     loaded_by: dict[str, tuple[set[str], str]] = {}
-    for entry, path in vite_entry_map(str(root / "vite.config.js")).items():
+    for entry, path in entries.items():
         loaded_by[pathlib.Path(path).stem] = (by_entry.get(entry, set()), entry)
     for reference, templates in by_script.items():
         stem = pathlib.Path(reference).stem

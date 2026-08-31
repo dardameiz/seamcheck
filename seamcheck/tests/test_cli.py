@@ -178,8 +178,19 @@ class ReportFormatTests(SimpleTestCase):
             written = Path(repo, "docs", "maps", "connectivity-report.html")
             self.assertTrue(written.is_file())
             self.assertIn("wrote", out.getvalue())
-            # Something clickable, not just a path to copy.
-            self.assertIn(written.resolve().as_uri(), out.getvalue())
+            self.assertIn("connectivity-report.html", out.getvalue())
+
+    def test_the_written_path_is_not_offered_as_a_file_url(self):
+        # VS Code's terminal opens a file:// URL inside VS Code rather than handing it to
+        # a browser, so the one clickable thing in the output went somewhere nobody asked
+        # for. The serving path prints an http:// link, which it does hand over.
+        with tempfile.TemporaryDirectory() as repo:
+            out = StringIO()
+            with override_settings(SEAMCHECK_CONFIG=_CONFIG):
+                call_command("seamcheck", "--format", "html", "--repo-root", repo,
+                             stdout=out, stderr=StringIO())
+
+            self.assertNotIn("file://", out.getvalue())
 
     def test_since_composes_with_format_using_the_given_ref_not_head(self):
         # An unresolvable ref surfaces its own name in the "No baseline" message, which
@@ -262,3 +273,85 @@ class CheckSinceExitCodeTests(SimpleTestCase):
 
         self.assertIn("no baseline", output)
         self.assertEqual(code, 2)
+
+
+class ServingTests(SimpleTestCase):
+    """`map` serves by default now, so the file and the server have to coexist."""
+
+    def _run(self, repo, *extra):
+        out, err = StringIO(), StringIO()
+        with override_settings(SEAMCHECK_CONFIG=_CONFIG):
+            call_command("seamcheck", "--format", "map", "--repo-root", repo,
+                         *extra, stdout=out, stderr=err)
+        return out.getvalue()
+
+    def test_the_file_is_written_before_the_server_starts(self):
+        # Serving used to return early, so the one command that renders the UI left
+        # nothing behind once you pressed Ctrl-C - and the artifact is the thing you
+        # commit, diff, and open again tomorrow.
+        served = {}
+
+        def _fake_serve(self_, text, fmt, **kwargs):
+            served["file_exists"] = Path(repo, "docs", "maps", "connectivity-map.html").is_file()
+
+        with tempfile.TemporaryDirectory() as repo, mock.patch(
+            "seamcheck.management.commands.seamcheck.Command._serve", _fake_serve
+        ):
+            self._run(repo, "--serve")
+
+            self.assertTrue(served["file_exists"])
+
+    def test_no_serve_writes_the_file_and_stops(self):
+        # What CI and any script wants: the artifact, not a process that never exits.
+        with tempfile.TemporaryDirectory() as repo, mock.patch(
+            "seamcheck.management.commands.seamcheck.Command._serve"
+        ) as serve:
+            output = self._run(repo, "--serve", "--no-serve")
+
+            serve.assert_not_called()
+            self.assertTrue(Path(repo, "docs", "maps", "connectivity-map.html").is_file())
+            self.assertIn("wrote", output)
+
+    def test_local_only_reaches_the_server(self):
+        with tempfile.TemporaryDirectory() as repo, mock.patch(
+            "seamcheck.management.commands.seamcheck.Command._serve"
+        ) as serve:
+            self._run(repo, "--serve", "--local-only")
+
+            self.assertTrue(serve.call_args.kwargs["local_only"])
+
+    def test_out_dash_still_prints_and_never_serves(self):
+        # An explicit "give me it on stdout" must not also hold a socket open.
+        with tempfile.TemporaryDirectory() as repo, mock.patch(
+            "seamcheck.management.commands.seamcheck.Command._serve"
+        ) as serve:
+            output = self._run(repo, "--serve", "--out", "-")
+
+            serve.assert_not_called()
+            self.assertIn("<!doctype html>", output)
+
+
+class ServeAddressTests(SimpleTestCase):
+    def test_both_addresses_describe_the_same_document(self):
+        # Loopback is the one to click here; the LAN one is the one to type on a phone.
+        # Different answers, same port and same token, or they are two documents.
+        from seamcheck.serve import serve_addresses
+
+        server, addresses = serve_addresses("<p>hi</p>")
+        try:
+            port = server.server_port
+            self.assertIn(f":{port}/", addresses["local"])
+            self.assertIn(f":{port}/", addresses["lan"])
+            token = addresses["local"].rsplit("/", 1)[1]
+            self.assertEqual(addresses["lan"].rsplit("/", 1)[1], token)
+        finally:
+            server.server_close()
+
+    def test_local_only_offers_no_lan_address(self):
+        from seamcheck.serve import serve_addresses
+
+        server, addresses = serve_addresses("<p>hi</p>", host="127.0.0.1")
+        try:
+            self.assertNotIn("lan", addresses)
+        finally:
+            server.server_close()

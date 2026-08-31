@@ -49,20 +49,31 @@ class Command:
 
 
 COMMANDS: dict[str, Command] = {
-    "scan": Command(
-        args=[],
-        summary="Scan and print a summary. Writes a snapshot for later diffs.",
+    "map": Command(
+        args=["--format", "map", "--serve"],
+        summary="Scan, then open the UI. Start here.",
         detail=(
-            "Reads the project's URLconf, templates, JavaScript and stylesheets, builds "
-            "one graph of what reaches what, and prints the totals by status.\n\n"
-            "It also writes two things you get for free: the graph as JSON under "
-            "docs/maps/, and a snapshot keyed by the current commit. The snapshot is what "
-            "later makes `check` and the map's commit picker able to say what changed - "
-            "so running scan regularly is what builds the history."
+            "Scans, writes the whole UI as a single self-contained HTML file - the graph, "
+            "the review sections, the file tree, the commit picker - and then serves that "
+            "file from this machine so you have a link to click. Two links, in fact: one "
+            "for this machine and one to type on a phone on the same wifi. Ctrl-C stops "
+            "the server; the file stays where it was written.\n\n"
+            "It serves rather than printing a file:// path because a file:// link is not "
+            "much of a link: VS Code's terminal opens it inside VS Code, and a phone "
+            "cannot use it at all. An http:// one gets handed to a real browser.\n\n"
+            "Nothing is uploaded and nothing leaves your machine - but while it runs, "
+            "anyone on this network holding the link can read the report. `--local-only` "
+            "binds loopback instead, at the cost of the phone link. `--tunnel` goes the "
+            "other way and opens a temporary public HTTPS address for a device that is "
+            "not on this wifi."
         ),
         examples=[
-            ("seamcheck scan", "the whole project, summarised"),
-            ("seamcheck scan --repo-root ../other", "scan a project you are not standing in"),
+            ("seamcheck map", "scan, write, serve, print the links"),
+            ("seamcheck map --open", "...and open the browser for you"),
+            ("seamcheck map --no-serve", "just write the file - for CI and scripts"),
+            ("seamcheck map --local-only", "no phone link; loopback only"),
+            ("seamcheck map --since main", "highlight what changed against main"),
+            ("seamcheck map --out /tmp/map.html", "choose where it lands"),
         ],
     ),
     "check": Command(
@@ -84,6 +95,44 @@ COMMANDS: dict[str, Command] = {
             ("seamcheck check --format markdown", "fail the build AND print a digest to comment with"),
         ],
     ),
+    "backfill": Command(
+        args=[],
+        summary="Scan the last N commits so the map's commit picker has history.",
+        detail=(
+            "A scan describes one commit; two scans describe a change. With only today's "
+            "snapshot on disk the commit picker has nothing to offer and `check` has no "
+            "baseline. This walks back through history and scans each commit into its own "
+            "snapshot, so both start working.\n\n"
+            "Each commit is checked out into its own temporary git worktree and scanned "
+            "there, with THIS version of seamcheck rather than the one that commit shipped "
+            "with - otherwise a diff means 'the project changed, or the scanner did'. "
+            "Budget roughly 30 seconds per commit; commits already scanned are skipped, so "
+            "running it again is cheap."
+        ),
+        examples=[
+            ("seamcheck backfill", "the last 20 commits"),
+            ("seamcheck backfill 100", "the last 100"),
+            ("seamcheck backfill 50 --backfill-ref main", "walk main rather than the branch you are on"),
+        ],
+        takes_number="--backfill",
+        number_default="20",
+    ),
+    "scan": Command(
+        args=[],
+        summary="Scan and print the totals. No UI, no server.",
+        detail=(
+            "Reads the project's URLconf, templates, JavaScript and stylesheets, builds "
+            "one graph of what reaches what, and prints the totals by status.\n\n"
+            "It also writes two things you get for free: the graph as JSON under "
+            "docs/maps/, and a snapshot keyed by the current commit. The snapshot is what "
+            "later makes `check` and the map's commit picker able to say what changed - "
+            "so running scan regularly is what builds the history."
+        ),
+        examples=[
+            ("seamcheck scan", "the whole project, summarised"),
+            ("seamcheck scan --repo-root ../other", "scan a project you are not standing in"),
+        ],
+    ),
     "report": Command(
         args=["--format", "markdown"],
         summary="A digest for a chat or a pull request.",
@@ -98,37 +147,20 @@ COMMANDS: dict[str, Command] = {
             ("seamcheck report --since main", "only what changed against main"),
         ],
     ),
-    "map": Command(
-        args=["--format", "map"],
-        summary="The UI: one self-contained HTML file, written to disk.",
-        detail=(
-            "Builds the whole thing as a single HTML file with no network dependencies - "
-            "the graph, the review sections, the file tree and the commit picker - and "
-            "prints the path and a link to open it.\n\n"
-            "It writes a file rather than printing one because the document is several "
-            "megabytes: piped to a terminal that is a wall of markup and a lost session. "
-            "Use `--out -` if you really do want it on stdout."
-        ),
-        examples=[
-            ("seamcheck map", "write it and print the link"),
-            ("seamcheck map --open", "write it and open it in your browser"),
-            ("seamcheck map --out /tmp/map.html", "choose where it lands"),
-            ("seamcheck map --since main", "highlight what changed against main"),
-        ],
-    ),
     "serve": Command(
         args=["--format", "map", "--serve"],
-        summary="Open the UI from another device on this network.",
+        summary="The same as `map`. The name to reach for when you mean the phone.",
         detail=(
-            "Renders the map and serves it from this machine until you press Ctrl-C, so a "
-            "phone or a second screen can open it. Nothing is uploaded and nothing is "
-            "written to disk.\n\n"
-            "`--tunnel` additionally opens a temporary public HTTPS link through "
-            "cloudflared, for a device that is not on this network. Anyone with that link "
-            "can read the report, and it dies with the command."
+            "Identical to `seamcheck map` - one implementation, two names - because "
+            "serving is what map does now. Kept because `serve` is the word that comes to "
+            "mind when the intent is 'get this onto my phone', and because a name that "
+            "has been in the help should not simply vanish.\n\n"
+            "`--tunnel` opens a temporary public HTTPS address through cloudflared, for a "
+            "device that is not on this wifi. Anyone with that link can read the report, "
+            "and it dies with the command."
         ),
         examples=[
-            ("seamcheck serve", "on the local network"),
+            ("seamcheck serve", "same as `seamcheck map`"),
             ("seamcheck serve --tunnel", "plus a temporary public link"),
         ],
     ),
@@ -169,29 +201,8 @@ COMMANDS: dict[str, Command] = {
              "stop the gate failing on an endpoint only an external service calls"),
         ],
     ),
-    "backfill": Command(
-        args=[],
-        summary="Scan the last N commits so the map's commit picker has history.",
-        detail=(
-            "A scan describes one commit; two scans describe a change. With only today's "
-            "snapshot on disk the commit picker has nothing to offer and `check` has no "
-            "baseline. This walks back through history and scans each commit into its own "
-            "snapshot, so both start working.\n\n"
-            "Each commit is checked out into its own temporary git worktree and scanned "
-            "there, with THIS version of seamcheck rather than the one that commit shipped "
-            "with - otherwise a diff means 'the project changed, or the scanner did'. "
-            "Budget roughly 30 seconds per commit; commits already scanned are skipped, so "
-            "running it again is cheap."
-        ),
-        examples=[
-            ("seamcheck backfill", "the last 20 commits"),
-            ("seamcheck backfill 100", "the last 100"),
-            ("seamcheck backfill 50 --backfill-ref main", "walk main rather than the branch you are on"),
-        ],
-        takes_number="--backfill",
-        number_default="20",
-    ),
 }
+
 
 _SETTINGS_RE = re.compile(r"""["']DJANGO_SETTINGS_MODULE["']\s*,\s*["']([\w.]+)["']""")
 
@@ -216,18 +227,27 @@ def find_project(start: pathlib.Path) -> tuple[str, pathlib.Path] | None:
     return None
 
 
+# The three a person types, in the order they would type them. The rest are every bit as
+# supported - an agent driving this over MCP or a shell uses `json`, `explain` and
+# `triage` far more than a human does - but nine equal lines is a menu, not an answer to
+# "what do I run". They are listed, on one line, with `help <command>` for each.
+PRIMARY = ("map", "check", "backfill")
+
+
 def _overview() -> str:
-    width = max(len(name) for name in COMMANDS)
-    listing = "\n".join(f"  {name:<{width}}  {c.summary}" for name, c in COMMANDS.items())
+    width = max(len(name) for name in PRIMARY)
+    listing = "\n".join(f"  {name:<{width}}  {COMMANDS[name].summary}" for name in PRIMARY)
+    rest = " \u00b7 ".join(name for name in COMMANDS if name not in PRIMARY)
     return (
         f"commands:\n{listing}\n\n"
-        "  seamcheck help <command>   what a command is for, with examples\n\n"
+        f"also:\n  {rest}\n"
+        "     seamcheck help <command>   what any of them is for, with examples\n\n"
         "options:\n"
         "  -v, --verbose   show the host project's own warnings and start-up logging\n"
         "  -q, --quiet     no progress bar (it is off already when output is redirected)\n\n"
         "Any flag the management command accepts also works here, e.g.\n"
-        "  seamcheck map --since main --out map.html\n"
-        "  seamcheck serve --tunnel\n"
+        "  seamcheck map --since main --no-serve\n"
+        "  seamcheck map --tunnel\n"
         "  seamcheck check --since $BASE_SHA\n"
     )
 

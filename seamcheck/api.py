@@ -43,7 +43,9 @@ def _static_root(config: dict, repo_root: str) -> str:
 def _discover_roots(config: dict, repo_root: str) -> list[str]:
     return discover_js_roots(
         vite_config=os.path.join(repo_root, config.get("vite_config", "vite.config.js")),
-        templates_root=os.path.join(repo_root, config["templates_root"]),
+        # .get, like everywhere else that reads it: a project with no templates root
+        # discovers no template-loaded scripts, which is an empty answer, not a crash.
+        templates_root=os.path.join(repo_root, config.get("templates_root", "")),
         static_root=_static_root(config, repo_root),
     )
 
@@ -280,12 +282,19 @@ def write_map(graph: Graph, repo_root: str = ".") -> str:
 
 def _page_files(repo_root: str) -> dict[str, set[str]]:
     """Which JS files each page entry reaches. Computed only for the map: the import
-    walk costs ~13s and the CI path has no use for page attribution."""
+    walk costs ~13s and the CI path has no use for page attribution.
+
+    Goes through `_js_roots`, which is the one function that knows how a project's entry
+    points are resolved. Re-deriving them here meant a config that names `js_entry_files`
+    explicitly - the documented way to skip discovery - still had `templates_root` read
+    out of it, and `map` died on a KeyError while `scan` was fine.
+    """
     from seamcheck.extractors.js_extractor import discover_js_files
 
+    roots, _ = _js_roots(_config(), repo_root)
     return {
         os.path.splitext(os.path.basename(root))[0]: set(discover_js_files([root], repo_root))
-        for root in _discover_roots(_config(), repo_root)
+        for root in roots
     }
 
 
