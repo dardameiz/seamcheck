@@ -5,8 +5,9 @@
 [![Python](https://img.shields.io/pypi/pyversions/seamcheck?color=7c6cff)](https://pypi.org/project/seamcheck/)
 [![License](https://img.shields.io/badge/license-MIT-informational)](LICENSE)
 
-A small tool that looks for the bugs that sit **between** your frontend and your backend.
-It reads your source. It never runs your code.
+A small tool that looks for the bugs that sit **between** things — your frontend and your
+backend, your code and your database schema, one file and another. It reads your source. It
+never runs your code.
 
 ![The map](docs/images/map.png)
 
@@ -44,7 +45,10 @@ That is the whole setup. It opens a map of your project and prints a link you ca
 your phone. **Have a look around before reading any further** — it explains itself better
 than this page does.
 
-Needs **Python 3.10 or newer**.
+Needs **Python 3.10 or newer**. Django is *not* a dependency — only a Django project needs
+it, and such a project already has it.
+
+For the agent server: `pip install 'seamcheck[mcp]'`.
 
 <details>
 <summary><b>If pip says <code>externally-managed-environment</code></b></summary>
@@ -189,6 +193,59 @@ their dependencies have to be installed.
 Also tried against 20 open-source projects: 53,361 files, 9.5M lines, 2,435 routes. If
 yours does not work, I would genuinely like to know.
 
+## It reads your data layer too
+
+The seam is a **name crossing a boundary nothing checks**. A route string is one instance.
+Where you keep your data is another, and usually nobody is checking that at all.
+
+### Supabase
+
+Your client names a table, a column, a function and an edge function as **strings**, and
+they are checked against `supabase/migrations/*.sql`.
+
+```
+UNRESOLVED  db_table_use       order              the migrations declare `orders`
+UNRESOLVED  db_column_use      order.total        PostgREST returns the row WITHOUT it
+UNRESOLVED  db_function_use    get_statistics     the function is `get_stats`
+UNRESOLVED  edge_function_use  send-mail          the directory is `send-email`
+UNUSED      db_table           audit_log          no client code touches it
+UNRESOLVED  db_policy          orders             read by the client, RLS off
+```
+
+A mistyped **column** is the quiet one. PostgREST returns the rows without it, the client
+reads `undefined`, and a blank field ships. Nothing raises. `supabase gen types` catches it
+only if you regenerate after every migration — and that drift is the bug.
+
+The last line is a security check: the anon key ships in your browser bundle, so a table the
+client reads with row level security off is readable by anyone who opens devtools.
+
+The schema reader is not Supabase-specific — it also reads `migrations/`, `db/migrate/`,
+`database/migrations/` and `sql/`, so Alembic, dbmate, Sqitch and hand-rolled folders work.
+
+### Firebase
+
+`httpsCallable('sendEmail')` is checked against what your functions directory exports —
+same shape as a fetch against a route.
+
+Firestore is **schemaless**, so "does this collection exist" has no answer in your files and
+is never claimed. But `firestore.rules` *is* a declaration: a collection with no `match`
+block is denied by default and fails silently in production, and a `match` block for a
+collection nobody touches is usually a rename left behind.
+
+### Redis
+
+No schema either, so a key is checked against its **counterpart**.
+
+```
+UNRESOLVED  redis_key  user:*:stat     read here, written nowhere — can only ever miss
+UNUSED      redis_key  user:*:legacy   written here, read nowhere
+UNRESOLVED  redis_ttl  cache:board:*   names itself a cache, written with no expiry
+```
+
+Key patterns are normalised before they are compared, so `user:{uid}:stats`,
+`user:${id}:stats` and `user:%s:stats` are one key — a Python writer meets a JavaScript
+reader.
+
 ## Four words, and it never says more than it can prove
 
 | | |
@@ -202,6 +259,25 @@ yours does not work, I would genuinely like to know.
 cannot be known by reading the source, and I would rather it admitted that than pretended
 otherwise. It is also why the other three can be trusted.
 
+## The commands
+
+```bash
+seamcheck map        # scan, then open the canvas. Start here.
+seamcheck check      # the CI gate. Exit 1 on new findings, 2 with no baseline, 0 clean.
+seamcheck report     # the findings digest, as text or markdown
+seamcheck explain    # why one symbol is classified the way it is
+seamcheck triage     # record "this one is fine, and here is why"
+seamcheck backfill   # scan the last N commits so the map has history
+seamcheck observe    # drive your pages in a real browser and record what it saw
+seamcheck config     # what was detected, and how it was worked out
+```
+
+`seamcheck help <command>` explains any of them with examples.
+
+Useful flags: `--format terminal|markdown|html|map|json` · `--out FILE` · `--serve` /
+`--no-serve` · `--tunnel` (a temporary public HTTPS link, for your phone) · `--local-only` ·
+`--since REF` · `--open`.
+
 ## If you build with an AI agent
 
 This is where I have found it most useful, honestly. Asked *who writes this element?*, an
@@ -213,13 +289,27 @@ agent will sometimes add a **second** place that writes the same element rather 
 the one already there. The symptom moves, the next session adds another, and it slowly gets
 worse.
 
-So there is an MCP server. The agent can just ask, and gets the answer with the exact lines.
+So there is an MCP server. The agent asks, and gets the answer with the exact lines.
 
 ```bash
+pip install 'seamcheck[mcp]'
 claude mcp add seamcheck -- seamcheck-mcp
 ```
 
-Tools: `check`, `explain`, `triage`, `report`.
+| tool | what the agent gets |
+|---|---|
+| `seamcheck_check` | every finding, with counts and what is new since the last scan |
+| `seamcheck_explain` | one symbol: where it is, how it was reached, why it is classified so |
+| `seamcheck_report` | the digest as markdown, to paste into a PR |
+| `seamcheck_triage` | records "this one is fine, and here is why", so it stops being raised |
+
+The server talks over stdin/stdout — no port, no daemon. Run it with the agent's working
+directory set to the project root. **For a Django project it has to run inside that
+project's virtualenv**, for the same reason the CLI does: it reads the project by importing
+it. Every other backend is read from source, so anywhere works.
+
+The tools are thin wrappers over the same functions the CLI runs. If the agent and your
+terminal ever disagreed, neither would be worth trusting.
 
 ## In CI, if you want it there
 
@@ -234,9 +324,15 @@ markdown digest you can post as a PR comment with `--format markdown`.
 
 Routes built at runtime from variables. Elements a framework renders from components rather
 than templates — React and Vue handlers are props, not listeners, and the trail stops at the
-module boundary. Anything reached only by a string the scan cannot resolve.
+module boundary. Anything reached only by a string it cannot resolve.
 
-It says `uncertain` in all of those cases instead of guessing.
+In the data layer: **Firestore collections**, because Firestore has no schema and there is
+nothing in your files that declares one — only the rules are checked. **Storage buckets**,
+which are usually created in a dashboard rather than in the repo. And a Redis key whose name
+is assembled from variables end to end.
+
+It says `uncertain` in all of those cases instead of guessing. That is the whole discipline:
+`uncertain` is a real answer, and it is why the other three can be trusted.
 
 ## Contributing
 
