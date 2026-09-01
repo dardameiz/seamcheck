@@ -32,39 +32,130 @@ _COLUMNS = [
 ]
 
 _CSS = """
-:root {
-  /* A developer tool should look like the thing it reads. Cool neutrals rather than warm
-     paper, one saturated accent, and four status hues that stay distinguishable when a
-     node is 4px tall at full-page zoom - which is where most of this map is read. */
-  --bg:#f7f8fa; --panel:#ffffff; --sunk:#eef0f4;
-  --ink:#0f1319; --muted:#5a6473; --line:#dfe3ea;
-  --sig:#0b6bcb; --sig-fill:#e7f0fb; --sig-fill-hi:#d5e6f8;
-  /* Four statuses, four hues that survive being 4px tall. `unused` was #9a6410 - a dark
-     amber that reads as another red next to #c0362c, so the two categories a reader is
-     meant to triage differently looked like one. It is violet now: no red in it at all,
-     distinct from the green and the blue-grey, and still legible on white. */
-  --ok:#1a7f4b; --crit:#d1332a; --warn:#7c3aed; --dim:#8b95a5;
-  --ok-fill:#e6f4ec; --crit-fill:#fdeae8; --warn-fill:#f1ebfe; --dim-fill:#eef0f4;
+/* ═══════════════════════════════════════════════════════════════════════
+   FIVE PACKS. A pack is a complete world - palette, faces, corner radius,
+   easing, wire weight - declared as custom properties on [data-pack]. Nothing
+   below this block hard-codes a colour or a face, so switching packs re-skins
+   the canvas, the panels and the terminal-ish surfaces in one repaint.
+
+   AURORA is the default: dark grounds read better for a graph of hairlines,
+   and a dark theme with no chroma in it reads as nothing at all. The other
+   four are one keypress away.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* ── AURORA (default) — deep indigo with real chroma. Dark, but alive. ── */
+:root, :root[data-pack="aurora"] {
+  --bg:#080a1a; --panel:#101430; --sunk:#0b0e22; --line:#232a55; --line-2:#39417a;
+  --ink:#eef1ff; --muted:#7b83b8;
+  --sig:#7c6cff; --sig-fill:#1c1a44; --sig-fill-hi:#282456;
+  --ok:#2ee6a8; --crit:#ff6b8a; --warn:#c07cff; --dim:#7b83b8;
+  --ok-fill:#0d2b23; --crit-fill:#301826; --warn-fill:#261a3a; --dim-fill:#171a34;
+  --font:"DM Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --display:"DM Sans",system-ui,sans-serif; --display-w:700; --display-ls:-.028em;
+  --r-pill:999px; --r-card:18px; --r-node:12px;
+  --ease:cubic-bezier(.34,1.4,.5,1); --dur:520ms;
+  --wire:2.2; --glow:0 0 22px; --grid:rgba(124,108,255,.07);
+  --shadow:0 2px 8px rgba(0,0,0,.5),0 18px 50px rgba(50,30,140,.28);
+  color-scheme:dark;
 }
-/* Guarded so an explicit light choice beats a dark OS, and repeated under
-   [data-theme="dark"] so the toggle wins in the other direction. Most readers never stamp
-   anything - the un-stamped document is the common case and it is this media query. */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg:#0d1117; --panel:#151b24; --sunk:#0a0e14;
-    --ink:#dde4ee; --muted:#8b97a8; --line:#252d38;
-    --sig:#4aa3ff; --sig-fill:#12243a; --sig-fill-hi:#183353;
-    --ok:#3fb27f; --crit:#f0736a; --warn:#a78bfa; --dim:#6f7b8c;
-    --ok-fill:#10281e; --crit-fill:#2c1618; --warn-fill:#211a35; --dim-fill:#161c24;
-  }
+/* ── BLUEPRINT — paper, ink, cobalt. A drawing office. ────────────────── */
+:root[data-pack="blueprint"] {
+  --bg:#fbfaf7; --panel:#ffffff; --sunk:#f2f0ea; --line:#ddd8cc; --line-2:#c8c2b2;
+  --ink:#141d2e; --muted:#7a8496;
+  --sig:#2b5ce6; --sig-fill:#e8eefc; --sig-fill-hi:#d7e2fa;
+  --ok:#0d8f68; --crit:#d94436; --warn:#7a4fd4; --dim:#8b93a3;
+  --ok-fill:#e4f4ef; --crit-fill:#fceceb; --warn-fill:#f0ebfb; --dim-fill:#eef0f4;
+  --font:"Archivo",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --display:"Archivo",system-ui,sans-serif; --display-w:700; --display-ls:-.032em;
+  --r-pill:999px; --r-card:12px; --r-node:5px;
+  --ease:cubic-bezier(.2,.9,.25,1); --dur:320ms;
+  --wire:2; --glow:0 0 0; --grid:rgba(43,92,230,.055);
+  --shadow:0 1px 2px rgba(20,29,46,.07),0 10px 28px rgba(20,29,46,.06);
+  color-scheme:light;
 }
-:root[data-theme="dark"] {
-    --bg:#0d1117; --panel:#151b24; --sunk:#0a0e14;
-    --ink:#dde4ee; --muted:#8b97a8; --line:#252d38;
-    --sig:#4aa3ff; --sig-fill:#12243a; --sig-fill-hi:#183353;
-    --ok:#3fb27f; --crit:#f0736a; --warn:#a78bfa; --dim:#6f7b8c;
-    --ok-fill:#10281e; --crit-fill:#2c1618; --warn-fill:#211a35; --dim-fill:#161c24;
+:root[data-pack="blueprint"][data-mode="dark"] {
+  --bg:#0d1424; --panel:#141d31; --sunk:#101728; --line:#22304c; --line-2:#33456a;
+  --ink:#eaf0fb; --muted:#7f8da6;
+  --sig:#6d9bff; --sig-fill:#16233d; --sig-fill-hi:#1e3050;
+  --ok:#33c795; --crit:#f2705f; --warn:#a184f0; --dim:#8b93a3;
+  --ok-fill:#0e2a22; --crit-fill:#2d1a1a; --warn-fill:#221c38; --dim-fill:#161c26;
+  --grid:rgba(110,150,255,.07);
+  --shadow:0 1px 2px rgba(0,0,0,.45),0 10px 28px rgba(0,0,0,.3);
+  color-scheme:dark;
 }
+/* ── PHOSPHOR — the terminal, on the wall. One face doing every job. ──── */
+:root[data-pack="phosphor"] {
+  --bg:#080b09; --panel:#0e120f; --sunk:#0b0e0c; --line:#1e2a22; --line-2:#2f4438;
+  --ink:#d6f5e3; --muted:#5c8a70;
+  --sig:#4ee88f; --sig-fill:#0e2318; --sig-fill-hi:#143121;
+  --ok:#4ee88f; --crit:#ff5f56; --warn:#ffb833; --dim:#5c8a70;
+  --ok-fill:#0e2318; --crit-fill:#2a1210; --warn-fill:#2a2010; --dim-fill:#131d17;
+  --font:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --display:"JetBrains Mono",monospace; --display-w:700; --display-ls:-.02em;
+  --r-pill:4px; --r-card:4px; --r-node:2px;
+  --ease:steps(5,end); --dur:180ms;
+  --wire:1.6; --glow:0 0 14px; --grid:rgba(78,232,143,.05);
+  --shadow:0 0 0 1px rgba(78,232,143,.07);
+  color-scheme:dark;
+}
+/* ── SIGNAL — warm paper, editorial serif, one loud orange. ───────────── */
+:root[data-pack="signal"] {
+  --bg:#f8f5ef; --panel:#fffdf9; --sunk:#efeae0; --line:#ded6c8; --line-2:#c3b8a4;
+  --ink:#241d18; --muted:#867a6c;
+  --sig:#e8532a; --sig-fill:#fceee9; --sig-fill-hi:#fae0d7;
+  --ok:#177f6f; --crit:#c62f26; --warn:#7a3fa8; --dim:#8a7f72;
+  --ok-fill:#e3f1ee; --crit-fill:#fbeae8; --warn-fill:#f1eaf8; --dim-fill:#eeeae3;
+  --font:"DM Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"Space Mono",ui-monospace,Menlo,monospace;
+  --display:"Instrument Serif",Georgia,"Times New Roman",serif;
+  --display-w:400; --display-ls:-.012em;
+  --r-pill:999px; --r-card:16px; --r-node:16px;
+  --ease:cubic-bezier(.16,1,.3,1); --dur:640ms;
+  --wire:2.4; --glow:0 0 0; --grid:rgba(36,29,24,.045);
+  --shadow:0 1px 2px rgba(36,29,24,.06),0 14px 34px rgba(36,29,24,.07);
+  color-scheme:light;
+}
+:root[data-pack="signal"][data-mode="dark"] {
+  --bg:#181310; --panel:#221b16; --sunk:#141009; --line:#3a2f26; --line-2:#584839;
+  --ink:#f6efe6; --muted:#9a8b7c;
+  --sig:#ff7a4d; --sig-fill:#33201a; --sig-fill-hi:#442a20;
+  --ok:#3fbfa8; --crit:#f2705f; --warn:#b98ae0; --dim:#9a8b7c;
+  --ok-fill:#122b27; --crit-fill:#301a17; --warn-fill:#291f36; --dim-fill:#1e1812;
+  --grid:rgba(246,239,230,.04);
+  --shadow:0 1px 2px rgba(0,0,0,.5),0 14px 34px rgba(0,0,0,.35);
+  color-scheme:dark;
+}
+/* ── SLATE — the one you take to a procurement meeting. ───────────────── */
+:root[data-pack="slate"] {
+  --bg:#f7f9fb; --panel:#ffffff; --sunk:#eef2f6; --line:#dce3ea; --line-2:#bcc7d2;
+  --ink:#0f1b2a; --muted:#6b7a8c;
+  --sig:#3b5bdb; --sig-fill:#eaeefc; --sig-fill-hi:#dae1fa;
+  --ok:#0d8050; --crit:#c0362c; --warn:#6741d9; --dim:#7a8899;
+  --ok-fill:#e4f2eb; --crit-fill:#fbeae8; --warn-fill:#eeeafb; --dim-fill:#eef1f5;
+  --font:"Inter Tight",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --display:"Inter Tight",system-ui,sans-serif; --display-w:600; --display-ls:-.024em;
+  --r-pill:8px; --r-card:10px; --r-node:4px;
+  --ease:cubic-bezier(.4,0,.2,1); --dur:240ms;
+  --wire:1.8; --glow:0 0 0; --grid:rgba(15,27,42,.038);
+  --shadow:0 1px 2px rgba(15,27,42,.06),0 6px 18px rgba(15,27,42,.05);
+  color-scheme:light;
+}
+:root[data-pack="slate"][data-mode="dark"] {
+  --bg:#0d1420; --panel:#151e2c; --sunk:#101825; --line:#243244; --line-2:#38495e;
+  --ink:#e8eef5; --muted:#7f8ea1;
+  --sig:#7b93ff; --sig-fill:#1a2340; --sig-fill-hi:#233054;
+  --ok:#3ecb92; --crit:#f2705f; --warn:#a68cf5; --dim:#7f8ea1;
+  --ok-fill:#102b22; --crit-fill:#2d1a17; --warn-fill:#231d3a; --dim-fill:#17202c;
+  --grid:rgba(232,238,245,.04);
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.32);
+  color-scheme:dark;
+}
+/* Aurora and Phosphor are single-world designs on purpose - a light Aurora is not Aurora.
+   The light/dark control hides itself for them rather than offering a worse version. */
 * { box-sizing:border-box; }
 /* An author `display` beats the UA rule that [hidden] relies on, so el.hidden = true read
    back as true while the zoom buttons and the breadcrumb stayed on screen over the panel. */
@@ -77,11 +168,10 @@ _CSS = """
 body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overflow:hidden;
        overscroll-behavior:none;
        height:100dvh; -webkit-font-smoothing:antialiased;
-       font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+       font-family:var(--font); }
 /* Every value the scan read is shown in the font it was written in. */
 .mono, #crumb, .meta, .hf, .hl, .row .t, .row .w, .tree, .fl, .covn,
-.filters select, #q, .badge, .pill { font-family:ui-monospace,SFMono-Regular,Menlo,
-       "Cascadia Mono","Roboto Mono",monospace; }
+.filters select, #q, .badge, .pill { font-family:var(--mono); }
 .shell { display:flex; height:100%; }
 .content { flex:1 1 auto; min-width:0; display:flex; flex-direction:column; }
 /* The rail is the desktop's navigation. A phone has no room for it and uses the VIEW
@@ -90,11 +180,10 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overf
 .top { flex:none; background:var(--panel); border-bottom:1px solid var(--line); }
 .brand { display:flex; align-items:center; gap:9px; padding:8px 12px 6px; }
 .brand b { font-size:14px; }
-/* The theme control ends the header row, so it is present on every view - it used to sit
-   inside the status row, which four views out of five hide. */
-.brand .tmode { margin-left:auto; }
+/* The appearance control ends the header row, so it is present on every view - it used to
+   sit inside the status row, which four views out of five hide. */
 .brand .meta { color:var(--muted); font-size:11px; overflow:hidden; white-space:nowrap;
-               text-overflow:ellipsis; font-family:ui-monospace,Menlo,monospace; }
+               text-overflow:ellipsis; font-family:var(--mono); }
 
 /* Two filters, side by side: what changed on the left, where to look on the right. */
 .filters { display:flex; gap:8px; padding:0 12px 8px; }
@@ -120,7 +209,7 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overf
 /* A filter that matched nothing used to grey all 1,450 nodes and say nothing at all, so
    the map looked broken rather than empty. It says how many matched. */
 .qn { flex:none; font-size:11px; color:var(--muted); white-space:nowrap;
-      font-family:ui-monospace,Menlo,monospace; }
+      font-family:var(--mono); }
 .qn.none { color:var(--crit); }
 /* Always on screen. A reader should never have to hunt for what a colour claims, and the
    four statuses are the whole contract this tool makes. */
@@ -185,9 +274,42 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overf
 .nothing { position:absolute; inset:auto 12px 78px; text-align:center; pointer-events:none;
   color:var(--muted); font-size:13px; display:grid; gap:4px; }
 .nothing b { color:var(--ink); font-size:15px; font-weight:600; }
-/* A word, not a symbol: the glyph needed a tooltip to explain itself, and a phone has
-   no tooltip. Fixed width so cycling Dark/Light/Auto does not shift the header. */
-.tmode { flex:none; min-width:58px; height:30px; border-radius:8px; border:1px solid var(--line);
+/* A word, not a symbol: the glyph needed a tooltip to explain itself, and a phone has no
+   tooltip. It names the pack now, and opens the picker. */
+.packwrap { position:relative; flex:none; margin-left:auto; }
+.packmenu {
+  position:absolute; top:calc(100% + 8px); right:0; width:262px; z-index:40;
+  background:var(--panel); border:1px solid var(--line); border-radius:var(--r-card);
+  box-shadow:var(--shadow); padding:6px;
+  opacity:0; transform:translateY(-6px) scale(.98); pointer-events:none;
+  transition:opacity var(--dur) var(--ease), transform var(--dur) var(--ease);
+}
+.packmenu.open { opacity:1; transform:none; pointer-events:auto; }
+.packmenu .pk {
+  display:flex; align-items:center; gap:11px; width:100%; padding:8px 9px; cursor:pointer;
+  border:0; background:none; border-radius:calc(var(--r-card) - 3px); text-align:left;
+  font-family:var(--font); color:var(--ink); transition:background 140ms var(--ease);
+}
+.packmenu .pk:hover { background:var(--sunk); }
+.packmenu .pk[aria-current="true"] { background:var(--sig-fill); }
+.packmenu .sw { display:flex; width:44px; height:19px; border-radius:999px; overflow:hidden;
+                flex:none; border:1px solid var(--line); }
+.packmenu .sw i { flex:1; }
+.packmenu .pkn { display:flex; flex-direction:column; line-height:1.25; min-width:0; }
+.packmenu .pkn b { font-size:13px; font-weight:600; }
+.packmenu .pkn em { font-style:normal; font-size:10.5px; color:var(--muted);
+                    font-family:var(--mono); }
+.packmenu .modes { display:flex; align-items:center; gap:6px; padding:9px 9px 5px;
+                   margin-top:5px; border-top:1px solid var(--line); }
+.packmenu .mlbl { font-size:10px; letter-spacing:.13em; text-transform:uppercase;
+                  color:var(--muted); font-family:var(--mono); margin-right:auto; }
+.packmenu .modes button {
+  border:1px solid var(--line); background:var(--bg); color:var(--muted); cursor:pointer;
+  border-radius:var(--r-pill); padding:4px 12px; font-family:var(--mono); font-size:11.5px;
+}
+.packmenu .modes button[aria-current="true"] { border-color:var(--sig); color:var(--sig);
+  background:var(--sig-fill); }
+.tmode { flex:none; min-width:70px; height:30px; border-radius:8px; border:1px solid var(--line);
   background:var(--panel); color:var(--muted); font-size:12px; cursor:pointer; line-height:1;
   font-family:inherit; padding:0 10px; }
 .tmode:hover { color:var(--ink); border-color:var(--sig); }
@@ -253,7 +375,7 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
 .gone:empty { display:none; }
 .gone b { display:block; font-size:9.5px; text-transform:uppercase; letter-spacing:.09em;
           color:var(--muted); margin-bottom:3px; font-weight:500; }
-.gone .ch { font-family:ui-monospace,Menlo,monospace; word-break:break-all;
+.gone .ch { font-family:var(--mono); word-break:break-all;
             margin-bottom:3px; color:var(--ink); }
 .gone .ch i { display:inline-block; min-width:62px; font-style:normal; font-size:10px;
               text-transform:uppercase; letter-spacing:.05em; }
@@ -269,7 +391,7 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
 #cv.drag { cursor:grabbing; }
 .nd rect { stroke-width:1.5; }
 .nd text { font-size:10.5px; fill:var(--ink); pointer-events:none; letter-spacing:-.1px;
-           font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+           font-family:var(--mono); }
 .nd { cursor:pointer; }
 .nd.faded { opacity:.10; }
 #cv.nolabels .nd text { display:none; }
@@ -277,7 +399,7 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
 .ed { fill:none; stroke-width:1.1; opacity:.38; }
 .ed.faded { opacity:.05; }
 .col { font-size:9.5px; fill:var(--muted); text-transform:uppercase; letter-spacing:.1em;
-       font-family:ui-monospace,Menlo,monospace; }
+       font-family:var(--mono); }
 
 .zoom { position:absolute; left:10px; bottom:10px; display:flex; gap:6px; z-index:2; }
 .zoom button, .key { width:40px; height:40px; font-size:15px; line-height:1;
@@ -297,7 +419,7 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
          overflow-y:auto; box-shadow:0 -6px 24px -18px rgba(0,0,0,.6); }
 .sheet h2 { font-size:13px; margin:0 26px 6px 0; word-break:break-all; }
 .sheet .row { color:var(--muted); font-size:12px; margin-bottom:4px;
-              font-family:ui-monospace,Menlo,monospace; word-break:break-all; }
+              font-family:var(--mono); word-break:break-all; }
 .sheet .note { padding:0; margin-top:8px; font-family:inherit; }
 .acts { margin:8px 0 4px; }
 .acts button { padding:7px 11px; font-size:12.5px; border-radius:8px; cursor:pointer;
@@ -317,12 +439,12 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
            letter-spacing:0; }
 .hop.at .hn { background:var(--sig); color:#fff; }
 .hop .hs { color:var(--muted); font-size:9px; letter-spacing:.04em; }
-.hop .hl { font-size:12.5px; font-family:ui-monospace,Menlo,monospace; word-break:break-all; }
+.hop .hl { font-size:12.5px; font-family:var(--mono); word-break:break-all; }
 .hop.at { background:var(--sunk);
           border-radius:0 7px 7px 0; }
 .hop.at .hl { font-weight:700; color:var(--sig); }
 .hop .hf { font-size:11px; color:var(--muted); word-break:break-all;
-           font-family:ui-monospace,Menlo,monospace; }
+           font-family:var(--mono); }
 .hop button.code { margin-top:5px; padding:3px 9px; font-size:11px; border-radius:6px;
                    border:1px solid var(--line); background:var(--bg); color:var(--sig);
                    cursor:pointer; }
@@ -333,13 +455,13 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
             flex-direction:column; overflow:hidden; }
 .codehead { display:flex; align-items:center; gap:10px; padding:11px 14px;
             border-bottom:1px solid var(--line); font-size:12px; color:var(--muted);
-            font-family:ui-monospace,Menlo,monospace; word-break:break-all; }
+            font-family:var(--mono); word-break:break-all; }
 .codehead button { margin-left:auto; flex:none; width:30px; height:30px; border-radius:8px;
                    border:1px solid var(--line); background:var(--bg); color:var(--ink);
                    cursor:pointer; }
 #codebody { margin:0; padding:14px 0; overflow:auto; font-size:12px; line-height:1.7;
             background:var(--sunk); color:var(--ink); white-space:pre;
-            font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+            font-family:var(--mono); }
 #codebody { tab-size:4; }
 /* The listing. A grid rather than a <pre> so the gutter can carry a status stripe without
    the line numbers being selectable along with the code a reader wants to copy. */
@@ -403,9 +525,9 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
                               color:var(--ink); }
 .row { background:var(--panel); border:1px solid var(--line); border-radius:9px;
        padding:9px 11px; margin-bottom:7px; }
-.row .t { font-size:13px; font-family:ui-monospace,Menlo,monospace; word-break:break-all; }
+.row .t { font-size:13px; font-family:var(--mono); word-break:break-all; }
 .row .w { color:var(--muted); font-size:11.5px; word-break:break-all;
-          font-family:ui-monospace,Menlo,monospace; }
+          font-family:var(--mono); }
 .row .n { color:var(--muted); font-size:12px; margin-top:4px; }
 .badge, .pill { display:inline-block; font-size:9.5px; text-transform:uppercase;
                 letter-spacing:.06em; border:1px solid transparent; border-radius:5px;
@@ -477,7 +599,7 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
 .wbar em { position:absolute; right:0; top:0; height:100%; background:var(--crit);
            display:block; }
 .wnum { text-align:right; font-size:13px; font-variant-numeric:tabular-nums;
-        font-family:ui-monospace,Menlo,monospace; }
+        font-family:var(--mono); }
 .wnum.hot { color:var(--crit); font-weight:700; }
 .wnum.cool { color:var(--muted); }
 
@@ -503,7 +625,7 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
            padding:7px 13px; border-radius:8px; border:1px solid #ea4aaa;
            color:#ea4aaa !important; }
 .sponsor:hover { background:var(--sig-fill); }
-.tree { font-family:ui-monospace,Menlo,monospace; font-size:12.5px; }
+.tree { font-family:var(--mono); font-size:12.5px; }
 .tree summary { cursor:pointer; padding:3px 0; color:var(--muted); }
 .fl { display:flex; align-items:center; gap:8px; padding:3px 0; cursor:pointer;
       border-radius:6px; }
@@ -512,7 +634,7 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
    `open` link that left for VS Code - so the one thing the view exists for read as the
    secondary one. Named, and on hover it is the loud half of the row. */
 .fl .go { flex:none; margin-left:auto; color:var(--sig); font-size:11px; opacity:0;
-          font-family:ui-monospace,Menlo,monospace; }
+          font-family:var(--mono); }
 .fl:hover .go { opacity:1; }
 .fl .edit { flex:none; font-size:11px; opacity:.55; }
 .fl:hover .edit { opacity:1; }
@@ -549,7 +671,7 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
 .doc ol, .doc ul { margin:0 0 12px; padding-inline-start:20px; }
 .doc li { margin-bottom:6px; }
 .doc code { background:var(--sunk); border-radius:4px; padding:1px 5px; font-size:12px;
-            font-family:ui-monospace,Menlo,monospace; }
+            font-family:var(--mono); }
 .caveat { border-inline-start:3px solid var(--warn); background:var(--warn-fill);
           padding:10px 12px; border-radius:0 7px 7px 0; font-size:12.5px;
           line-height:1.55; margin:0 0 14px; color:var(--ink); }
@@ -572,7 +694,7 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
   .nv[aria-current="true"] { background:var(--sunk); box-shadow:inset 2px 0 0 var(--sig);
                              color:var(--sig); font-weight:600; }
   .nv .c { color:var(--muted); font-size:11px; font-variant-numeric:tabular-nums;
-           font-family:ui-monospace,Menlo,monospace; }
+           font-family:var(--mono); }
   .sheet { left:auto; right:0; width:380px; top:0; bottom:auto; max-height:100%;
            border-top:0; border-left:1px solid var(--line); }
 }
@@ -989,24 +1111,87 @@ syncStatusKey();
 // colours were chosen against - and because a reader on a light phone was getting the pale
 // variant with no idea a better one existed. The system setting is still reachable, it is
 // just no longer the thing that decides.
-const themes = ["dark", "light", "auto"];
+// Five packs. A pack is a whole world - palette, faces, radii, easing - and switching one
+// is a single attribute on the root element. Aurora is the default because a graph of
+// hairlines reads better on a dark ground, and because a dark theme with no chroma in it
+// (which is what this map had) reads as nothing at all.
+const PACKS = [
+  ["aurora",    "Aurora",    "indigo · violet · mint",     false],
+  ["blueprint", "Blueprint", "paper · ink · cobalt",       true],
+  ["phosphor",  "Phosphor",  "terminal · green · amber",   false],
+  ["signal",    "Signal",    "sand · espresso · orange",   true],
+  ["slate",     "Slate",     "neutral · indigo · dense",   true],
+];
+const PACK_SWATCH = {
+  aurora:["#080a1a","#7c6cff","#2ee6a8","#ff6b8a"],
+  blueprint:["#fbfaf7","#2b5ce6","#141d2e","#d94436"],
+  phosphor:["#080b09","#4ee88f","#ffb833","#ff5f56"],
+  signal:["#f8f5ef","#e8532a","#241d18","#177f6f"],
+  slate:["#f7f9fb","#3b5bdb","#0f1b2a","#0d8050"],
+};
 const tmode = document.getElementById("tmode");
-let themeAt = 0;
+const packmenu = document.getElementById("packmenu");
+let packNow = "aurora", modeNow = "light";
 try {
-  const saved = localStorage.getItem("seamcheck-theme");
-  if (saved && themes.includes(saved)) themeAt = themes.indexOf(saved);
-} catch { /* private window, or storage refused: the system default is fine */ }
+  const p = localStorage.getItem("seamcheck-pack");
+  if (p && PACKS.some(([k]) => k === p)) packNow = p;
+  const m = localStorage.getItem("seamcheck-mode");
+  if (m === "dark" || m === "light") modeNow = m;
+} catch { /* private window, or storage refused: the default pack is fine */ }
+
+function hasModes(k) { return (PACKS.find(([p]) => p === k) || [])[3]; }
+
 function applyTheme() {
-  const mode = themes[themeAt];
-  if (mode === "auto") document.documentElement.removeAttribute("data-theme");
-  else document.documentElement.setAttribute("data-theme", mode);
-  tmode.textContent = mode === "auto" ? "Auto" : mode === "dark" ? "Dark" : "Light";
-  tmode.title = "Theme: " + mode + " \u2014 tap to change";
+  const root = document.documentElement;
+  root.setAttribute("data-pack", packNow);
+  // A light Aurora is not Aurora, and a light Phosphor is a text editor. Those two are
+  // single-world designs; offering a worse second version of them is not a kindness.
+  if (hasModes(packNow)) root.setAttribute("data-mode", modeNow);
+  else root.removeAttribute("data-mode");
+  const name = (PACKS.find(([k]) => k === packNow) || [, packNow])[1];
+  tmode.textContent = name;
+  tmode.title = "Appearance: " + name + " — tap to change";
+  if (packmenu) {
+    packmenu.querySelectorAll("[data-pk]").forEach(b =>
+      b.setAttribute("aria-current", b.dataset.pk === packNow));
+    const row = packmenu.querySelector(".modes");
+    if (row) {
+      row.hidden = !hasModes(packNow);
+      row.querySelectorAll("[data-md]").forEach(b =>
+        b.setAttribute("aria-current", b.dataset.md === modeNow));
+    }
+  }
+  // The canvas re-reads the pack's wire weight and corner radius on the next draw.
+  if (window.draw && typeof current !== "undefined") requestAnimationFrame(() => draw());
 }
-tmode.addEventListener("click", () => {
-  themeAt = (themeAt + 1) % themes.length;
-  try { localStorage.setItem("seamcheck-theme", themes[themeAt]); } catch { /* fine */ }
-  applyTheme();
+
+if (packmenu) {
+  packmenu.innerHTML =
+    PACKS.map(([k, name, tag]) =>
+      `<button type="button" class="pk" data-pk="${k}">
+         <span class="sw">${PACK_SWATCH[k].map(c =>
+           `<i style="background:${c}"></i>`).join("")}</span>
+         <span class="pkn"><b>${name}</b><em>${tag}</em></span>
+       </button>`).join("") +
+    `<div class="modes"><span class="mlbl">Ground</span>
+       <button type="button" data-md="light">Light</button>
+       <button type="button" data-md="dark">Dark</button></div>`;
+  packmenu.addEventListener("click", e => {
+    const pk = e.target.closest("[data-pk]"), md = e.target.closest("[data-md]");
+    if (pk) { packNow = pk.dataset.pk;
+      try { localStorage.setItem("seamcheck-pack", packNow); } catch { /* fine */ } }
+    if (md) { modeNow = md.dataset.md;
+      try { localStorage.setItem("seamcheck-mode", modeNow); } catch { /* fine */ } }
+    if (pk || md) applyTheme();
+    e.stopPropagation();
+  });
+}
+tmode.addEventListener("click", e => {
+  e.stopPropagation();
+  if (packmenu) packmenu.classList.toggle("open");
+});
+document.addEventListener("click", () => {
+  if (packmenu) packmenu.classList.remove("open");
 });
 applyTheme();
 
@@ -3041,9 +3226,24 @@ def render(connectivity_map: ConnectivityMap, console=None, files=None,
     )
     return "\n".join([
         "<!doctype html>",
-        '<html lang="en"><head><meta charset="utf-8">',
+        # The pack is stamped on the root so `body` and every panel inherit it, and it is
+        # stamped in the markup rather than by script so the first paint is already Aurora
+        # rather than a flash of something else.
+        '<html lang="en" data-pack="aurora"><head><meta charset="utf-8">',
         '<meta name="viewport" content="width=device-width, initial-scale=1, '
         'viewport-fit=cover">',
+        # Every pack names real faces. They are loaded with a full local fallback stack, so
+        # a map opened on a plane degrades to system type and still reads as itself.
+        '<link rel="preconnect" href="https://fonts.googleapis.com">'
+        '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+        '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?'
+        'family=Archivo:wght@400;500;600;700&'
+        'family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&'
+        'family=IBM+Plex+Mono:wght@400;500;600&'
+        'family=Instrument+Serif&'
+        'family=JetBrains+Mono:wght@400;500;700&'
+        'family=Inter+Tight:wght@400;500;600;700&'
+        'family=Space+Mono:wght@400;700&display=swap">',
         f"<title>Seamcheck — {_esc(connectivity_map.git_sha[:12])}</title>",
         f"<style>{_CSS}</style></head><body>",
         '<div class="shell"><aside class="rail">'
@@ -3055,7 +3255,9 @@ def render(connectivity_map: ConnectivityMap, console=None, files=None,
         f'<div class="brand"><b>Seamcheck</b>'
         f'<span class="meta">HEAD {_esc(connectivity_map.git_sha[:12])} · {_esc(mode)}'
         f'{_adapter_label(adapters)}</span>'
-        '<button type="button" class="tmode" id="tmode" aria-label="Theme">\u25d1</button>'
+        '<span class="packwrap">'
+        '<button type="button" class="tmode" id="tmode" aria-label="Appearance">Aurora</button>'
+        '<div class="packmenu" id="packmenu"></div></span>'
         f"</div>",
         # Direction A: the number a reader came for, at a size that says so, with the
         # trend beside it. Everything else folds into the pill at the bottom of the canvas.
