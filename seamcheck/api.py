@@ -153,6 +153,47 @@ def scan(
     return _with_observations(scanned, repo_root)
 
 
+def _observed_payload(repo_root: str, sha: str) -> dict:
+    rows, at = _observations(repo_root, sha)
+    return {
+        "at": at,
+        "current": at == sha,
+        # A page with 3,000 boxes is not more informative than one with 500, and it is six
+        # times the payload. The biggest elements come first, so the cap keeps structure.
+        "pages": [
+            {"page": o.page, "screenshot": o.screenshot,
+             "boxes": sorted(o.boxes, key=lambda b: -(b.get("w", 0) * b.get("h", 0)))[:500]}
+            for o in rows if o.boxes
+        ],
+    }
+
+
+def _observations(repo_root: str, sha: str) -> tuple[list, str]:
+    """What a browser saw, and which commit it saw it at.
+
+    Observations are keyed by commit on purpose - a page exercised against a different
+    version of the code is a different page. But refusing to show anything but today's
+    commit means the view is empty for everyone who has not run `observe` in the last five
+    minutes, which is everyone. So the newest recording is used and the commit it came from
+    is returned with it, to be SAID rather than hidden.
+    """
+    from seamcheck import observe
+
+    try:
+        current = observe.load(repo_root, sha)
+        if current:
+            return current, sha
+        folder = pathlib.Path(repo_root, observe._STORE_DIR)
+        files = sorted(folder.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True)
+        for path in files:
+            rows = observe.load(repo_root, path.stem)
+            if rows:
+                return rows, path.stem
+    except (OSError, ValueError, AttributeError):
+        pass
+    return [], sha
+
+
 def _with_observations(graph: Graph, repo_root: str) -> Graph:
     """Fold in browser evidence recorded for THIS commit, if any exists.
 
@@ -435,6 +476,11 @@ def _render_map(repo_root: str, ref: str, progress: Progress | None = None) -> s
              "declarations": record.declarations, "known": record.known}
             for record in build_file_tree(graph, js_entry_files)
         ],
+        # What a browser actually saw, if `seamcheck observe` has been run: one entry per
+        # page, with the position and size of every element big enough to point at. This is
+        # the other half of the picture - the scan says what the code declares, and this
+        # says what the page put on screen.
+        observed=_observed_payload(repo_root, sha),
         repo_root=os.path.abspath(repo_root),
         editor=_config().get("editor"),
         series=series,

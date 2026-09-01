@@ -622,6 +622,24 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
 #cv .mt { font-size:14px; fill:var(--ink); }
 #cv .mt.sub { font-size:13px; fill:var(--muted); }
 #cv .mt tspan.hl { fill:var(--sig); }
+/* The page as the browser laid it out. Boxes at true proportions, coloured by what the
+   scan says - the two views of one page, side by side in one picture. */
+.obwrap { border:1px solid var(--line); border-radius:var(--r-card); background:var(--sunk);
+          padding:10px; overflow:auto; max-height:64dvh; }
+.obshot { width:100%; height:auto; display:block; }
+.obshot .ob { fill:transparent; stroke:var(--dim); stroke-width:1.5; }
+.obshot .ob-connected { stroke:var(--ok); fill:var(--ok-fill); fill-opacity:.35; }
+.obshot .ob-unresolved { stroke:var(--crit); fill:var(--crit-fill); fill-opacity:.5; }
+.obshot .ob-unused { stroke:var(--warn); fill:var(--warn-fill); fill-opacity:.45; }
+.obshot .ob-uncertain { stroke:var(--dim); stroke-dasharray:3 3; }
+.obshot .ob-unknown { stroke:var(--line-2); stroke-dasharray:2 4; }
+.obshot .ob:hover { stroke-width:3; }
+.obkey { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:10px; }
+.obk { display:inline-flex; align-items:center; gap:6px; font-family:var(--mono);
+       font-size:11.5px; color:var(--muted); }
+.obk i { width:9px; height:9px; border-radius:2px; border:1.5px solid currentColor; }
+.obk.ob-connected { color:var(--ok); } .obk.ob-unresolved { color:var(--crit); }
+.obk.ob-unused { color:var(--warn); } .obk.ob-uncertain,.obk.ob-unknown { color:var(--dim); }
 /* Two lines per card: the name, then what it is. */
 .nd .sub { font-size:9.5px; fill:var(--muted); }
 .nd .big { font-size:19px; font-weight:600; fill:var(--ink);
@@ -1009,6 +1027,9 @@ const CH = {added:"var(--ok)", removed:"var(--crit)", status:"var(--warn)"};
 // real scan). Expanded once, here, into exactly the objects the rest of this script has
 // always read - so the wire format is a detail of loading and of nothing else.
 const COLS = MAPDATA.columns, COMMITS = MAPDATA.commits || [];
+// Declared up here because the menu is built long before the view that draws it, and a
+// `const` read above its declaration is a dead zone, not an undefined.
+const OBS_PAGES = (typeof OBSERVED !== "undefined" && OBSERVED.pages) || [];
 // Three regions and a strip, named the way a person would name them rather than by the
 // kind of symbol that happens to land there. A reader opening this map for the first time
 // does not know what a `dom_attr` is and should not have to.
@@ -2602,18 +2623,20 @@ const OPENS_ON = "overview";
 //
 // They are Layer values now. The menu answers "what am I doing", the Layer answers "which
 // part of it", and neither pretends to be the other.
-const MENU = ["overview", "map", "findings", "files", "changes"];
+const MENU = ["overview", "map", "page", "findings", "files", "changes"];
 const SECTION_BY_KEY = Object.fromEntries((D.sections || []).map(sec => [sec.key, sec]));
 
 function menuCount(key) {
+  if (key === "page") return OBS_PAGES.length || null;
   if (key === "files") return FILES.length;
   const sec = SECTION_BY_KEY[key];
   if (!sec || sec.unavailable) return null;
   return sec.total ?? sec.rows.length;
 }
 
-const TITLES = {overview: "Overview", map: "Map", files: "Files"};
-const VIEWS = MENU.map(key => ({
+const TITLES = {overview: "Overview", map: "Map", files: "Files",
+                page: "The page a browser saw"};
+const VIEWS = MENU.filter(key => key !== "page" || OBS_PAGES.length).map(key => ({
   key,
   title: TITLES[key] || (SECTION_BY_KEY[key] || {}).title || key,
   count: key === "overview" || key === "map" ? null : menuCount(key),
@@ -2971,6 +2994,116 @@ async function loadInventory() {
   renderPanel();
 }
 
+// ── What a browser actually saw ───────────────────────────────────────────
+// The scan reads what the code DECLARES. This is the other half: `seamcheck observe`
+// drives the real pages with Playwright and records where every element ended up. Drawn
+// at true proportions and coloured by what the graph says about each one, it is the same
+// page from the two sides at once - what a person sees, and what we see from the backend.
+let observedAt = 0;
+
+// An observed box carries an id and a class list; a graph symbol carries a label and a
+// kind. They meet on the name.
+// The recorder writes `cls` as an array; older files wrote a string. Both are read.
+function classList(box) {
+  const c = box.cls;
+  if (Array.isArray(c)) return c.filter(Boolean);
+  return String(c || "").split(/\s+/).filter(Boolean);
+}
+
+function symbolForBox(box) {
+  if (box.id) {
+    const byIdHit = OBS_INDEX.get("id:" + box.id);
+    if (byIdHit) return byIdHit;
+  }
+  for (const cls of classList(box)) {
+    const hit = OBS_INDEX.get("class:" + cls);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+let _obsIndex = null;
+const OBS_INDEX = {
+  get: key => {
+    if (!_obsIndex) {
+      _obsIndex = new Map();
+      // An id matches an id and a class matches a class. Keying both against the same
+      // label made every Tailwind utility on the page "match" a template element with the
+      // same name, which is how the view reported 415 of 415 - a number that is a tell,
+      // not a result. The symbol id already carries which one it is:
+      //   dom_attr:class:main-push-area:template.html:1280
+      searchIndex().forEach(row => {
+        if (row.kind !== "dom_attr") return;
+        const sub = String(row.id).split(":")[1];
+        if (sub !== "id" && sub !== "class") return;
+        const k = sub + ":" + row.label;
+        // First wins, and a finding beats a clean one: if a name is declared in twelve
+        // templates the interesting copy is the one with something wrong with it.
+        const had = _obsIndex.get(k);
+        if (!had || (had.status === "connected" && row.status !== "connected")) {
+          _obsIndex.set(k, row);
+        }
+      });
+    }
+    return _obsIndex.get(key);
+  },
+};
+
+function observedHtml() {
+  if (!OBS_PAGES.length) {
+    return `<h2>The page a browser saw</h2>
+      <div class="gap">Nothing recorded yet. <code>seamcheck observe</code> drives your
+      pages in a real browser and writes down where every element ended up.</div>`;
+  }
+  const o = OBS_PAGES[Math.min(observedAt, OBS_PAGES.length - 1)];
+  const boxes = o.boxes || [];
+  const w = Math.max(320, ...boxes.map(b => b.x + b.w));
+  const h = Math.max(240, ...boxes.map(b => b.y + b.h));
+  const tally = {connected: 0, unresolved: 0, unused: 0, uncertain: 0, unknown: 0};
+  const drawn = boxes.map(b => {
+    const sym = symbolForBox(b);
+    const st = sym ? sym.status : "unknown";
+    tally[st] = (tally[st] || 0) + 1;
+    const name = b.id ? "#" + b.id : "." + (classList(b)[0] || "?");
+    return `<rect class="ob ob-${esc(st)}" x="${b.x}" y="${b.y}" width="${b.w}"
+      height="${b.h}" rx="3" data-sym="${sym ? esc(sym.id) : ""}"
+      data-page="${sym ? sym.page : ""}"><title>${esc(name)} — ${esc(st)}</title></rect>`;
+  }).join("");
+  const known = boxes.length - tally.unknown;
+  return `<h2>The page a browser saw</h2>
+    <p class="blurb">Every element <code>seamcheck observe</code> found on the real page,
+    at the size and place the browser put it — outlined by what the scan says about it.
+    <b>${known} of ${boxes.length}</b> match something in the graph. Click one to open it
+    on the map.${OBSERVED.current ? "" :
+      ` <b>Recorded at ${esc((OBSERVED.at || "").slice(0, 8))}</b>, not at this commit —
+        anything changed since is drawn from the older run.`}</p>
+    <div class="tools">
+      <select id="obpick">${OBS_PAGES.map((x, i) =>
+        `<option value="${i}"${i === observedAt ? " selected" : ""}>${esc(x.page)}</option>`
+      ).join("")}</select>
+    </div>
+    <div class="obkey">${["connected", "unresolved", "unused", "uncertain"]
+      .filter(k => tally[k]).map(k =>
+        `<span class="obk ob-${k}"><i></i>${k} ${tally[k]}</span>`).join("")}
+      ${tally.unknown ? `<span class="obk ob-unknown"><i></i>not in the graph
+        ${tally.unknown}</span>` : ""}</div>
+    <div class="obwrap"><svg class="obshot" viewBox="0 0 ${w} ${h}"
+      preserveAspectRatio="xMidYMin meet">${drawn}</svg></div>
+    <p class="gloss">This is geometry, not a screenshot — the shape of the page as the
+    browser laid it out. Anything grey is on screen and not in the graph, which is either a
+    third-party widget or something the scan cannot see.</p>`;
+}
+
+function wireObserved() {
+  const pick = document.getElementById("obpick");
+  if (pick) pick.onchange = e => { observedAt = +e.target.value; renderPanel(); };
+  panel.querySelectorAll(".ob[data-sym]").forEach(r => {
+    if (!r.dataset.sym) return;
+    r.style.cursor = "pointer";
+    r.onclick = () => jumpTo(r.dataset.sym, +r.dataset.page);
+  });
+}
+
 // Which page shows the most of one file. A file's symbols are spread across the pages
 // that load it, and only one page can be drawn at a time.
 function bestPageFor(path) {
@@ -3029,6 +3162,7 @@ function renderPanel() {
     };
     return;
   }
+  if (mode === "page") { panel.innerHTML = observedHtml(); wireObserved(); return; }
   if (mode === "overview") {
     panel.innerHTML = overviewHtml();
     // A count with no way in is decoration. Each backlog row opens Findings already
@@ -3557,7 +3691,7 @@ def _console_payload(console) -> str:
 
 def render(connectivity_map: ConnectivityMap, console=None, files=None,
            repo_root: str = "", editor: str | None = None, series=None,
-           adapters=None) -> str:
+           adapters=None, observed=None) -> str:
     mode = (
         f"diff vs {_esc(connectivity_map.baseline_sha[:12])}"
         if connectivity_map.baseline_sha
@@ -3687,6 +3821,7 @@ def render(connectivity_map: ConnectivityMap, console=None, files=None,
         f"<script>const CONSOLE={_console_payload(console)};</script>",
         f"<script>const SERIES={json.dumps(series or {'entries': []}).replace('</', '<\\/')};</script>",
         f"<script>const FILES={json.dumps(files or []).replace('</', '<\\/')};</script>",
+        f"<script>const OBSERVED={json.dumps(observed or []).replace('</', '<\\/')};</script>",
         # Locations are stored relative to the repo; an editor URL needs an absolute
         # path. Ship the root once and let the page join, rather than absolutising
         # every one of tens of thousands of rows.
