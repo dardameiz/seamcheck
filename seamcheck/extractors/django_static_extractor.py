@@ -139,7 +139,7 @@ def _pattern_calls(tree: ast.Module) -> list[ast.Call]:
     # in the SAME module is bounded and needs no imports.
     helpers = {
         node.name: node for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
     entered: set[str] = set()
 
@@ -222,7 +222,7 @@ def _definition_line(path: pathlib.Path, name: str) -> int | None:
     if tree is None:
         return None
     for node in ast.walk(tree):
-        if (isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
+        if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
                 and node.name == name):
             return node.lineno
     return None

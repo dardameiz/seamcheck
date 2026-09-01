@@ -134,7 +134,7 @@ def _static_dirs(repo_root: pathlib.Path) -> list[pathlib.Path]:
     dirs = []
     for entry in getattr(settings, "STATICFILES_DIRS", []) or []:
         # An entry may be a (prefix, path) tuple.
-        raw = entry[1] if isinstance(entry, tuple | list) and len(entry) == 2 else entry
+        raw = entry[1] if isinstance(entry, (tuple, list)) and len(entry) == 2 else entry
         resolved = _inside(raw, repo_root)
         if resolved:
             dirs.append(resolved)

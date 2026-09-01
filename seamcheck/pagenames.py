@@ -65,7 +65,7 @@ def _templates_rendered_by(path: str, function: str, cache: dict[str, ast.Module
         return set()
     found: set[str] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == function:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == function:
             for inner in ast.walk(node):
                 if (
                     isinstance(inner, ast.Constant)

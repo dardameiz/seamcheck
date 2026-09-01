@@ -8,11 +8,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "seamcheck"
-version = "0.6.0"
+version = "0.6.1"
 description = "Find the code your project no longer connects to - and the connections it only thinks it has. A frontend-to-backend seam checker with a visual map."
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 authors = [{ name = "dardameiz" }]
 # What someone actually types when they have this problem. The second half is the honest
 # framing of who this is for: people shipping code an assistant wrote, who need to know
@@ -32,7 +32,10 @@ classifiers = [
   "Development Status :: 3 - Alpha",
   "Framework :: Django",
   "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
   "Topic :: Software Development :: Quality Assurance",
   "Topic :: Software Development :: Testing",
   "Environment :: Console",
@@ -73,11 +76,18 @@ exclude = ["seamcheck/tests", "seamcheck/triage.json"]
 include = ["seamcheck", "README.md", "LICENSE"]
 
 [tool.ruff]
-target-version = "py312"
+# Held to the package's own floor. With py312 here, UP038 and UP017 "fix" isinstance
+# tuples into `X | Y` unions and timezone.utc into datetime.UTC - the second of which is
+# 3.11 syntax, so the linter would reintroduce exactly what the floor forbids.
+target-version = "py310"
 line-length = 120  # matches the host project this is developed inside
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "C4"]
+# UP038 rewrites `isinstance(x, (A, B))` into `isinstance(x, A | B)`. Both are correct on
+# the supported floor, but the tuple form runs on every Python there has ever been, and the
+# union form is what pinned this package to 3.12 by accident once already.
+ignore = ["UP038"]
 
 
 [tool.pytest.ini_options]

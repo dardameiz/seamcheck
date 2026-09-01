@@ -76,7 +76,7 @@ def summarise(graph: Graph, sha: str, at: str | None = None) -> Entry:
                 by_kind[symbol.kind] = by_kind.get(symbol.kind, 0) + 1
     return Entry(
         sha=sha,
-        at=at or datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"),
+        at=at or datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
         symbols=len(graph.symbols),
         findings=findings,
         by_status=by_status,

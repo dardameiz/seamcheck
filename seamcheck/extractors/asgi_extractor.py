@@ -32,7 +32,7 @@ def _compared_literals(test: ast.AST) -> list[ast.Constant]:
         if not isinstance(node, ast.Compare) or not _is_path_lookup(node.left):
             continue
         for comparator in node.comparators:
-            elements = comparator.elts if isinstance(comparator, ast.Tuple | ast.List) else [comparator]
+            elements = comparator.elts if isinstance(comparator, (ast.Tuple, ast.List)) else [comparator]
             literals.extend(
                 element
                 for element in elements

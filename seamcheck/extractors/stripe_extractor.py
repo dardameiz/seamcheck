@@ -111,7 +111,7 @@ def _events_compared_to(node: ast.AST, variables: frozenset[str] = frozenset()) 
             value = _string(comparator)
             if value:
                 found.append(value)
-            elif isinstance(comparator, ast.List | ast.Tuple | ast.Set):
+            elif isinstance(comparator, (ast.List, ast.Tuple, ast.Set)):
                 found += [v for v in (_string(e) for e in comparator.elts) if v]
     elif isinstance(node, ast.BoolOp):
         for value in node.values:
@@ -121,7 +121,7 @@ def _events_compared_to(node: ast.AST, variables: frozenset[str] = frozenset()) 
 
 def _enclosing_function(tree: ast.Module, target: ast.AST) -> str | None:
     for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             for inner in ast.walk(node):
                 if inner is target:
                     return node.name

@@ -3731,6 +3731,17 @@ def _console_payload(console) -> str:
     return json.dumps(data).replace("</", "<\\/")
 
 
+def _js(value) -> str:
+    """JSON for a <script> block.
+
+    `</` is split so a string in the DATA cannot close the tag it sits inside. It lives in
+    a function rather than inline in an f-string because a backslash inside an f-string
+    EXPRESSION is Python 3.12 syntax (PEP 701), and this package runs on 3.9 - which is the
+    Python most Macs already have.
+    """
+    return json.dumps(value).replace("</", "<" + chr(92) + "/")
+
+
 def render(connectivity_map: ConnectivityMap, console=None, files=None,
            repo_root: str = "", editor: str | None = None, series=None,
            adapters=None, observed=None) -> str:
@@ -3871,14 +3882,14 @@ def render(connectivity_map: ConnectivityMap, console=None, files=None,
         "</main></div></div>",
         f"<script>const MAPDATA={_payload(connectivity_map)};</script>",
         f"<script>const CONSOLE={_console_payload(console)};</script>",
-        f"<script>const SERIES={json.dumps(series or {'entries': []}).replace('</', '<\\/')};</script>",
-        f"<script>const FILES={json.dumps(files or []).replace('</', '<\\/')};</script>",
-        f"<script>const OBSERVED={json.dumps(observed or []).replace('</', '<\\/')};</script>",
+        f"<script>const SERIES={_js(series or {'entries': []})};</script>",
+        f"<script>const FILES={_js(files or [])};</script>",
+        f"<script>const OBSERVED={_js(observed or [])};</script>",
         # Locations are stored relative to the repo; an editor URL needs an absolute
         # path. Ship the root once and let the page join, rather than absolutising
         # every one of tens of thousands of rows.
         f"<script>const OPEN={json.dumps({'root': repo_root, 'href': editors.scheme(editor)})};</script>",
-        f"<script>const MEANING={json.dumps(meaning.table()).replace('</', '<\\/')};</script>",
+        f"<script>const MEANING={_js(meaning.table())};</script>",
         f"<script>const BLIND_SPOTS={json.dumps(meaning.BLIND_SPOTS)};</script>",
         f"<script>{_SCRIPT}</script>",
         "</body></html>",

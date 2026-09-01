@@ -35,7 +35,7 @@ def _python_declarations(path: str) -> list[tuple[str, int, int]]:
         return []
     declarations = []
     for node in ast.walk(tree):
-        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             continue
         # A decorated function is reported by inspect from its first decorator, which is
         # above the `def` ast reports - so views came out unmatched. ast knows where the
@@ -69,7 +69,7 @@ def _js_declarations(tree: dict) -> list[tuple[str, int, int]]:
             start = ((node.get("loc") or {}).get("start") or {}).get("line") or 0
             end = ((node.get("loc") or {}).get("end") or {}).get("line") or start
             found.append((name, start, end))
-        stack.extend(value for value in node.values() if isinstance(value, dict | list))
+        stack.extend(value for value in node.values() if isinstance(value, (dict, list)))
     return found
 
 

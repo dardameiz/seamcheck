@@ -153,7 +153,7 @@ class _Module:
         for node in ast.walk(self.tree):
             if isinstance(node, ast.Assign):
                 self._read_router_assignment(node)
-            elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 self._read_decorators(node)
             elif isinstance(node, ast.Call):
                 self._read_include(node)

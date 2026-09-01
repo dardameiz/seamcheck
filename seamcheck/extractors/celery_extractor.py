@@ -128,7 +128,7 @@ def extract_celery(root: str) -> tuple[list[Symbol], list[Edge]]:
         module = _module_name(path)
 
         for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 for name, call in _decorator_names(node):
                     if name not in _TASK_DECORATORS:
                         continue

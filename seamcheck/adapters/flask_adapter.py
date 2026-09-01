@@ -50,7 +50,7 @@ def _keyword(call: ast.Call, name: str) -> ast.AST | None:
 def _methods(call: ast.Call) -> list[str]:
     """The verbs a rule answers. Flask defaults to GET alone, which is load-bearing."""
     node = _keyword(call, "methods")
-    if isinstance(node, ast.List | ast.Tuple | ast.Set):
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
         found = [_string(item) for item in node.elts]
         verbs = sorted({v.upper() for v in found if v})
         if verbs:
@@ -100,7 +100,7 @@ class _Module:
         for node in ast.walk(self.tree):
             if isinstance(node, ast.Assign):
                 self._read_assignment(node)
-            elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 self._read_decorators(node)
             elif isinstance(node, ast.Call):
                 self._read_register(node)
