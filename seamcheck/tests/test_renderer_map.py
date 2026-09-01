@@ -339,7 +339,12 @@ class MergedReviewViewTests(SimpleTestCase):
     def test_the_map_is_called_the_map(self):
         out = map_html.render(_map(), console=self._console())
 
-        self.assertIn('{key: "map", title: "Map", count: null}', out)
+        # The menu is built from MENU + TITLES now: five places, each a different kind of
+        # question. The five lens sections that used to sit beside "Map" were the map
+        # filtered to a set of kinds - the same thing the Layer control does - so a reader
+        # on "Backend" could not tell why "Map" was also there.
+        self.assertIn('const MENU = ["overview", "map", "findings", "files", "changes"]', out)
+        self.assertIn('map: "Map"', out)
         self.assertNotIn("Map — what reaches what", out)
 
     def test_overview_reports_shares_not_only_counts(self):
@@ -463,7 +468,9 @@ class BigCanvasTests(SimpleTestCase):
         # large page stalled; the threshold is one class on the svg now.
         out = map_html.render(_map())
 
-        self.assertIn('svg.classList.toggle("nolabels", view.k < 0.34)', out)
+        # 0.34 was chosen for a desktop, where a 400-node page fits at a comfortable zoom.
+        # A phone fits the same page at about 0.18, so it opened with no names on it at all.
+        self.assertIn('svg.classList.toggle("nolabels", view.k < 0.24)', out)
         self.assertIn("svg.nolabels .nd text { display:none; }", out)
 
     def test_panning_moves_one_transform_instead_of_redrawing(self):
@@ -560,7 +567,8 @@ class FileTreeViewTests(SimpleTestCase):
     def test_the_tree_is_offered_beside_the_map(self):
         out = map_html.render(_map(), files=self._files())
 
-        self.assertIn('title: "Files"', out)
+        self.assertIn('files: "Files"', out)
+        self.assertIn('"files"', out)
         self.assertIn("function treeHtml()", out)
 
     def test_a_file_carries_how_much_of_it_the_graph_knows(self):

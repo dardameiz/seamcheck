@@ -42,6 +42,12 @@ def local_ip() -> str:
 # megabytes, and nobody reads those in a viewer; the snippet still stands for them.
 _MAX_SOURCE_BYTES = 2_000_000
 
+# The inventory walks the whole tree and reads every text file in it, which on a large
+# repository is several seconds and a payload of megabytes. Neither belongs in every scan
+# or in every page load, so it is built on first request and kept - the answer only
+# changes when files do, and a reader who opens Files twice should wait once.
+_INVENTORY_CACHE: dict[str, dict] = {}
+
 
 class _OneFileHandler(BaseHTTPRequestHandler):
     def __init__(self, *args, body: bytes, path: str, sources=None, repo_root: str = "",
@@ -55,6 +61,33 @@ class _OneFileHandler(BaseHTTPRequestHandler):
         self._sources = frozenset(sources or ())
         self._repo_root = repo_root
         super().__init__(*args, **kwargs)
+
+    def _json(self, payload: str) -> None:
+        encoded = payload.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(encoded)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Robots-Tag", "noindex, nofollow")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.end_headers()
+        self.wfile.write(encoded)
+
+    def _serve_inventory(self) -> None:
+        """Every file on disk, which is a different question from every file scanned."""
+        if not self._repo_root:
+            self.send_error(404)
+            return
+        cached = _INVENTORY_CACHE.get(self._repo_root)
+        if cached is None:
+            from seamcheck.inventory import build_inventory
+
+            try:
+                cached = build_inventory(self._repo_root, set(self._sources))
+            except OSError as error:
+                cached = {"error": str(error), "folders": [], "totals": {}, "files": 0}
+            _INVENTORY_CACHE[self._repo_root] = cached
+        self._json(json.dumps(cached))
 
     def _serve_source(self, query: str) -> None:
         from urllib.parse import parse_qs
@@ -81,20 +114,15 @@ class _OneFileHandler(BaseHTTPRequestHandler):
         except OSError:
             self.send_error(404)
             return
-        encoded = payload.encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(encoded)))
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("X-Robots-Tag", "noindex, nofollow")
-        self.send_header("Referrer-Policy", "no-referrer")
-        self.end_headers()
-        self.wfile.write(encoded)
+        self._json(payload)
 
     def do_GET(self):  # noqa: N802 - BaseHTTPRequestHandler's required name
         route, _, query = self.path.partition("?")
         if route.rstrip("/") == f"{self._path.rstrip('/')}/source":
             self._serve_source(query)
+            return
+        if route.rstrip("/") == f"{self._path.rstrip('/')}/inventory":
+            self._serve_inventory()
             return
         if route.rstrip("/") != self._path.rstrip("/"):
             self.send_error(404)

@@ -511,6 +511,8 @@ class FiltersReachTheCanvas(DirectionAOnAPhone):
             page.wait_for_timeout(250)
             page.select_option("#vw", "map")
             page.wait_for_timeout(300)
+            page.evaluate("() => setSheet(true)")
+            page.wait_for_timeout(200)
             for step in steps:
                 step(page)
                 page.wait_for_timeout(300)
@@ -554,6 +556,8 @@ class PanelBehaviour(DirectionAOnAPhone):
             page = browser.new_page(viewport={"width": width, "height": 780})
             page.goto(path.as_uri(), wait_until="load")
             page.wait_for_timeout(250)
+            page.evaluate("() => { if (window.setSheet) setSheet(true); }")
+            page.wait_for_timeout(150)
             out = [step(page) or page.wait_for_timeout(250) for step in steps]
             state = page.evaluate("""() => {
               const panel = document.querySelector('#panel');
@@ -640,6 +644,8 @@ class ThePhoneCanvas(DirectionAOnAPhone):
             page.wait_for_timeout(250)
             page.select_option("#vw", "map")
             page.wait_for_timeout(350)
+            page.evaluate("() => setSheet(true)")
+            page.wait_for_timeout(200)
             state = page.evaluate("""() => {
               const top = document.querySelector('.top').getBoundingClientRect();
               const pill = document.querySelector('.pill');

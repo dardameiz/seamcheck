@@ -88,8 +88,11 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overf
    select instead; both drive the same switch, from one list of items. */
 .rail { display:none; }
 .top { flex:none; background:var(--panel); border-bottom:1px solid var(--line); }
-.brand { display:flex; align-items:baseline; gap:9px; padding:8px 12px 6px; }
+.brand { display:flex; align-items:center; gap:9px; padding:8px 12px 6px; }
 .brand b { font-size:14px; }
+/* The theme control ends the header row, so it is present on every view - it used to sit
+   inside the status row, which four views out of five hide. */
+.brand .tmode { margin-left:auto; }
 .brand .meta { color:var(--muted); font-size:11px; overflow:hidden; white-space:nowrap;
                text-overflow:ellipsis; font-family:ui-monospace,Menlo,monospace; }
 
@@ -163,6 +166,22 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overf
 .explain[open] > summary { color:var(--ink); margin-bottom:8px; }
 .explain[open] > summary::before { content:"\u00d7"; }
 .explain > summary:focus-visible { outline:2px solid var(--sig); outline-offset:2px; }
+/* The chain, as a line. The arrow is dimmed and unselectable so copying a row gives the
+   names and not a string of glyphs between them. */
+.chainrow .t { white-space:normal; }
+.chainrow .arrow { font-style:normal; color:var(--muted); padding:0 6px; user-select:none; }
+.chainrow .t b { font-weight:600; }
+/* Results sit over the canvas, anchored under the box that produced them. */
+.found { position:absolute; left:10px; right:10px; top:96px; z-index:8; max-height:60vh;
+  overflow:auto; background:var(--panel); border:1px solid var(--line); border-radius:12px;
+  box-shadow:0 18px 40px -18px rgba(0,0,0,.7); padding:4px; }
+.found .fr { padding:8px 10px; border-bottom:1px solid var(--line); cursor:pointer;
+  display:grid; gap:2px; }
+.found .fr:last-of-type { border-bottom:0; }
+.found .fr:hover, .found .fr:focus-visible { background:var(--sunk); }
+.found .fr .t { font-size:13px; color:var(--ink); }
+.found .fr .w { font-size:11px; color:var(--muted); }
+.found .gloss { padding:7px 10px; font-size:11px; color:var(--muted); }
 .nothing { position:absolute; inset:auto 12px 78px; text-align:center; pointer-events:none;
   color:var(--muted); font-size:13px; display:grid; gap:4px; }
 .nothing b { color:var(--ink); font-size:15px; font-weight:600; }
@@ -178,65 +197,7 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overf
 .big b { font-size:38px; font-weight:600; letter-spacing:-.03em; font-variant-numeric:tabular-nums; }
 .spark { flex:1; height:30px; min-width:0; }
 
-/* ── Direction A, on the screen it was drawn for ────────────────────────────
-   On a phone the header was six stacked rows - brand, view, commit, page, crumb,
-   legend - and the map got what was left, which was about a third. Every control
-   belongs in one pill at the bottom instead: over the canvas rather than above it,
-   and within reach of the thumb that is already holding the phone. */
-@media (max-width: 720px) {
-  /* The canvas IS the page. Everything else floats on top of it - the header was a block
-     ABOVE the map, and with the brand line, the reading, the view picker and the crumb
-     row it took nearly half the screen before a single node was drawn. Overlaying costs
-     nothing: the map under a control is still map, and a reader pans it out from under. */
-  .content { position:relative; }
-  .top {
-    position:absolute; inset:0 0 auto; z-index:5;
-    background:linear-gradient(var(--bg) 62%, transparent);
-    border-bottom:0; padding-bottom:10px; pointer-events:none;
-  }
-  .top > * { pointer-events:auto; }
-  .main { position:absolute; inset:0; }
 
-  /* One line for identity, and the count kept small enough to sit beside it. */
-  .brand { padding:7px 12px 2px; }
-  .brand b { font-size:13px; }
-  .reading { padding:0 12px 6px; gap:12px; align-items:center; }
-  .big { display:flex; align-items:baseline; gap:8px; line-height:1; }
-  .big span { margin:0; font-size:9.5px; }
-  .big b { font-size:21px; }
-  .spark { height:20px; max-width:120px; }
-  /* The view picker moves into the pill with the others; two rows of selects at the top
-     and another two at the bottom is the same control surface, twice. */
-  .filters.onlymob { display:none; }
-  .crumbrow { padding:2px 12px 6px; }
-  .crumbrow #crumb { display:none; }
-  .zoom { left:auto; right:10px; bottom:auto; top:96px; flex-direction:column; }
-  .key { bottom:auto; top:96px; right:58px; }
-
-  .filters, .legendbar {
-    position:static; margin:0;
-  }
-  .pill {
-    position:absolute; left:8px; right:8px; bottom:8px; z-index:6;
-    /* Solid, not translucent. The palette bans mixing against the panel because a
-       near-black ground turns any mix to grey mush - and a control sitting over a graph
-       of hairlines needs to be read, not seen through. */
-    background:var(--panel);
-    border:1px solid var(--line); border-radius:14px; padding:8px;
-    display:grid; gap:7px;
-    box-shadow:0 10px 30px -12px rgba(0,0,0,.6);
-  }
-  .pill .filters { display:flex; gap:6px; padding:0; flex-wrap:wrap; }
-  .pill .filters label { flex:1 1 0; min-width:0; }
-  .pill .filters label span { display:none; }
-  .pill .legendbar { padding:0; }
-  .pill .flabel { display:none; }
-  .pill .seg button { font-size:10px; padding:8px 1px; }
-  /* The crumb row keeps its search, but stops being a row of its own. */
-  .crumbrow { padding:4px 12px 8px; }
-  .reading { padding-bottom:8px; }
-  .zoom { bottom:auto; top:10px; }
-}
 /* The key was already the vocabulary of the map; making it the filter means the control
    and its explanation are the same object, instead of a second control that repeats it. */
 button.k { background:none; border:0; padding:2px 6px; margin:-2px -6px; border-radius:5px;
@@ -378,7 +339,37 @@ svg.nolabels .nd text { display:none; }
 #codebody { tab-size:4; }
 /* The listing. A grid rather than a <pre> so the gutter can carry a status stripe without
    the line numbers being selectable along with the code a reader wants to copy. */
+/* A filter a reader set from somewhere else, shown where they can take it off again. */
+.chip { flex:none; border:1px solid var(--sig); border-radius:999px; background:transparent;
+        color:var(--sig); font-size:12px; padding:0 11px; height:32px; cursor:pointer;
+        font-family:inherit; white-space:nowrap; }
+/* A float dropped the affordance onto its own line under the title. A flex row keeps
+   count, name and "Findings ›" on one line, with the name taking the slack. */
+.rowgo { display:flex; align-items:center; gap:9px; width:100%; text-align:left;
+         font:inherit; cursor:pointer; }
+.rowgo .t { flex:1 1 auto; min-width:0; }
+.rowgo .go { flex:none; color:var(--sig); font-size:12px; }
+.rowgo:hover { border-color:var(--sig); }
+/* Two questions in one view, so a tab rather than a second menu entry - and the same
+   control does duty for the state filter under it. */
+.tabs { display:flex; gap:8px; padding:0 12px 10px; }
+.tabs.wrap { flex-wrap:wrap; padding-bottom:12px; }
+.tab { border:1px solid var(--line); background:transparent; color:var(--muted);
+       border-radius:999px; padding:0 13px; height:32px; cursor:pointer; font:inherit;
+       font-size:13px; white-space:nowrap; }
+.tab b { color:var(--ink); font-weight:600; font-variant-numeric:tabular-nums; }
+.tab.on { border-color:var(--sig); color:var(--sig); }
+.tab.on b { color:var(--sig); }
+.fl.inv { cursor:default; }
+.fl.inv .fn { flex:1 1 auto; }
+/* An empty canvas has to say why. Readable size, not the 9.5px column-heading style. */
+#cv .mt { font-size:14px; fill:var(--ink); }
+#cv .mt.sub { font-size:13px; fill:var(--muted); }
+#cv .mt tspan.hl { fill:var(--sig); }
 .listing { font-variant-ligatures:none; }
+/* The run of characters the row was actually about. */
+.listing mark.hit { background:var(--sig); color:var(--bg); border-radius:3px;
+                    padding:0 2px; font-weight:600; }
 .listing .ln { display:grid; grid-template-columns:auto 1fr; gap:14px; padding:0 14px;
   border-left:3px solid transparent; white-space:pre; }
 .listing .num { color:var(--muted); user-select:none; text-align:right; opacity:.7; }
@@ -521,7 +512,7 @@ svg.nolabels .nd text { display:none; }
 .fl:hover .go { opacity:1; }
 .fl .edit { flex:none; font-size:11px; opacity:.55; }
 .fl:hover .edit { opacity:1; }
-.fl .fn { flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis;
+.fl .fn { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis;
           white-space:nowrap; }
 .cov { flex:none; width:52px; height:6px; border-radius:3px; background:var(--line);
        overflow:hidden; }
@@ -571,9 +562,6 @@ svg.nolabels .nd text { display:none; }
   .onlymob { display:none; }
   .rail { display:flex; flex-direction:column; width:230px; flex:none; overflow-y:auto;
           background:var(--panel); border-right:1px solid var(--line); }
-  .railhead { font-size:10px; font-weight:600; padding:14px 14px 9px; color:var(--muted);
-              text-transform:uppercase; letter-spacing:.11em;
-              font-family:ui-monospace,Menlo,monospace; }
   .nv { display:flex; justify-content:space-between; align-items:center; gap:8px;
         padding:7px 14px; cursor:pointer; font-size:12.5px; }
   .nv:hover { background:var(--sunk); }
@@ -584,6 +572,133 @@ svg.nolabels .nd text { display:none; }
   .sheet { left:auto; right:0; width:380px; top:0; bottom:auto; max-height:100%;
            border-top:0; border-left:1px solid var(--line); }
 }
+
+/* The phone layout lives LAST, deliberately. These rules override base rules of equal
+   specificity, and CSS breaks that tie by source order - declared earlier, `bottom:auto`
+   lost to the base `bottom:10px`, so the zoom control kept BOTH and stretched from y=96
+   to the foot of the screen. It covered the whole canvas, and every drag landed on it
+   instead of on the map. */
+/* ── Direction A, on the screen it was drawn for ────────────────────────────
+   On a phone the header was six stacked rows - brand, view, commit, page, crumb,
+   legend - and the map got what was left, which was about a third. Every control
+   belongs in one pill at the bottom instead: over the canvas rather than above it,
+   and within reach of the thumb that is already holding the phone. */
+@media (max-width: 720px) {
+  /* The canvas IS the page. Everything else floats on top of it - the header was a block
+     ABOVE the map, and with the brand line, the reading, the view picker and the crumb
+     row it took nearly half the screen before a single node was drawn. Overlaying costs
+     nothing: the map under a control is still map, and a reader pans it out from under. */
+  .content { position:relative; }
+  .top {
+    position:absolute; inset:0 0 auto; z-index:5;
+    background:linear-gradient(var(--bg) 62%, transparent);
+    border-bottom:0; padding-bottom:10px; pointer-events:none;
+  }
+  /* Only things you can actually press take the gesture. `.top > *` handed it to whole
+     full-width rows - the crumb row alone made a 40px band of the map undraggable and
+     swallowed the zoom control sitting under it. A row is a layout box, not a target. */
+  .top button, .top select, .top input, .top a, .top label, .top summary { pointer-events:auto; }
+  .main { position:absolute; inset:0; }
+
+  /* One line for identity, and the count kept small enough to sit beside it. */
+  .brand { padding:7px 12px 2px; }
+  .brand b { font-size:13px; }
+  .reading { padding:0 12px 6px; gap:12px; align-items:center; }
+  .big { display:flex; align-items:baseline; gap:8px; line-height:1; }
+  .big span { margin:0; font-size:9.5px; }
+  .big b { font-size:21px; }
+  .spark { height:20px; max-width:120px; }
+  /* The menu is navigation, and navigation lives at the top on every screen. */
+  .filters.onlymob { padding:0 12px 6px; }
+  .filters.onlymob label span { display:none; }
+  .crumbrow { padding:2px 12px 6px; }
+  .crumbrow #crumb { display:none; }
+  /* Clear of the floating header, and stacked so they take a thumb's width rather than a
+     row of the map. `bottom:auto` matters as much as `top`: with both set the control
+     stretches between them, which is how it came to cover the entire canvas. */
+  .zoom { left:auto; right:10px; top:124px; bottom:auto; flex-direction:column;
+          width:44px; height:auto; }
+  /* A file row does not fit on one phone line: name, coverage bar, ratio, up to four
+     status badges and an editor link. Unwrapped, the name lost - which is the one part
+     of the row a reader is looking for. It takes its own line; the rest follows under. */
+  .tree .fl { flex-wrap:wrap; padding:7px 0; }
+  .tree .fl .fn { flex:1 0 100%; white-space:normal; word-break:break-all; }
+  /* There is no hover on a phone, so the row's own action - and the editor link - were
+     permanently invisible on exactly the devices that cannot reveal them. */
+  .tree .fl .go, .tree .fl .edit { opacity:1; }
+  .tree .fl .go { margin-left:0; }
+  .key { left:auto; right:10px; top:auto; bottom:96px; }
+  /* Bigger than 30px, because on a phone this is a thumb target rather than a mouse one. */
+  .tmode { width:36px; height:36px; font-size:16px; }
+
+  /* The canvas can be panned out from under the floating chrome; a scrolling panel
+     cannot. So the panel is given exactly the room the chrome occupies, measured at
+     runtime rather than guessed - the header changes height when the reading is hidden,
+     and the pill changes when a filter notice appears. Safe-area insets are added on top,
+     because the home indicator sits over the last row of any list. */
+  .panel {
+    padding-top:calc(var(--chrome-top, 110px) + 6px);
+    padding-bottom:calc(var(--chrome-bottom, 120px) + env(safe-area-inset-bottom, 0px) + 12px);
+  }
+  .pill { bottom:calc(8px + env(safe-area-inset-bottom, 0px)); }
+  /* The reading is about the map. On a panel it repeats the hero underneath it and costs
+     the list a line it needs. */
+  .top.panelmode .reading { display:none; }
+
+  .filters, .legendbar {
+    position:static; margin:0;
+  }
+  .pill {
+    position:absolute; left:8px; right:8px; bottom:8px; z-index:6;
+    /* Never more than half the screen, whatever it ends up holding: a control surface
+       that grows past the thing it controls has stopped being a control surface. */
+    max-height:46vh; overflow:auto;
+    /* Solid, not translucent. The palette bans mixing against the panel because a
+       near-black ground turns any mix to grey mush - and a control sitting over a graph
+       of hairlines needs to be read, not seen through. */
+    background:var(--panel);
+    border:1px solid var(--line); border-radius:14px; padding:8px;
+    display:grid; gap:7px;
+    box-shadow:0 10px 30px -12px rgba(0,0,0,.6);
+  }
+  /* Two by two. Four named controls in one row leaves each about 90px, which truncates
+     every value to two words and a comma; two rows of two is barely taller and every
+     value stays readable. */
+  /* In the sheet there is room to stack, so every value is readable rather than truncated
+     to two words and a comma. */
+  .pill .filters { display:grid; gap:7px; padding:0; }
+  .pill .filters label { min-width:0; display:grid; gap:2px; }
+  .pill select { width:100%; }
+
+  .pillbar { display:flex; align-items:center; gap:9px; }
+  .pillbar .now { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis;
+    white-space:nowrap; font-size:12px; color:var(--ink); }
+  .pillbar .now b { color:var(--muted); font-weight:400; }
+  .pillbar .open { flex:none; background:var(--bg); border:1px solid var(--line);
+    border-radius:9px; color:var(--ink); font:inherit; font-size:11.5px; padding:8px 13px;
+    cursor:pointer; }
+  .pillsheet { display:grid; gap:8px; position:relative; padding-top:2px; }
+  .sheetclose { position:absolute; right:-2px; top:-4px; background:none; border:0;
+    color:var(--muted); font-size:17px; line-height:1; cursor:pointer; padding:2px 6px; }
+  .pillbar .open:focus-visible, .sheetclose:focus-visible {
+    outline:2px solid var(--sig); outline-offset:2px; }
+  /* Named. Three unlabelled dropdowns reading "Overview", "Everything in this scan" and
+     "Everything" tell a reader what each is SET to and never what it decides - and the
+     answer to "which one is the commit picker" was to open them and find out. */
+  .pill .filters label { display:grid; gap:2px; }
+  .pill .filters label span {
+    display:block; font-size:9px; letter-spacing:.13em; text-transform:uppercase;
+    color:var(--muted); padding-left:2px;
+  }
+  .pill .legendbar { padding:0; }
+  .pill .flabel { display:none; }
+  .pill .seg button { font-size:10px; padding:8px 1px; }
+  /* The crumb row keeps its search, but stops being a row of its own. */
+  .crumbrow { padding:4px 12px 8px; }
+  .reading { padding-bottom:8px; }
+  .zoom { bottom:auto; top:10px; }
+}
+
 """
 
 _SCRIPT = r"""
@@ -714,6 +829,9 @@ const ROWS_PER_PAGE = 60;
 // Panel state lives here rather than beside the panel code: the canvas reads `mode` to
 // decide its lens, and fillPages() runs before the panel section of this file is reached.
 let mode = "map", cq = "", cstatus = "", shown = ROWS_PER_PAGE, asList = false;
+// Set when a reader opens one of the Overview backlog rows, so the list they land on is
+// the kind they pressed rather than all 14 kinds with theirs somewhere inside.
+let ckind = "";
 
 const svg = document.getElementById("cv");
 const sheet = document.getElementById("detail");
@@ -740,11 +858,24 @@ const FILE_TOTALS = new Map(
 // "Push Arena · /push_arena/" - the name and the address, which is how a reader knows
 // where they are. Falls back to the entry filename for a root no template references,
 // because inventing a nicer name for it would be inventing evidence.
+// Two entries can render the same template and so carry the same title AND the same URL -
+// "Push Arena · /push_arena/" listed twice, different node counts, nothing to tell them
+// apart. Where a name is not unique the entry that produced it is appended, because two
+// identical rows is worse than a long one.
+let _labelCounts = null;
 function pageLabel(p) {
   const where = (p.where || "").split(" - ")[0].trim();
   const title = p.title || p.page;
-  if (!where) return title;
-  return title === where ? title : `${title} · ${where}`;
+  const base = !where || title === where ? title : `${title} · ${where}`;
+  if (!_labelCounts) {
+    _labelCounts = {};
+    PAGES.forEach(other => {
+      const w = (other.where || "").split(" - ")[0].trim();
+      const t = other.title || other.page;
+      _labelCounts[!w || t === w ? t : `${t} · ${w}`] = (_labelCounts[!w || t === w ? t : `${t} · ${w}`] || 0) + 1;
+    });
+  }
+  return _labelCounts[base] > 1 ? `${base} · ${p.page}` : base;
 }
 
 function fillPages(counts) {
@@ -764,6 +895,7 @@ function fillPages(counts) {
 pages.onchange = e => {
   current = Number(e.target.value); focus = null; view = {x:0, y:0, k:1};
   closeSheet(); draw();
+  if (window.syncPillSummary) syncPillSummary();
 };
 
 // Clicking a colour in the key filters the canvas to that status. Toggling, so several
@@ -782,9 +914,19 @@ colourkey.addEventListener("click", event => {
   focus = null;
   fillPages();
   draw();
+  // A list is filtered by the same control, so it has to be rebuilt with it.
+  if (panel && !panel.hidden) renderPanel();
+  if (window.syncPillSummary) syncPillSummary();
 });
 
+window.syncStatusKey = syncStatusKey;
 function syncStatusKey() {
+  const select = document.getElementById("cst");
+  if (select) {
+    const one = statusFilter.size === 1 ? [...statusFilter][0] : "";
+    if (select.value !== one) select.value = one;
+    cstatus = one;
+  }
   colourkey.querySelectorAll(".seg button[data-status]").forEach(button => {
     const status = button.dataset.status;
     const on = status ? statusFilter.has(status) : statusFilter.size === 0;
@@ -804,6 +946,9 @@ function markFiltered() {
 
   let note = document.getElementById("fnote");
   if (!on) { if (note) note.remove(); return; }
+  // On a phone the summary line already names every filter, so a second notice saying the
+  // same thing is a row of the map spent twice. The outline on the pill carries the signal.
+  if (pill && pill.querySelector(".pillbar")) { if (note) note.remove(); return; }
   const holder = pill || colourkey.parentElement;
   if (!note) {
     note = document.createElement("div");
@@ -928,7 +1073,12 @@ function visible(p) {
   capped = 0;
   if (only) return changedIn(p);
   if (isolate && lit) return chainOf(p, lit);
-  if (fileFilter) return new Set(p.nodes.filter(n => n.file === fileFilter).map(n => n.id));
+  // A file filter NARROWS what is drawn; it does not replace every other filter. Returning
+  // here meant clicking a file in Files silently discarded the layer and the status filter,
+  // and every one set afterwards did nothing - the control moved and the canvas did not.
+  if (fileFilter) {
+    return new Set(lensed(p).filter(n => n.file === fileFilter).map(n => n.id));
+  }
   // Everything this page touches, in one canvas. Showing only modules until a reader
   // drilled in hid the whole point: which symbols connect and which stand alone.
   if (!focus) {
@@ -1022,6 +1172,65 @@ function layout(p, keep) {
 
 const hit = n => !query || (n.label + " " + n.file).toLowerCase().includes(query);
 
+// Search the WHOLE scan, not the page you happen to be on. The box faded non-matches
+// among the nodes already drawn, so "where is cookieConsentBanner?" - the most obvious
+// question to ask it - could only be answered by guessing the right page first.
+//
+// Built once, lazily: 37,000 nodes is a list worth keeping, and worth not building for a
+// reader who never types anything.
+let _index = null;
+function searchIndex() {
+  if (_index) return _index;
+  const seen = new Set();
+  _index = [];
+  PAGES.forEach((p, page) => p.nodes.forEach(n => {
+    if (n.kind === "page" || seen.has(n.id)) return;
+    seen.add(n.id);
+    _index.push({id: n.id, label: n.label, kind: n.kind, status: n.status,
+                 file: n.file, line: n.line, page: page,
+                 hay: (n.label + " " + (n.file || "") + " " + n.kind).toLowerCase()});
+  }));
+  return _index;
+}
+
+// Ranked, because a substring match puts "cart" behind "shopping-cart-badge-count" and a
+// reader typing four letters means the four-letter thing.
+function searchEverywhere(term, limit = 60) {
+  const needle = term.trim().toLowerCase();
+  if (needle.length < 2) return [];
+  const out = [];
+  for (const row of searchIndex()) {
+    const at = row.hay.indexOf(needle);
+    if (at === -1) continue;
+    const label = row.label.toLowerCase();
+    const score = label === needle ? 0
+      : label.startsWith(needle) ? 1
+      : label.includes(needle) ? 2 : 3;
+    out.push({row, score, at});
+    if (out.length > 4000) break;
+  }
+  out.sort((a, b) => a.score - b.score || a.row.label.length - b.row.label.length);
+  return out.slice(0, limit).map(x => x.row);
+}
+
+// Open a result where it lives: the page that holds it, the node selected, its chain lit.
+function jumpTo(id, page) {
+  if (typeof page === "number" && page !== current) {
+    current = page;
+    pages.value = String(current);
+    view = {x: 0, y: 0, k: 1};
+  }
+  layer = "";
+  const picker = document.getElementById("ly");
+  if (picker) picker.value = "";
+  focus = null;
+  if (SECTION_KINDS[mode] === undefined) switchTo("map");
+  asList = false;
+  lit = id;
+  draw();
+  show(id);
+}
+
 // How many nodes the filter box matched, said out loud. Fading is only meaningful when
 // something survives it: with no matches every node dimmed at once, which is a canvas of
 // ghosts and edge spaghetti that reads as a bug, not as "nothing here is called that".
@@ -1103,11 +1312,17 @@ function draw() {
   if (!p) return;
   pages.value = String(current);
   const here = p.where ? `${p.title} · ${p.where}` : p.title;
-  const drawnHere = fileFilter ? p.nodes.filter(n => n.file === fileFilter).length : 0;
-  const inFile = FILE_TOTALS.get(fileFilter) || drawnHere;
+  // Count what is DRAWN, not what the file holds: now that a filter narrows a file
+  // selection instead of replacing it, the two differ, and a breadcrumb reading "674 of
+  // 674" over a canvas showing nine is the same lie the filter bug was.
+  const onPage = fileFilter ? p.nodes.filter(n => n.file === fileFilter).length : 0;
+  const drawnHere = fileFilter ? visible(p).size : 0;
+  const inFile = FILE_TOTALS.get(fileFilter) || onPage;
+  const narrowed = drawnHere < onPage;
   crumb.textContent = fileFilter
       ? `${here} › ${fileFilter} — ${drawnHere} of ${inFile} symbols`
-        + (drawnHere < inFile ? "; the rest are not reached from any page" : "")
+        + (narrowed ? "; filtered" : "")
+        + (onPage < inFile ? "; the rest are not reached from any page" : "")
     : focus ? `${here} › ${(byId.get(focus) || {}).label || ""}`
     : `${here} — pick a module`;
   document.getElementById("up").hidden = !focus;
@@ -1122,6 +1337,23 @@ function draw() {
   // Drawing that as a bare page node reads as a broken map rather than as an answer.
   if (only && !Object.keys(CHANGED).length) {
     svg.innerHTML = `<text x="20" y="40" class="col">nothing the scan reads changed in this commit</text>`;
+    return;
+  }
+  // Filters that exclude everything draw an empty canvas, which is indistinguishable from
+  // a broken one - and "the filter is not working" was exactly the report. Say what is on
+  // and offer to take it off, rather than showing a blank rectangle.
+  const shownNow = visible(p);
+  const onlyPage = [...shownNow].every(id => (byId.get(id) || {}).kind === "page");
+  if (!shownNow.size || onlyPage) {
+    const on = [];
+    if (fileFilter) on.push(`file <tspan class="hl">${esc(fileFilter)}</tspan>`);
+    if (layer) on.push(`layer <tspan class="hl">${esc(layer)}</tspan>`);
+    if (statusFilter.size) on.push(`status <tspan class="hl">${esc([...statusFilter].join(", "))}</tspan>`);
+    svg.innerHTML =
+      `<text x="20" y="42" class="mt">Nothing on this page matches all of the filters.</text>` +
+      (on.length
+        ? `<text x="20" y="70" class="mt sub">On now: ${on.join(" · ")}</text>` : "") +
+      `<text x="20" y="98" class="mt sub">Take one off, or pick another page.</text>`;
     return;
   }
   const {keep, value: {pos, columns, width, height}} = layoutFor(p);
@@ -1204,7 +1436,10 @@ function applyView() {
   g.setAttribute("transform", `translate(${view.x},${view.y}) scale(${view.k})`);
   // Below this zoom the text is sub-pixel anyway; hiding it by class keeps the DOM stable
   // and is what makes zooming out of a large page cheap rather than catastrophic.
-  svg.classList.toggle("nolabels", view.k < 0.34);
+  // Labels are dropped when they would be unreadable, not when they are merely small: at
+  // 0.34 a phone opening a 400-node page (which fits at about 0.18) saw a map with no
+  // names at all and no obvious way to get them.
+  svg.classList.toggle("nolabels", view.k < 0.24);
 }
 
 // Delegated, not per-node: draw() replaces svg.innerHTML, and panning redraws on every
@@ -1353,7 +1588,19 @@ function findingsIn(file) {
   return marks;
 }
 
-function renderSource(file, text, line, title) {
+// Marking the line was not enough: on a 180-character line of minified-looking template
+// the reader still has to hunt for the thing the row was about. The label is marked inside
+// the line, so the answer is the highlighted run rather than "somewhere on this row".
+function markLabel(raw, label) {
+  if (!label) return highlight(raw);
+  const at = raw.indexOf(label);
+  if (at < 0) return highlight(raw);
+  return highlight(raw.slice(0, at)) +
+    '<mark class="hit">' + highlight(label) + '</mark>' +
+    highlight(raw.slice(at + label.length));
+}
+
+function renderSource(file, text, line, title, label) {
   const marks = findingsIn(file);
   const lines = text.split("\n");
   const width = String(lines.length).length;
@@ -1362,7 +1609,8 @@ function renderSource(file, text, line, title) {
     const mark = marks.get(number);
     const cls = ["ln", number === line ? "here" : "", mark ? "mark " + mark : ""].join(" ");
     return `<div class="${cls}" id="L${number}"><span class="num">${
-      String(number).padStart(width, " ")}</span><span class="src">${highlight(raw)}</span></div>`;
+      String(number).padStart(width, " ")}</span><span class="src">${
+      number === line ? markLabel(raw, label) : highlight(raw)}</span></div>`;
   }).join("");
   document.getElementById("codetitle").textContent = title;
   const holder = document.getElementById("codebody");
@@ -1400,7 +1648,7 @@ async function showCode(id) {
       text = data.text;
       SOURCE_CACHE.set(n.file, text);
     }
-    renderSource(n.file, text, n.line, title);
+    renderSource(n.file, text, n.line, title, n.label);
   } catch {
     fallback();
   }
@@ -1537,8 +1785,53 @@ document.getElementById("zf").onclick = () => {
   view = {x:0, y:0, k:1}; draw();
 };
 document.getElementById("q").addEventListener("input", e => {
-  query = e.target.value.trim().toLowerCase(); draw();
+  query = e.target.value.trim().toLowerCase();
+  draw();
+  showResults(query);
 });
+document.getElementById("q").addEventListener("focus", () => showResults(query));
+document.addEventListener("click", e => {
+  if (!e.target.closest("#found") && e.target.id !== "q") hideResults();
+});
+
+// Results as a list under the box, because a fade tells you a match exists somewhere on
+// this page and nothing about the other eighteen pages.
+function resultsBox() {
+  let box = document.getElementById("found");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "found";
+    box.className = "found";
+    document.querySelector(".content").appendChild(box);
+    box.addEventListener("click", event => {
+      const row = event.target.closest("[data-jump]");
+      if (!row) return;
+      hideResults();
+      jumpTo(row.dataset.jump, Number(row.dataset.page));
+    });
+  }
+  return box;
+}
+function hideResults() { const box = document.getElementById("found"); if (box) box.hidden = true; }
+
+function showResults(term) {
+  if (!term || term.length < 2) { hideResults(); return; }
+  const found = searchEverywhere(term);
+  const box = resultsBox();
+  box.hidden = false;
+  if (!found.length) {
+    box.innerHTML = `<div class="gap">Nothing in this scan is called “${esc(term)}”.</div>`;
+    return;
+  }
+  box.innerHTML = found.map(r => `<div class="fr" data-jump="${esc(r.id)}" data-page="${r.page}">
+      <span class="badge ${esc(r.status)}">${esc(r.status)}</span>
+      <div class="t">${esc(r.label)}</div>
+      <div class="w">${esc(r.kind)}${r.file ? " · " + esc(r.file) : ""}${
+        PAGES[r.page] ? " · " + esc(PAGES[r.page].title || PAGES[r.page].page) : ""}</div>
+    </div>`).join("") +
+    `<div class="gloss">${found.length === 60 ? "First 60 matches" : n(found.length) +
+      " match" + (found.length === 1 ? "" : "es")} across the whole scan. Tap one to open it.</div>`;
+}
 // --- the commit picker -------------------------------------------------------------
 const picker = document.getElementById("cm"), note = document.getElementById("cmnote");
 const gone = document.getElementById("gone");
@@ -1718,11 +2011,30 @@ const OPENS_ON = "overview";
 // someone opening the file has. The map is the instrument you reach for second, once a
 // number has told you where to point it. "Start here" was a third thing explaining the
 // other two; its content lives in Overview now, where the numbers it explains are.
-const VIEWS = [{key: "overview", title: "Overview", count: null},
-               {key: "map", title: "Map", count: null},
-               {key: "files", title: "Files", count: FILES.length}].concat(
-  D.sections.map(sec => ({key: sec.key, title: sec.title,
-                          count: sec.unavailable ? null : (sec.total ?? sec.rows.length)})));
+// Five places, and each is a different KIND of question. Frontend↔Backend, DOM Wiring,
+// Backend Internals, CSS & Tokens and Integrations used to be menu points of their own -
+// but every one of them was the map filtered to a set of kinds, which is exactly what the
+// Layer control does. Five menu points and one dropdown were the same control built twice,
+// and a reader landing on "Backend" could not tell why "Map" was also there.
+//
+// They are Layer values now. The menu answers "what am I doing", the Layer answers "which
+// part of it", and neither pretends to be the other.
+const MENU = ["overview", "map", "findings", "files", "changes"];
+const SECTION_BY_KEY = Object.fromEntries((D.sections || []).map(sec => [sec.key, sec]));
+
+function menuCount(key) {
+  if (key === "files") return FILES.length;
+  const sec = SECTION_BY_KEY[key];
+  if (!sec || sec.unavailable) return null;
+  return sec.total ?? sec.rows.length;
+}
+
+const TITLES = {overview: "Overview", map: "Map", files: "Files"};
+const VIEWS = MENU.map(key => ({
+  key,
+  title: TITLES[key] || (SECTION_BY_KEY[key] || {}).title || key,
+  count: key === "overview" || key === "map" ? null : menuCount(key),
+}));
 
 viewer.innerHTML = VIEWS.map(v =>
   `<option value="${esc(v.key)}">${esc(v.title)}` +
@@ -1855,8 +2167,9 @@ function overviewHtml() {
 
     <h3 class="sec">Backlog by kind</h3>
     ${D.groups.length ? D.groups.map(g =>
-      `<div class="row"><span class="badge uncertain">${g[1]}</span>
-       <div class="t">${esc(g[0])}</div></div>`).join("")
+      `<button type="button" class="row rowgo" data-kind="${esc(g[2])}">
+       <span class="badge uncertain">${g[1]}</span>
+       <div class="t">${esc(g[0])}</div><span class="go">Findings &rsaquo;</span></button>`).join("")
       : `<div class="gap">Nothing the scan is willing to claim.</div>`}
 
     <details class="explain">
@@ -1895,6 +2208,32 @@ function overviewHtml() {
 // which is how a browser reaches code and not how anyone edits it: from the map you
 // cannot tell whether a file's other twenty functions were ever considered.
 let fileQuery = "";
+// Two different questions share this view. "Scanned" answers what seamcheck read and how
+// much of each file it could model. "All files" answers what is actually in the directory
+// - which is the question anyone has about a repository they did not write, and which a
+// list of only the 2,140 files that produced symbols cannot be asked at all.
+let fileTab = "scanned", fileState = "", INVENTORY = null, invError = "";
+
+// What each word in the All-files list is allowed to mean. Nothing here says "delete it".
+const STATES = {
+  read: ["read", "sig",
+    "The scan parsed this and it produced symbols."],
+  silent: ["nothing found", "uncertain",
+    "A type the scan reads, which yielded no symbol. Usually there is nothing to " +
+    "model - not evidence of anything."],
+  named: ["named", "connected",
+    "Not parsed, but its filename appears in the project's text, so something " +
+    "references it."],
+  maybe: ["maybe", "uncertain",
+    "Not parsed, and its name never appears - but its folder is referenced, so a path " +
+    "built at runtime could reach it. The scan cannot tell."],
+  orphan: ["unreferenced", "unused",
+    "Not parsed, its name appears nowhere in the project's text, and nothing " +
+    "references its folder either."],
+  derived: ["derived", "uncertain",
+    "Built from something else in the tree (.gz, .br, .map, .pyc, .log). Present on " +
+    "disk, not a source of truth."],
+};
 
 function treeHtml() {
   const root = {dirs: new Map(), files: []};
@@ -1935,7 +2274,7 @@ function treeHtml() {
     return `<details${depth < 2 || needle ? " open" : ""}>
       <summary style="padding-left:${depth * 13}px">${esc(name)}</summary>${inner}</details>`;
   };
-  return `<h2>Files</h2><p class="blurb"><b>Click a file to draw its symbols on the
+  return `<h2>Files</h2>${fileTabsHtml()}<p class="blurb"><b>Click a file to draw its symbols on the
     map</b> — that is what this view is for: it answers "what of this file is actually
     wired to anything", which the folder tree alone cannot. <code>edit</code> is the
     other thing, and opens the file in your editor.<br><br>
@@ -1945,6 +2284,108 @@ function treeHtml() {
     <div class="tools"><input id="fq" type="search"
       placeholder="Filter ${shown.length} of ${FILES.length} files" value="${esc(fileQuery)}"></div>
     <div class="tree">${walk(root, null, 0)}</div>`;
+}
+
+function fileTabsHtml() {
+  const all = INVENTORY ? INVENTORY.files.toLocaleString() : "\u2026";
+  return `<div class="tabs">
+    <button type="button" class="tab${fileTab === "scanned" ? " on" : ""}" data-tab="scanned">
+      Scanned <b>${FILES.length.toLocaleString()}</b></button>
+    <button type="button" class="tab${fileTab === "all" ? " on" : ""}" data-tab="all">
+      All files <b>${all}</b></button>
+  </div>`;
+}
+
+// The whole directory, with what can honestly be said about each file. The states are
+// evidence, graded: "its name appears" is stronger than "its folder appears", and both
+// are stronger than "nothing anywhere mentions it".
+function inventoryHtml() {
+  if (invError) {
+    return `<h2>Files</h2>${fileTabsHtml()}<div class="gap">${esc(invError)}</div>`;
+  }
+  if (!INVENTORY) {
+    return `<h2>Files</h2>${fileTabsHtml()}<div class="gap">Reading the directory\u2026
+      This walks every file and reads the text of each one, so it takes a few seconds the
+      first time.</div>`;
+  }
+  const t = INVENTORY.totals || {};
+  const needle = fileQuery.toLowerCase();
+  let listed = 0, folders = "";
+  INVENTORY.folders.forEach(f => {
+    const rows = f.files.filter(([name, state]) =>
+      (!fileState || state === fileState) &&
+      (!needle || (f.dir + "/" + name).toLowerCase().includes(needle)));
+    if (!rows.length) return;
+    listed += rows.length;
+    // A folder of 4,000 generated images should not paint 4,000 rows before a reader can
+    // decide they do not care about it. It says how many it holds and opens on request.
+    const body = rows.slice(0, 400).map(([name, state, size, tracked]) => {
+      const [word, tone, why] = STATES[state] || [state, "uncertain", ""];
+      return `<div class="fl inv" title="${esc(why)}">
+        <span class="fn">${esc(name)}</span>
+        <span class="badge ${tone}">${esc(word)}</span>
+        ${tracked ? "" : `<span class="badge uncertain" title="Present on disk, not tracked by git">untracked</span>`}
+        <span class="covn">${size > 1024 ? Math.round(size / 1024).toLocaleString() + " KB" : size + " B"}</span>
+      </div>`;
+    }).join("") + (rows.length > 400
+      ? `<div class="gap">and ${(rows.length - 400).toLocaleString()} more in this folder</div>` : "");
+    folders += `<details${needle || fileState ? " open" : ""}>
+      <summary>${esc(f.dir || "(repository root)")}
+        <span class="covn">${rows.length.toLocaleString()}</span></summary>${body}</details>`;
+  });
+  const chip = (key, label, n) => n
+    ? `<button type="button" class="tab${fileState === key ? " on" : ""}" data-state="${key}">
+       ${label} <b>${n.toLocaleString()}</b></button>` : "";
+  return `<h2>Files</h2>${fileTabsHtml()}
+    <p class="blurb">Every file in the directory, including the ones no extractor reads.
+      <b>Two questions, both answered from evidence and neither guessed at.</b>
+      Does git track it — a file present on disk and untracked is generated, local or
+      forgotten, and this tree holds
+      ${(t.untracked || 0).toLocaleString()} of them against
+      ${(INVENTORY.files - (t.untracked || 0)).toLocaleString()} tracked.
+      And does anything name it — for a file the scan cannot parse, the honest evidence is
+      whether its filename appears anywhere in the project's text.
+      ${INVENTORY.git ? "" : "<br><br>This is not a git repository, so the tracked column is blank."}</p>
+    <div class="tools"><input id="fq" type="search"
+      placeholder="Filter ${listed.toLocaleString()} of ${INVENTORY.files.toLocaleString()} files"
+      value="${esc(fileQuery)}"></div>
+    <div class="tabs wrap">
+      <button type="button" class="tab${fileState ? "" : " on"}" data-state="">Everything</button>
+      ${chip("orphan", "unreferenced", t.orphan)}
+      ${chip("maybe", "maybe", t.maybe)}
+      ${chip("named", "named", t.named)}
+      ${chip("read", "read", t.read)}
+      ${chip("silent", "nothing found", t.silent)}
+      ${chip("derived", "derived", t.derived)}
+    </div>
+    <details class="explain"><summary>What these six words mean</summary>
+      <div class="doc"><ul>${Object.entries(STATES).map(([, [word, tone, why]]) =>
+        `<li><span class="badge ${tone}">${word}</span> ${esc(why)}</li>`).join("")}</ul>
+      <p><b>None of this says delete anything.</b> <code>unreferenced</code> means what it
+      means everywhere else here: both ends are observable and nothing connects them. A
+      name assembled at runtime is exactly the case the scan cannot see, which is why a
+      file whose folder is referenced is reported as <code>maybe</code> instead.</p></div>
+    </details>
+    <div class="tree">${folders || `<div class="gap">No files match.</div>`}</div>`;
+}
+
+async function loadInventory() {
+  if (INVENTORY || invError) return;
+  if (location.protocol === "file:") {
+    invError = "The directory listing is available when this map is served " +
+      "(seamcheck map), not when it is opened as a file.";
+    renderPanel();
+    return;
+  }
+  try {
+    const response = await fetch(location.pathname.replace(/\/$/, "") + "/inventory");
+    if (!response.ok) throw new Error(String(response.status));
+    INVENTORY = await response.json();
+    if (INVENTORY.error) { invError = INVENTORY.error; INVENTORY = null; }
+  } catch {
+    invError = "Could not read the directory.";
+  }
+  renderPanel();
 }
 
 // Which page shows the most of one file. A file's symbols are spread across the pages
@@ -1960,7 +2401,29 @@ function bestPageFor(path) {
 
 function renderPanel() {
   if (mode === "files") {
-    panel.innerHTML = treeHtml();
+    const all = fileTab === "all";
+    panel.innerHTML = all ? inventoryHtml() : treeHtml();
+    panel.querySelectorAll(".tab[data-tab]").forEach(el => {
+      el.onclick = () => {
+        fileTab = el.dataset.tab; fileQuery = ""; fileState = "";
+        renderPanel();
+        if (fileTab === "all") loadInventory();
+      };
+    });
+    panel.querySelectorAll(".tab[data-state]").forEach(el => {
+      el.onclick = () => { fileState = el.dataset.state; renderPanel(); };
+    });
+    if (all) {
+      const box = document.getElementById("fq");
+      if (box) {
+        box.oninput = e => {
+          fileQuery = e.target.value; renderPanel();
+          const again = document.getElementById("fq");
+          again.focus(); again.setSelectionRange(again.value.length, again.value.length);
+        };
+      }
+      return;
+    }
     panel.querySelectorAll(".fl").forEach(el => {
       el.onclick = e => {
         // The row filters the canvas; the `edit` link inside it opens an editor. Without
@@ -1983,7 +2446,19 @@ function renderPanel() {
     };
     return;
   }
-  if (mode === "overview") { panel.innerHTML = overviewHtml(); return; }
+  if (mode === "overview") {
+    panel.innerHTML = overviewHtml();
+    // A count with no way in is decoration. Each backlog row opens Findings already
+    // narrowed to that kind - which is the question the row raises.
+    panel.querySelectorAll(".rowgo").forEach(el => {
+      el.onclick = () => {
+        ckind = el.dataset.kind; cstatus = ""; cq = ""; shown = ROWS_PER_PAGE;
+        statusFilter.clear(); syncStatusKey();
+        viewer.value = "findings"; switchTo("findings");
+      };
+    });
+    return;
+  }
   if (mode === "changes") { panel.innerHTML = changesHtml(); return; }
   if (mode === "map") { panel.innerHTML = mapListHtml(); return; }
   const sec = D.sections.find(x => x.key === mode);
@@ -2008,13 +2483,18 @@ function renderPanel() {
   if (cstatus && !counts[cstatus]) cstatus = "";
 
   const needle = cq.toLowerCase();
-  const rows = sec.rows.filter(r => (!cstatus || r.status === cstatus) &&
+  // ONE status filter. The panel had its own `cstatus` select while the pill set
+  // `statusFilter`, so on Findings the control a reader could see was not the one doing
+  // the filtering - pressing "unresolved" changed the button and nothing else.
+  const rows = sec.rows.filter(r => (!statusFilter.size || statusFilter.has(r.status)) &&
+    (!cstatus || r.status === cstatus) && (!ckind || r.kind === ckind) &&
     (!needle || (r.label + " " + r.file + " " + r.kind).toLowerCase().includes(needle)));
   const page = rows.slice(0, shown);
   const notes = whyOncePerRun(page);
   panel.innerHTML = `<h2>${esc(sec.title)}</h2><p class="blurb">${esc(sec.blurb)}</p>
     <div class="tools">
       <input id="cq" type="search" placeholder="Filter ${sec.rows.length} rows" value="${esc(cq)}">
+      ${ckind ? `<button type="button" class="chip" id="ckoff">kind: ${esc(ckind)} ×</button>` : ""}
       <select id="cst"><option value="">any status</option>
         ${present.map(v =>
           `<option value="${v}"${v === cstatus ? " selected" : ""}>${v} (${totals[v].toLocaleString()})</option>`
@@ -2038,8 +2518,16 @@ function renderPanel() {
     const again = document.getElementById("cq");
     again.focus(); again.setSelectionRange(again.value.length, again.value.length);
   };
+  const koff = document.getElementById("ckoff");
+  if (koff) koff.onclick = () => { ckind = ""; shown = ROWS_PER_PAGE; renderPanel(); };
   document.getElementById("cst").onchange = e => {
-    cstatus = e.target.value; shown = ROWS_PER_PAGE; renderPanel();
+    cstatus = e.target.value;
+    // The pill shows the same thing; two controls disagreeing about one filter is how
+    // this went wrong in the first place.
+    statusFilter.clear();
+    if (cstatus) statusFilter.add(cstatus);
+    if (window.syncStatusKey) syncStatusKey();
+    shown = ROWS_PER_PAGE; renderPanel();
   };
   const more = document.getElementById("cmore");
   if (more) more.onclick = () => { shown += ROWS_PER_PAGE * 4; renderPanel(); };
@@ -2085,14 +2573,28 @@ function mapListHtml() {
       <div class="gap">Clear the layer or the status filter to see the rest.</div>`;
   }
   const shown = rows.slice(0, 400);
+  // The WALK, not the node. A row that says "social-login-btn · dom_selector" states that
+  // a thing exists; the question a reader has is what reaches it and from where, and on a
+  // phone the chain reads better as a line than any drawing of it does.
   return head +
     `<p class="blurb">${n(rows.length)} thing${rows.length === 1 ? "" : "s"} on this page,
-      under the filters you have set.</p>` +
-    shown.map(r => `<div class="row" data-open="${esc(r.id)}">
-      <span class="badge ${esc(r.status)}">${esc(r.status)}</span>
-      <div class="t">${esc(r.label)}</div>
-      <div class="w">${esc(r.kind)}${r.file ? " · " + loc(r.file, r.line) : ""}</div>
-      ${r.note ? `<div class="n">${esc(r.note)}</div>` : ""}</div>`).join("") +
+      under the filters you have set. Each row is the path that reaches it.</p>` +
+    shown.map(r => {
+      // The real walk, from the page entry to this node - the same one the detail sheet
+      // draws hop by hop. `chain` is the symbol's own breadcrumb and is usually one word,
+      // which is a label, not a path.
+      const ids = (routes(r.id) || {}).inbound || [];
+      const steps = (ids.length > 1 ? ids : [r.id])
+        .map(id => (byId.get(id) || {}).label || id);
+      const walk = steps
+        .map((step, i, all) => i === all.length - 1 ? `<b>${esc(step)}</b>` : esc(step))
+        .join('<i class="arrow">\u2192</i>');
+      return `<div class="row chainrow" data-open="${esc(r.id)}">
+        <span class="badge ${esc(r.status)}">${esc(r.status)}</span>
+        <div class="t">${walk}</div>
+        <div class="w">${esc(r.kind)}${r.file ? " · " + loc(r.file, r.line) : ""}</div>
+        ${r.note ? `<div class="n">${esc(r.note)}</div>` : ""}</div>`;
+    }).join("") +
     (rows.length > shown.length
       ? `<div class="gloss">Showing ${n(shown.length)} of ${n(rows.length)}.</div>` : "");
 }
@@ -2142,16 +2644,34 @@ function switchTo(next) {
   // extractor feeds yet) has nothing to draw and falls back to its rows.
   if (mode !== "map") { fileFilter = null; fileQuery = mode === "files" ? fileQuery : ""; }
   const drawable = SECTION_KINDS[mode] !== undefined && !asList;
+  // A panel is read, not panned, so the header drops what only the map needs.
+  document.querySelector(".top").classList.toggle("panelmode", !drawable);
+  // Filters belong where they filter something. Overview is a page of numbers about the
+  // whole scan, so a control offering to narrow it is offering something it cannot do -
+  // and the pill was sitting there on every view, over content it had no relationship to.
+  if (window.syncPillControls) syncPillControls();
+  if (window.syncPillSummary) syncPillSummary();
+  if (window.chromeMeasure) requestAnimationFrame(window.chromeMeasure);
   panel.hidden = drawable; svg.hidden = !drawable;
-  document.getElementById("colourkey").hidden = !drawable;
+  const hasLens = SECTION_KINDS[mode] !== undefined;
+  // The status filter narrows the DATA, not the drawing, so it survives the switch to a
+  // list. Hiding it with the canvas left the list filtered by whatever was set before and
+  // no control to change it - the filter was still on, and invisible.
+  // On a phone syncPillControls owns this; on a desktop the lens decides.
+  if (!window.matchMedia("(max-width: 720px)").matches) {
+    document.getElementById("colourkey").hidden = !hasLens;
+  }
+  // These two really are about the canvas.
   document.querySelector(".zoom").hidden = !drawable;
   document.getElementById("lg").hidden = !drawable;
-  const hasLens = SECTION_KINDS[mode] !== undefined;
   // The row stays while a lens exists, or the button that switches back to the map goes
   // with it and the list becomes a dead end.
   document.querySelector(".crumbrow").hidden = !hasLens;
   document.getElementById("crumb").hidden = !drawable;
-  document.getElementById("q").hidden = !drawable;
+  // The search reaches the whole scan now, so it is never out of place: hiding it on a
+  // list view meant the one control that can answer "where is this?" disappeared exactly
+  // when a reader was reading names.
+  document.getElementById("q").hidden = false;
   pgwrap.hidden = !drawable;
   listToggle.hidden = !hasLens;
   listToggle.textContent = asList ? "\u25f1  Show as map" : "\u2630  Show as list";
@@ -2220,6 +2740,8 @@ ly.onchange = e => {
   markFiltered();
   fillPages();
   draw();
+  if (panel && !panel.hidden) renderPanel();
+  if (window.syncPillSummary) syncPillSummary();
 };
 
 // ── The pill ──────────────────────────────────────────────────────────────
@@ -2237,18 +2759,28 @@ ly.onchange = e => {
       if (!box) {
         box = document.createElement("div");
         box.className = "pill";
+        // At rest the control is ONE line saying what is set, because four pickers spend a
+        // fifth of a phone screen answering a question asked once a session. The line is
+        // also the answer to "am I looking at everything?", which is the question a reader
+        // actually has after panning for a minute.
+        box.innerHTML =
+          '<div class="pillbar"><span class="now" id="pillnow"></span>' +
+          '<button type="button" class="open" id="pillopen">Filters</button></div>' +
+          '<div class="pillsheet" id="pillsheet" hidden>' +
+          '<button type="button" class="sheetclose" id="pillclose" aria-label="Close">' +
+          "\u00d7</button></div>";
         main.appendChild(box);
+        document.getElementById("pillopen").onclick = () => setSheet(true);
+        document.getElementById("pillclose").onclick = () => setSheet(false);
       }
-      parts.forEach(part => part && box.appendChild(part));
+      const sheet = document.getElementById("pillsheet");
+      parts.forEach(part => part && sheet.appendChild(part));
       // The view picker joins them: two rows of selects at the top and two more at the
       // bottom is the same control surface built twice, and the top copy was costing the
       // canvas a row it could not spare.
-      const view = document.querySelector(".filters.onlymob");
-      const target = box.querySelector(".filters:not(.onlymob)");
-      if (view && target && !target.contains(document.getElementById("vw"))) {
-        const label = view.querySelector("label");
-        if (label) target.insertBefore(label, target.firstChild);
-      }
+      // The view picker is NAVIGATION and stays at the top. Folding it into the filters
+      // put "where am I going" inside "what am I hiding", and then hiding the filters on
+      // Overview - which has nothing to filter - took the menu away with them.
     } else if (box) {
       parts.forEach(part => part && header.insertBefore(part, document.querySelector(".crumbrow")));
       box.remove();
@@ -2257,6 +2789,100 @@ ly.onchange = e => {
   }
   place();
   narrow.addEventListener("change", place);
+
+  // What the floating chrome actually occupies, published as custom properties. Guessing
+  // a number here is how the top and bottom of every list ended up under the header and
+  // the pill: the header is shorter without the reading, and the pill grows by a row when
+  // a filter notice appears.
+  // Open or shut. The sheet REPLACES the bar rather than sitting above it, so the control
+  // never has two footprints and the map never loses more than it has to.
+  window.setSheet = open => {
+    const sheet = document.getElementById("pillsheet");
+    const bar = box && box.querySelector(".pillbar");
+    if (!sheet || !bar) return;
+    sheet.hidden = !open;
+    bar.hidden = open;
+    if (window.chromeMeasure) requestAnimationFrame(window.chromeMeasure);
+  };
+
+  // What the bar says. Named things only: the view, where you are, and anything narrowing
+  // it - a reader does not need to be told they are looking at everything.
+  window.syncPillSummary = () => {
+    const now = document.getElementById("pillnow");
+    if (!now) return;
+    const bits = [];
+    if (SERVICE_LAYERS.has(layer)) {
+      bits.push((LAYERS.find(([k]) => k === layer) || [, layer])[1]);
+    } else {
+      const p = PAGES[current];
+      if (p && SECTION_KINDS[mode] !== undefined) bits.push(p.title || p.page);
+      if (layer) bits.push((LAYERS.find(([k]) => k === layer) || [, layer])[1]);
+    }
+    if (statusFilter.size) bits.push([...statusFilter].join(" + "));
+    const commit = document.querySelector("#cm option:checked");
+    if (commit && commit.value !== "") bits.push(commit.textContent.trim().split(" · ")[0]);
+    now.innerHTML = bits.map((b, i) =>
+      (i ? '<b> · </b>' : "") + esc(b)).join("");
+  };
+
+  // `header` is the one declared at the top of this function.
+  let lastTop = -1, lastBottom = -1;
+  function measure() {
+    const top = Math.round(header ? header.getBoundingClientRect().height : 0);
+    const bottom = Math.round(box ? box.getBoundingClientRect().height : 0);
+    // Write only on a real change. These properties feed the panel's padding, the padding
+    // changes layout, and the observer fires again - an unguarded write is a loop that
+    // never settles, which turned a 100-second test suite into one that did not finish.
+    if (top === lastTop && bottom === lastBottom) return;
+    lastTop = top; lastBottom = bottom;
+    const root = document.documentElement.style;
+    root.setProperty("--chrome-top", top + "px");
+    root.setProperty("--chrome-bottom", bottom + "px");
+  }
+  window.chromeMeasure = measure;
+  measure();
+  // Which controls this view actually has. Map has all four; Findings has the status
+  // filter and the search; Changes has the commit picker; Overview has none, and gets no
+  // pill at all.
+  window.syncPillControls = () => {
+    if (!box) return;
+    const onMap = SECTION_KINDS[mode] !== undefined;
+    const wants = {
+      overview: [],
+      map: ["cm", "pg", "ly", "status"],
+      findings: ["cm", "status"],
+      files: [],
+      changes: ["cm"],
+    }[mode] || (onMap ? ["cm", "pg", "ly", "status"] : ["cm"]);
+
+    box.hidden = wants.length === 0;
+    ["cm", "pg", "ly"].forEach(id => {
+      const control = document.getElementById(id);
+      const wrap = control && control.closest("label");
+      if (wrap) wrap.hidden = !wants.includes(id);
+    });
+    const key = document.getElementById("colourkey");
+    if (key) key.hidden = !wants.includes("status");
+    // Nothing left to open means the button is furniture.
+    // One control needs no sheet to hold it.
+    const open = document.getElementById("pillopen");
+    const single = wants.filter(w => w !== "status").length <= 1 && !wants.includes("status");
+    if (open) open.hidden = single;
+    if (single) setSheet(false);
+    if (window.chromeMeasure) requestAnimationFrame(window.chromeMeasure);
+  };
+  syncPillControls();
+
+  // The bar is the only thing on screen at rest, so it has to say something before the
+  // reader touches anything.
+  if (window.syncPillSummary) syncPillSummary();
+  window.addEventListener("resize", () => { place(); measure(); });
+  if (window.ResizeObserver) {
+    const watch = new ResizeObserver(measure);
+    if (header) watch.observe(header);
+    const pill = document.querySelector(".pill");
+    if (pill) watch.observe(pill);
+  }
 })();
 """
 
@@ -2417,12 +3043,15 @@ def render(connectivity_map: ConnectivityMap, console=None, files=None,
         f"<title>Seamcheck — {_esc(connectivity_map.git_sha[:12])}</title>",
         f"<style>{_CSS}</style></head><body>",
         '<div class="shell"><aside class="rail">'
-        '<div class="railhead">Seamcheck</div><div class="nav" id="nav"></div></aside>'
+        # No wordmark here: the header above the content already carries it, and on a
+        # desktop both were visible at once, one directly above the other.
+        '<div class="nav" id="nav"></div></aside>'
         '<div class="content">'
         '<header class="top">',
         f'<div class="brand"><b>Seamcheck</b>'
         f'<span class="meta">HEAD {_esc(connectivity_map.git_sha[:12])} · {_esc(mode)}'
         f'{_adapter_label(adapters)}</span>'
+        '<button type="button" class="tmode" id="tmode" aria-label="Theme">\u25d1</button>'
         f"</div>",
         # Direction A: the number a reader came for, at a size that says so, with the
         # trend beside it. Everything else folds into the pill at the bottom of the canvas.
@@ -2459,7 +3088,6 @@ def render(connectivity_map: ConnectivityMap, console=None, files=None,
         '<button type="button" class="s-uncertain" data-status="uncertain" '
         'title="No evidence either way \u2014 not a claim it is dead">uncertain</button>'
         "</div>"
-        '<button type="button" class="tmode" id="tmode" aria-label="Theme">\u25d1</button>'
         "</div>",
         '<div class="note" id="cmnote"></div>'
         '<div class="note capnote" id="capnote"></div>'
