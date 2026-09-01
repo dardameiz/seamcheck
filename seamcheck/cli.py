@@ -498,7 +498,28 @@ def main(argv: list[str] | None = None) -> int:
     # The whole run, not just setup(): a project logs on import, and again the first time
     # the scan touches its app registry.
     with quiet(not verbose):
-        django.setup()
+        try:
+            django.setup()
+        except ModuleNotFoundError as error:
+            # The project is here and importable-looking, but one of ITS dependencies is
+            # not installed - which is what happens when seamcheck was installed globally
+            # (pipx, uv tool, a system pip) instead of into the project's own environment.
+            # Seamcheck reads a Django project by importing it, so it has to live where
+            # the project's imports resolve. A raw traceback here reads as seamcheck being
+            # broken; it is an install-location problem with a one-line fix.
+            print(
+                f"seamcheck: this project imports {error.name!r}, and that is not "
+                "installed here.\n\n"
+                "Seamcheck reads a Django project by importing it, so it has to run "
+                "inside\nthe project's own environment - not from a global install.\n\n"
+                "    source .venv/bin/activate      # your project's virtualenv\n"
+                "    pip install seamcheck\n"
+                "    seamcheck map\n\n"
+                "If you installed with pipx or `uv tool`, that copy is isolated from your\n"
+                "project on purpose and cannot see its dependencies.",
+                file=sys.stderr,
+            )
+            return 2
         try:
             call_command("seamcheck", *arguments)
         except CommandError as error:

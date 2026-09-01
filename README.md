@@ -1,518 +1,223 @@
 # Seamcheck
 
 [![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-ea4aaa?logo=github&logoColor=white)](https://github.com/sponsors/dardameiz)
-[![PyPI](https://img.shields.io/pypi/v/seamcheck?color=0b6bcb)](https://pypi.org/project/seamcheck/)
+[![PyPI](https://img.shields.io/pypi/v/seamcheck?color=7c6cff)](https://pypi.org/project/seamcheck/)
+[![Python](https://img.shields.io/pypi/pyversions/seamcheck?color=7c6cff)](https://pypi.org/project/seamcheck/)
 [![License](https://img.shields.io/badge/license-MIT-informational)](LICENSE)
 
-**Your AI wrote 400 lines. Which of them are actually wired to anything?**
+A small tool that looks for the bugs that sit **between** your frontend and your backend.
+It reads your source. It never runs your code.
 
-Seamcheck reads a web project and tells you what connects to what — which `fetch()` lands on
-which route, which template element the JS is reaching for, which CSS rule nothing has
-referenced since 2023. Then it tells you what it *couldn't* work out, which turns out to be
-the part that matters.
+![The map](docs/images/map.png)
 
-**The bug it exists for lives between languages.** `catalogue.js` is valid JavaScript.
-`urls.py` is valid Python. A linter for either says both files are fine — and they are. The
-defect is that one names a route the other does not serve, and it only exists *between* them.
-Every tool in this space works inside one language and stops at its boundary; that boundary
-is where this class of bug lives.
+## Why I made it
 
-No SaaS. No upload. One command, one HTML file, and an exit code for CI.
+I was building a game — a fairly large Django app with a lot of hand-written JavaScript —
+and I kept losing afternoons to the same kind of bug. The Python was fine. The JavaScript
+was fine. The route one asked for and the route the other served were one character apart,
+and nothing I already had read both sides of that.
+
+So I wrote something to find them, for myself, on that project. It kept catching things I
+would not have found on my own, and after a while it seemed like other people might have
+the same afternoons to lose. So here it is.
+
+It does not catch everything, and I am sure there are things it gets wrong. When it cannot
+tell, it tries to say `uncertain` rather than guess. **If you find it being confidently
+wrong somewhere, please [open an issue](https://github.com/dardameiz/seamcheck/issues)** —
+that is the most useful thing anyone can send me.
+
+## Install
+
+Seamcheck reads a Django project **by importing it**, so install it into the same
+virtualenv your project runs in.
 
 ```bash
+source .venv/bin/activate        # your project's virtualenv
 pip install seamcheck
 seamcheck map
 ```
 
-## What it reads, exactly
+That is the whole setup. It opens a map of your project and prints a link you can open on
+your phone. **Have a look around before reading any further** — it explains itself better
+than this page does.
 
-No guessing, and no "supports Python" hand-waving — a framework is either read or it is not.
+Needs **Python 3.10 or newer**.
 
-**Backends**
+<details>
+<summary><b>If pip says <code>externally-managed-environment</code></b></summary>
 
-| Framework | Language | Status |
-|---|---|---|
-| **Django** | Python | ✅ **routes, views, models, ASGI, `{% url %}`, `reverse()`** — two modes: ask Django (exact), or parse `urls.py` as text so a cloned repo scans with nothing installed (**95% of declared routes**) |
-| **FastAPI** | Python | ✅ **routes and handlers** — decorators, `APIRouter` prefixes, `include_router` nesting, sub-app `mount()`, and prefixes held in settings. Validated on three cloned repos incl. a 717-file production app |
-| **Express · Fastify** | JavaScript | ✅ **routes and handlers** — `app.get()`, `Router()`, `use()` mounts composed through CommonJS `require`/`module.exports`, factory exports, re-exports, and Fastify's `register(plugin, {prefix})`. Validated on three cloned repos incl. a 2,895-file monorepo |
-| **Next.js** | TypeScript | ✅ **routes** — App Router and Pages Router, route groups `(marketing)`, dynamic and catch-all segments, parallel/private folders correctly excluded, and **monorepos** (`apps/web/`). Measured exact on two real products: **705/705** and **26/26** routes |
-| **NestJS** | TypeScript | ✅ **routes and handlers** — `@Controller` + `@Get`/`@Post` composition, the object form, and `setGlobalPrefix()`. Cross-checked against a FastAPI implementation of the same API spec: **12 of 15 routes identical**, every difference traceable to the source |
-| Laravel | PHP | ⏳ planned — `routes/web.php` is a flat list, and **Blade templates already work** |
-| Rails | Ruby | ⏳ planned — `config/routes.rb` is a DSL; ERB needs one regex |
-
-**Frontends**
-
-| What | Status |
-|---|---|
-| **JavaScript** — `.js`, `.mjs`, inline `<script>` | ✅ `fetch`, `sendBeacon`, `querySelector`, `classList`, `dataset` |
-| **CSS** — files and inline `<style>` | ✅ selectors, custom properties, `[data-*]` attribute selectors |
-| **Templates** — Django, Jinja, **Twig**, **Blade**, **ERB**, Handlebars | ✅ ids, classes and `data-` attributes. Measured identical across all six: the scanner reads HTML *attributes*, and an attribute is an attribute whatever generated it |
-| **TypeScript** — `.ts`, `.tsx`, `.d.ts` | ✅ **parsed**, including generics, `interface`, and legacy/parameter decorators (NestJS, Angular). Measured **100% parse rate** across 7,078 files in three cloned repos |
-| **JSX** — `.jsx`, `.tsx`, and JSX inside `.js` | ✅ **parsed** |
-| **React component graph** | ❌ not yet. Files parse, so `fetch()` calls in them are found — but `className={styles.x}` is computed rather than literal, so the DOM half needs new extractors |
-
-A scan **tells you** when a file could not be parsed, rather than silently dropping it.
-
-## What has been run against it
-
-Sixteen public repositories, cloned and scanned, chosen for **shapes** rather than stars.
-Reproduce with `python tools/corpus.py clone && python tools/corpus.py scan`.
-
-| | |
-|---|---|
-| Repositories | **16** |
-| Source files | **53,361** |
-| Lines of code | **9,370,268** |
-| Routes found | **2,355** |
-| Handlers found | **2,726** |
-| Backends exercised | Django · FastAPI · NestJS · Next.js · Express |
-| Produced routes | **15 of 16** |
-
-The largest were the useful ones — every failure below was found by adding a big repo:
-
-| repo | read as | routes | lines |
-|---|---|---|---|
-| n8n | express | **0** | 3,829,574 |
-| Sentry | django | 123 | 1,714,762 |
-| saleor | django | 9 | 847,043 |
-| Ghost | express | 242 | 765,172 |
-| cal.com | **nestjs + nextjs** | 284 | 549,591 |
-| dub | nextjs | **705** | 501,755 |
-| documenso | nextjs | 26 | 268,456 |
-| Excalidraw | nextjs | 2 | 196,936 |
-| parse-server | express | 5 | 169,896 |
-| immich | **nestjs + fastapi + express** | 195 | 169,524 |
-| NodeBB | express | 81 | 151,674 |
-| open-webui | fastapi | 490 | 113,970 |
-| Netflix/dispatch | fastapi | 151 | 83,974 |
-
-**A monorepo is not one application.** cal.com serves a Next.js front end *and* a NestJS
-API; immich pairs a NestJS server with a FastAPI machine-learning service. Every adapter
-that confidently fits is run, because picking one winner threw away the other's routes.
-
-**Three of these are read only partially, and the scan says so.** n8n routes through its
-own `@RestController` decorator, parse-server through its own `PromiseRouter` class, and
-Sentry assembles `urlpatterns` from lists held in other modules — so it reports *"read 3 of
-23 urls.py files; routes defined in the rest are NOT in this graph"* rather than presenting
-123 as the routing table of a 1.7-million-line project. A confident near-zero is the worst
-answer available, and it is the one this tool exists not to give.
-
-## How much of the market is that?
-
-Honestly: a meaningful slice of two ecosystems, and none of a third. Percentages are from
-the [2025 Stack Overflow Developer Survey](https://survey.stackoverflow.co/2025/technology/),
-all respondents (n=23,678).
-
-| framework | developers using it | read? |
-|---|---|---|
-| Next.js | 20.8% | ✅ |
-| Express | 19.9% | ✅ |
-| ASP.NET Core | 19.7% | ❌ |
-| FastAPI | 14.8% | ✅ |
-| Spring Boot | 14.7% | ❌ |
-| Flask | 14.4% | ❌ |
-| WordPress | 13.6% | ❌ |
-| Django | 12.6% | ✅ |
-| Laravel | 8.9% | ❌ |
-| NestJS | 6.7% | ✅ |
-| Fastify | 2.9% | ✅ |
-
-**These figures must not be added up.** It is a multi-select question about *developers*,
-not projects, and the answers overlap heavily — someone using Next.js very often also uses
-Express. Anyone who sums them to claim "we cover 78% of the market" is quoting a number
-that does not exist.
-
-What the table does support:
-
-- Of the **ten most-used server frameworks, Seamcheck reads four** — Next.js, Express,
-  FastAPI and Django.
-- Within the **JavaScript/TypeScript and Python** ecosystems it reads **six of the nine**
-  most-used. The gaps there are **Flask** (14.4%), Deno and Nuxt.
-- The largest single framework it cannot read is **ASP.NET Core** (19.7%), followed by
-  **Spring Boot** (14.7%). C# and Java are untouched.
-- The **front-end half does not care**: JavaScript, TypeScript, CSS, the DOM, six template
-  engines and the runtime probe work whatever serves the page. On a Rails or Laravel
-  project you get that half and no routes — and the scan says so rather than reporting
-  every `fetch` as broken.
-
-**Flask is the obvious next one** — Python, decorator-routed like FastAPI, and 14.4% of
-developers.
-
-**Why the backend list is short and the rest is not:** of ~36,800 symbols in a real scan,
-about 1,000 are server-side. The other **97%** never reads the backend at all, and neither
-does the runtime probe — it patches `fetch` and `querySelector` in a browser that has no idea
-what served the page. Adding a backend is one adapter, not a rewrite.
-
-![The connectivity map](docs/images/map.png)
-
-## The four answers
-
-Every dead-code tool ever written has told you something was unused and been wrong, and
-you stopped trusting it. Seamcheck has a fourth answer:
-
-| | |
-|---|---|
-| `connected` | something reaches this — here's the file and line |
-| `unresolved` | something reaches for this and it isn't there |
-| `unused` | both ends are observable and nothing uses it |
-| **`uncertain`** | **no evidence either way. Not a claim it's dead.** |
-
-That last row is the whole product. A page reached by an `<a href>` looks exactly like a
-dead one if you only parse `fetch()` calls. Seamcheck says so instead of guessing. On a
-700-URL project that's the difference between a report you act on and 668 lies.
-
-It also reports **its own coverage** — how much of each file it actually reasoned about.
-No other tool I've found will tell you where it wasn't looking.
-
-## Click a red one and it shows you the whole chain
-
-Every finding is a path, and the path is the explanation. Click a node and everything else
-recedes: the line through it lights up, each hop numbered browser-first, each with the real
-source behind it and the file:line that opens in your editor.
-
-![Clicking an unresolved endpoint shows the chain that reaches it](docs/images/chain.png)
-
-Or drop everything that isn't the chain, and the finding is four boxes and three lines:
-
-![Show only this chain](docs/images/chain-only.png)
-
-That one is real, and it is the class of bug this exists for: `catalogue.js` calls
-`toggleWishlist`, which fetches `/api/wishlist/toggle/`, and the URLconf serves
-`/api/wishlist/`. Nothing fails until a user clicks the button. No test covers it, because
-there is nothing to test — the code is syntactically perfect and points at nothing.
-
-Every row says **what the scan observed** and **what is usually actually true**, because
-`unresolved · css_token_use · button_badges.css:3` is precise and tells a newcomer
-nothing. Often the first explanation offered is "this is fine, and here is why the scan
-can't tell."
-
-![Findings, each explained](docs/images/findings.png)
-
-## What it found in the project it was built on
-
-Not hypotheticals. Real bugs, in a 511,000-line Django codebase, found while writing this:
-
-- Five CSS custom properties in a **loaded** stylesheet that resolve to nothing —
-  `--text-primary`, `--border-color` and friends. Those declarations render nothing today.
-- An endpoint reported missing that turned out to be **`<str:division_id>` matching a
-  deliberate `'all'` sentinel** — so I fixed the matcher instead of "fixing" the code.
-- 65 API routes whose path appears in no source file at all.
-- 46 DOM elements written by more than one module — the reason a display bug survives
-  being "fixed" in one of them.
-
-## Numbers you can read
-
-A count with no denominator is not a result: "1,319 unresolved" reads as a catastrophe or
-as nothing at all depending on whether the project has two thousand symbols or forty
-thousand.
-
-![Overview](docs/images/overview.png)
-
-## For CI
+That is [PEP 668](https://peps.python.org/pep-0668/). Homebrew's Python and most Linux
+distro Pythons refuse to let pip install into them globally, on purpose — it is how you
+break your OS. A virtualenv is the answer, and it is what you want here anyway:
 
 ```bash
-seamcheck check --since $BASE_SHA
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install seamcheck
 ```
 
-Existing findings do not fail the build — only the ones this change introduced — so you
-can turn it on today, in a project that already has a backlog.
+Do not reach for `--break-system-packages`. It does what it says.
+</details>
 
-![The CI gate](docs/images/ci.png)
+<details>
+<summary><b>macOS</b></summary>
 
-`1` = new findings. `2` = no baseline, so the gate didn't run. `0` = clean. That
-distinction matters: a gate that never ran is not a gate that passed.
+The `python3` that ships with macOS is **3.9**, which is too old — and it is why
+`pip3 install seamcheck` can report *"could not find a version that satisfies the
+requirement seamcheck (from versions: none)"*. That message means "nothing here matches
+your Python", not "no such package".
 
-## For agents
+```bash
+brew install python@3.12
+cd your-project
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install seamcheck
+```
+</details>
 
-Seamcheck ships an MCP server, so your assistant can check its own work before it hands it
-to you. It speaks over stdin/stdout — no port, no daemon, no network.
+<details>
+<summary><b>Debian / Ubuntu</b></summary>
 
-![Using Seamcheck from an assistant](docs/images/agent.png)
+```bash
+sudo apt install python3-venv        # if `python3 -m venv` is missing
+python3 -m venv .venv
+source .venv/bin/activate
+pip install seamcheck
+```
+</details>
+
+<details>
+<summary><b>Windows</b></summary>
+
+```powershell
+py -3.12 -m venv .venv
+.venv\Scripts\activate
+pip install seamcheck
+```
+</details>
+
+<details>
+<summary><b>pipx and <code>uv tool</code> — read this before you use them</b></summary>
+
+Both work and both give you `seamcheck` on your PATH everywhere:
+
+```bash
+pipx install seamcheck
+uv tool install seamcheck        # uv fetches its own Python, so no Homebrew needed
+```
+
+**But a pipx or uv-tool copy is isolated from your project on purpose, so it cannot scan a
+Django project** — importing your settings needs your project's own dependencies, and they
+are not in there. Seamcheck will say so rather than showing you a traceback.
+
+They are fine for repos where nothing has to be imported: Express, NestJS, Next.js,
+Fastify.
+</details>
+
+<details>
+<summary><b>Upgrading and getting an old version</b></summary>
+
+pip caches the package index, so shortly after a release you can be handed the previous
+one:
+
+```bash
+pip install --no-cache-dir --upgrade seamcheck
+seamcheck --version
+```
+</details>
+
+## What it looks like
+
+Click any node and it lights the chain that reaches it — hop by hop, with the file and line
+for each.
+
+![A chain lit through the map](docs/images/chain.png)
+
+Everything it is willing to claim, each one explained in a sentence, worst first.
+
+![Findings](docs/images/findings.png)
+
+It reads on a phone, because that is where you end up looking at it.
+
+<img src="docs/images/phone.png" width="320" alt="The map on a phone">
+
+Five looks, if you care. Aurora is the default.
+
+![The design packs](docs/images/packs.png)
+
+## Does it work with my stack?
+
+No configuration — it works out which one you are using.
+
+**Backends** — Django · FastAPI · Flask · Express · Fastify · NestJS · Next.js
+**Frontends** — plain JavaScript · TypeScript · Django templates · CSS and design tokens
+**Also reaches** — Stripe webhooks · Celery tasks and beat schedules · GraphQL schemas
+
+Tried against 20 open-source projects so far: 53,361 files, 9.5M lines, 2,435 routes. If
+yours does not work, I would genuinely like to know.
+
+## Four words, and it never says more than it can prove
+
+| | |
+|---|---|
+| **connected** | Something reaches it, and the evidence is attached. |
+| **unresolved** | Something reaches for it by name and it is not there. Usually a bug. |
+| **unused** | Both ends are visible and nothing connects them. Usually a decision. |
+| **uncertain** | The scan cannot tell. |
+
+`uncertain` is a real answer rather than a cop-out. A route assembled at runtime genuinely
+cannot be known by reading the source, and I would rather it admitted that than pretended
+otherwise. It is also why the other three can be trusted.
+
+## If you build with an AI agent
+
+This is where I have found it most useful, honestly. Asked *who writes this element?*, an
+agent tends to grep, read a handful of files, and make a reasonable guess. On a big repo
+that costs a lot of context and is still a guess.
+
+And there is a failure I have run into more than once: asked to fix something on screen, an
+agent will sometimes add a **second** place that writes the same element rather than finding
+the one already there. The symptom moves, the next session adds another, and it slowly gets
+worse.
+
+So there is an MCP server. The agent can just ask, and gets the answer with the exact lines.
 
 ```bash
 claude mcp add seamcheck -- seamcheck-mcp
 ```
 
-**Cursor, Windsurf, Claude Desktop** — in the MCP config:
+Tools: `check`, `explain`, `triage`, `report`.
 
-```json
-{
-  "mcpServers": {
-    "seamcheck": {
-      "command": "seamcheck-mcp",
-      "cwd": "/path/to/your/django/project"
-    }
-  }
-}
-```
-
-`cwd` matters: Seamcheck reads a real project, so it needs to start in one. It finds the
-settings module the same way the CLI does — the nearest `manage.py`.
-
-Four tools: `seamcheck_check` (scan, report findings new since the last snapshot),
-`seamcheck_report` (the digest), `seamcheck_explain` (one symbol with its evidence), and
-`seamcheck_triage` (record a disposition).
-
-There is also an [`AGENTS.md`](seamcheck/AGENTS.md) with the one rule that matters:
-**never delete something because it came back `uncertain`.** That is the scan saying it
-has no evidence, not that the code is dead.
-
-## Install
+## In CI, if you want it there
 
 ```bash
-pip install seamcheck
+seamcheck check --since $BASE_SHA
 ```
 
-One thing in `settings.py`:
+Exit 1 on new findings, 2 if there is no baseline yet, 0 when clean. It also writes a
+markdown digest you can post as a PR comment with `--format markdown`.
 
-```python
-INSTALLED_APPS = [..., "seamcheck"]
-```
+## What it cannot see
 
-That's it. **Seamcheck works the rest out from your project** — Django already knows where
-its URLconf, its ASGI application, its templates, its apps and its static dirs are, so
-asking `settings` and the app registry is exact rather than a guess. Check what it resolved
-to before you trust a report:
+Routes built at runtime from variables. Elements a framework renders from components rather
+than templates — React and Vue handlers are props, not listeners, and the trail stops at the
+module boundary. Anything reached only by a string the scan cannot resolve.
 
-```bash
-seamcheck config
-```
-
-```
-  templates_root  myapp/templates
-                  └─ settings.TEMPLATES (158 templates; 1 other dir(s) not scanned)
-  urlconf_module  myproject.urls
-                  └─ settings.ROOT_URLCONF
-```
-
-Override anything you disagree with, key by key — what you write always wins:
-
-```python
-SEAMCHECK_CONFIG = {
-    "templates_root": "myapp/templates",
-    # Makes every file:line in the UI open at that line.
-    # vscode (default) · cursor · windsurf · zed · sublime · pycharm · idea · webstorm · none
-    "editor": "cursor",
-}
-```
-
-Detection deliberately errs **wide**. The one config bug found while validating this
-against a real project was a CSS root set narrow enough to exclude the admin stylesheets
-while the admin templates were still being scanned — and that asymmetry invented **185
-findings out of working CSS**. A root that's too broad costs a slower scan; one that's too
-narrow reports bugs that aren't there. `node_modules`, `venv`, `dist` and `collectstatic`
-output are always excluded — a bundler's output is a *copy* of the source, so scanning it
-doubles every symbol and then reports the copies as unreferenced.
-
-<details><summary>The rest of the keys</summary>
-
-| key | what it is | default |
-|---|---|---|
-| `static_urls` | read `urls.py` as text instead of importing it — see below | `false` |
-| `static_root` | where a template's `{% static_js 'a/b.js' %}` resolves from | `static` |
-| `vite_config` | the bundler config, read for entry points | `vite.config.js` |
-| `asgi_module` | scanned for WebSocket and ASGI routes | none |
-| `app_configs` | apps whose models are pulled into the graph | none |
-| `tailwind_build_output` | built CSS, so utility classes aren't read as dead | none |
-| `map_output` | where `seamcheck map` writes | `docs/maps/connectivity-map.html` |
-| `report_output` | where `--format html` writes | `docs/maps/connectivity-report.html` |
-| `editor` | URL scheme for the clickable locations | `vscode` |
-
-</details>
-
-**You need Node on PATH.** The JS and CSS parsers run on it. You do *not* need npm or
-`node_modules` — acorn and postcss ship inlined in the wheel. If Node is missing,
-Seamcheck says so and gives you the Python half rather than dying.
-
-### Scanning a project that will not import
-
-By default Seamcheck asks Django to resolve the URLconf, which is exact and needs the
-project to **run**: settings on the environment, every app importable, every dependency
-installed. That is fine in a project you own and impossible in one you cloned.
-
-```python
-SEAMCHECK_CONFIG = {"static_urls": True}
-```
-
-reads `urls.py` as text instead. Measured against Django's own resolver on a 373-route
-project, it recovers **95% of the routes actually declared in a `urls.py`**. What it misses
-is what no reader of text could:
-
-- **Routes Django generates at runtime** — the admin builds 116 of them from registered
-  ModelAdmins, and they exist in no source file.
-- **Pattern lists built by a loop** — `[path(f'{v}/', view) for v in VARIANTS]`.
-- **Third-party `include()`** whose source is outside the repo, which is excluded on purpose:
-  somebody else's routing table is not your dead code.
-
-## Use
-
-```bash
-seamcheck map               # scan, then open the UI. Start here.
-seamcheck check             # exit 1 on new findings. This is the CI one.
-seamcheck backfill          # give the map some commit history
-
-seamcheck help              # all nine commands
-seamcheck help map          # what one is for, with worked examples
-seamcheck scan              # the totals, no UI, no server
-seamcheck explain <id>      # one symbol, with the code around it
-```
-
-`seamcheck map` scans, writes the UI to a file, and then **serves that file** so you get a
-link you can click:
-
-```
-  wrote  docs/maps/connectivity-map.html  (9.3 MB)
-
-  open   http://127.0.0.1:49497/SW9FfTR4XybG
-  phone  http://192.168.1.38:49497/SW9FfTR4XybG
-
-  Ctrl-C to stop.
-```
-
-Two links because they answer different questions: the first is the one to click here, the
-second is the one to type on a phone on the same wifi. It serves rather than printing a
-`file://` path because a `file://` link is not much of a link — VS Code's terminal opens it
-*inside VS Code*, and a phone can't use it at all.
-
-Nothing is uploaded. While it runs, anyone on your network holding the link can read the
-report; `--local-only` binds loopback instead and drops the phone link, `--tunnel` goes the
-other way and opens a temporary public HTTPS address. `--no-serve` writes the file and
-stops, which is what CI wants.
-
-A scan takes half a minute on a large project, so it draws a progress bar — on **stderr**,
-and only when that is a terminal. `seamcheck json > graph.json` gives you JSON and nothing
-else; a CI log collects no carriage returns.
-
-| | |
-|---|---|
-| `-v`, `--verbose` | show the host project's own warnings and start-up logging. Importing a real Django project prints a screenful before Seamcheck says anything; that noise is off by default, and `ERROR` always gets through either way. |
-| `-q`, `--quiet` | no progress bar |
-
-Anything after `--` goes straight to the management command: `seamcheck map -- --help`
-lists every flag it accepts.
-
-It finds your project by walking up to the nearest `manage.py` and reading the settings
-module out of it, so it works from anywhere inside the tree. Everything is also available
-as `python manage.py seamcheck ...` if you prefer — same code, one implementation.
-
-### The UI
-
-One file, no network, opens on a phone. Columns run left to right in the order a request
-travels — page → module → `fetch()` → endpoint → URL → view → response field — so the axis
-you read along *is* the frontend-to-backend seam.
-
-Every `file:line` in it is a link: click to open that line in your editor, shift-click to
-copy the absolute path.
-
-**Files** is your actual folder tree, with a bar per file showing how much of it Seamcheck
-reasoned about — because "no findings" and "never looked" are not the same sentence. Click
-a file to draw its symbols on the map.
-
-**And the 90% no page reaches.** The map is rooted at page entry points, so models, signal
-receivers, admin actions, routes nothing fetches and template elements no JS selects are
-reached by that graph only sometimes. They get pages of their own rather than being absent:
-*Django-side — reached by Django, not by a page*, *stylesheet rules nothing matched*, and so
-on. Being unreached is not a finding — Django reaches a model, a webhook reaches a route —
-so every symbol keeps its own status and the bucket says why it is a bucket.
-
-### Per-commit
-
-```bash
-seamcheck backfill          # the last 20 commits
-seamcheck backfill 100      # ...or as many as you like
-```
-
-Now the map has a commit picker. Pick one and see what *that commit* changed — added,
-removed, status flipped — including things it deleted, which no longer exist to be drawn
-and get named instead.
-
-### From your phone
-
-```bash
-seamcheck map              # the link, and the phone link
-seamcheck map --tunnel     # ...reachable from anywhere
-```
-
-Nothing is uploaded. The server is a socket on your machine that dies with the command, and
-the URL carries a random token so nothing on your network stumbles into it.
-
-## What it can't do
-
-Written down because a tool that hides its blind spots is worse than no tool:
-
-- **Five backends: Django, FastAPI, NestJS, Next.js and Express/Fastify.** A Rails or
-  Laravel project gets the JS/CSS/DOM half and no routes — and with no route list, every `fetch` is reported
-  unresolved, so the scan says that out loud rather than showing a confident wrong answer.
-- **A project that routes through its own helper gets few routes.** Two of the six repos
-  validated against do this. The scan reports the route list as incomplete, and says why,
-  rather than presenting a confident near-zero.
-- **No React component graph.** TypeScript and JSX parse, so `fetch()` calls in them are
-  found, but a dead component or a `styles.foo` nothing defines is not — React builds the
-  DOM differently enough to need its own extractors.
-- **Vanilla JS.** No React or Vue component graph; `.jsx` does not parse, and React builds
-  the DOM differently enough that it needs new extractors rather than just a parser.
-- **Celery, Redis, WebSockets and Stripe aren't traced.** Anything reached only through
-  those is invisible, and the UI says so rather than showing a confident zero.
-- **A URL built at runtime** stays `uncertain`. The prefix is recorded, never a guess.
-- **Precision has been measured against one real project** — a 511,000-line Django app.
-  Route extraction has since been checked against **16 cloned repositories, 9.4M lines**,
-  but *precision* on code we did not write is still unmeasured, and it will be lower.
-- **Three of those 16 are read only partially**, because they route through their own
-  helpers. The scan reports that rather than presenting a short list as complete.
-- **Recall is completely unmeasured.** A wrong `connected` is invisible by construction.
-
-See [How accurate is it?](#how-accurate-is-it) for exactly what the one measurement says.
-
-## How accurate is it?
-
-Measured on one real Django + vanilla-JS app: **511,000 lines across 1,505 files** — 376 URL
-routes, 328 views, 267 templates, 283 JavaScript modules, 161 stylesheets. Seamcheck reads
-that as **38,010 symbols** (a symbol is one named thing: a route, a function, a selector, a
-design token).
-
-Every one of the **1,455 findings** it reported was hand-assigned a root cause — no
-sampling, nothing left as "probably fine". The first pass came out at **~73% precision**,
-which is the number most tools in this space never publish because nobody measures it.
-
-Then the four causes of the other 27% got fixed:
-
-| cause | findings | fixed |
-|---|---|---|
-| A CSS root set too narrow to see the stylesheets | 185 | config detection now errs wide |
-| Inline `<script>` never read for DOM queries | 148 | now parsed, batched |
-| Interpolated classes reported as literal prefixes | 38 | dropped as fragments |
-| `getPropertyValue` not counted as a use | 1 | now counted |
-
-**1,455 findings → 1,153. Precision ~73% → ~97%.** Measured the same way, twice.
-
-Per category, after: `css_token_use` **100%** · `dom_selector` **98%** · `css_token_def`
-**97%** · `dom_attr` **93%**.
-
-Two things that number does *not* mean. It's one project — a corpus is the next job. And
-"precision" here is "the finding describes something real about the code", not "you must
-act on it": an unstyled, unscripted element is a true observation and a low-priority one.
-
-## Support
-
-Seamcheck is free, MIT, and has no company behind it. If it found you something,
-[**sponsor it on GitHub**](https://github.com/sponsors/dardameiz) — GitHub takes no cut,
-and it is the single clearest signal that this is worth continuing.
-
-Not sponsoring is completely fine. Opening an issue with a finding it got wrong is worth
-more than money, and there are two templates for exactly that:
-[a false finding](https://github.com/dardameiz/seamcheck/issues/new?template=false_finding.yml)
-and [one it missed](https://github.com/dardameiz/seamcheck/issues/new?template=missed_finding.yml).
+It says `uncertain` in all of those cases instead of guessing.
 
 ## Contributing
 
-Issues and PRs welcome. One house rule, and it's the reason the tool is worth anything:
-**never make a claim the scan can't evidence.** If you can't prove it, it's `uncertain`,
-and the note says which evidence source was missing.
-
-The screenshots above are generated, not pasted: `python docs/mockups/capture.py` renders
-the real UI against a fictional bookshop in `docs/mockups/demo_graph.py`. The two dark
-panels are hand-built mockups and say so in their own corner.
+Issues and pull requests welcome, especially "it got this wrong and here is the file".
 
 ## License
 
-MIT.
+MIT. Take it, fork it, improve it.
+
+---
+
+<sub>A note on the copy: the wording on this page was drafted with an LLM, and partly *for*
+them — realistically a coding agent is going to read this README before a person does, and
+decide whether to install it. So it is written to be easy to parse as well as to read. The
+tool itself does the opposite: it will not tell you anything without showing you the line it
+came from.</sub>

@@ -196,7 +196,8 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overf
 .menuwrap { position:relative; }
 /* The page picker, on the glass beside the menu, so moving from one page to the next is
    one tap instead of three. Same shape as the menu button: the two read as one strip. */
-.pagepick { flex:none; max-width:38vw; min-width:0; }
+/* Capped so it cannot grow into the readout sitting centred behind it. */
+.pagepick { flex:none; max-width:min(34vw, 340px); min-width:0; }
 .pagepick select {
   max-width:100%; height:36px; padding:0 30px 0 13px; cursor:pointer;
   border:1.2px solid var(--line-2); background:var(--panel); color:var(--ink);
