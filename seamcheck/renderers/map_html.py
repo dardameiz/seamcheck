@@ -136,6 +136,21 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overf
 .seg button.s-unused[aria-pressed="true"] { background:var(--warn); }
 .seg button.s-uncertain[aria-pressed="true"] { background:var(--dim); }
 .seg button:focus-visible, .tmode:focus-visible { outline:2px solid var(--sig); outline-offset:-2px; }
+/* Explanations, folded. A disclosure rather than a "?" button because the summary line
+   still says what is inside - a bare question mark makes the reader guess. */
+.explain { border-top:1px solid var(--line); margin-top:14px; padding-top:10px; }
+.explain > summary { cursor:pointer; font-size:12.5px; color:var(--muted); list-style:none;
+  display:flex; align-items:center; gap:7px; padding:3px 0; }
+.explain > summary::-webkit-details-marker { display:none; }
+.explain > summary::before { content:"?"; flex:none; width:17px; height:17px; border-radius:50%;
+  border:1px solid var(--line); display:grid; place-items:center; font-size:10.5px;
+  color:var(--muted); }
+.explain[open] > summary { color:var(--ink); margin-bottom:8px; }
+.explain[open] > summary::before { content:"\u00d7"; }
+.explain > summary:focus-visible { outline:2px solid var(--sig); outline-offset:2px; }
+.nothing { position:absolute; inset:auto 12px 78px; text-align:center; pointer-events:none;
+  color:var(--muted); font-size:13px; display:grid; gap:4px; }
+.nothing b { color:var(--ink); font-size:15px; font-weight:600; }
 .tmode { flex:none; width:30px; height:30px; border-radius:8px; border:1px solid var(--line);
   background:var(--panel); color:var(--muted); font-size:14px; cursor:pointer; line-height:1; }
 
@@ -933,6 +948,30 @@ function reportMatches(drawn, matched) {
     : `${matched} of ${drawn}`;
 }
 
+// A filter that matches nothing draws an empty canvas, and an empty canvas is
+// indistinguishable from a broken one. Stripe has six symbols and none of them are
+// unresolved, so "Stripe + unresolved" is legitimately empty - and has to SAY so, naming
+// the filters that emptied it, because the reader set them one at a time and cannot see
+// the combination.
+function reportEmpty(count) {
+  let box = document.getElementById("nothing");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "nothing";
+    box.className = "nothing";
+    (document.querySelector(".main") || document.body).appendChild(box);
+  }
+  box.hidden = count > 0;
+  if (count > 0) return;
+  const bits = [];
+  if (layer) bits.push((LAYERS.find(([k]) => k === layer) || [, layer])[1]);
+  if (statusFilter.size) bits.push([...statusFilter].join(" or "));
+  box.innerHTML = bits.length
+    ? `<b>Nothing is both ${bits.map(esc).join(" and ")}.</b>
+       <span>The filters are fine; this combination is empty.</span>`
+    : "<b>Nothing to draw here.</b><span>Try another page.</span>";
+}
+
 // The layout is nine trial placements over every node on the page - the single most
 // expensive thing here - and it was recomputed on every draw, including the draws that
 // only moved the viewport. Nothing about a pan changes where a node sits relative to its
@@ -1006,6 +1045,7 @@ function draw() {
   const matched = query ? drawnNodes.filter(hit).length : drawnNodes.length;
   const fading = !query || matched > 0;
   reportMatches(drawnNodes.length, matched);
+  reportEmpty(drawnNodes.length);
   const chain = lit && !isolate ? chainOf(p, lit) : null;
   const out = ['<g id="vp">'];
   columns.forEach(c => out.push(
@@ -1674,23 +1714,23 @@ function sidesHtml() {
         <div class="wnum ${r.finds ? "hot" : "cool"}">${pct(r.finds, r.total)}</div>
       </div>`).join("")}
     </div>
-    <p class="gloss">Both bars share one scale, so the sizes are comparable; the darker inset
-      is that side's own findings. The rate is findings over that side's own symbols — a share
-      of the whole project would only tell you which half is bigger.</p>`;
+    <details class="explain"><summary>How to read these bars</summary>
+      <p class="gloss">Both bars share one scale, so the sizes are comparable; the darker
+        inset is that side's own findings. The rate is findings over that side's own
+        symbols — a share of the whole project would only tell you which half is
+        bigger.</p></details>`;
 }
 
+// The numbers, and nothing else on first sight. This screen had four headed sections, a
+// four-term glossary, a two-sentence caveat and a numbered guide - roughly six hundred
+// words in front of the counts a reader opened the page to read. Prose that answers a
+// question nobody asked yet is not documentation, it is a wall; every word of it is still
+// here, one tap away, under the terms it explains.
 function overviewHtml() {
-  return `<h2>Overview</h2><p class="blurb">What the scan is willing to claim about this
-    commit, worst first. A count with no denominator is not a result.</p>
+  return `<h2>Overview</h2>
 
     ${heroHtml()}
     ${sidesHtml()}
-
-    <h3 class="sec">What the four words claim</h3>
-    <div class="skey">${statusKey()}</div>
-    <div class="caveat"><b>Two things to know before you read a number.</b>
-      Seamcheck reads source; it never runs your code, so every row is evidence rather
-      than a verdict. And ${esc(BLIND_SPOTS)}</div>
 
     <h3 class="sec">Backlog by kind</h3>
     ${D.groups.length ? D.groups.map(g =>
@@ -1698,24 +1738,33 @@ function overviewHtml() {
        <div class="t">${esc(g[0])}</div></div>`).join("")
       : `<div class="gap">Nothing the scan is willing to claim.</div>`}
 
-    <h3 class="sec">Where to look next</h3>
-    <div class="doc"><ol>
-      <li><b>Findings</b>, filtered to <code>unresolved</code> — things the code reaches
-        for that are not there. The shortest path to a real bug.</li>
-      <li><b>DOM Wiring</b> — elements more than one file writes. Two writers on one
-        element is the usual cause of a value that flickers or reverts.</li>
-      <li><b>Map</b> — click any node to see the chain that reaches it, hop by hop. The
-        <b>PAGE</b> picker also has the buckets for everything no page reaches.</li>
-      <li><b>Files</b> — click a file to draw its symbols; <code>edit</code> opens it.
-        Any <code>file:line</code> anywhere here opens in your editor.</li>
-    </ol></div>
+    <details class="explain">
+      <summary>What the four words mean, and what this cannot see</summary>
+      <div class="skey">${statusKey()}</div>
+      <div class="caveat"><b>Two things to know before you read a number.</b>
+        Seamcheck reads source; it never runs your code, so every row is evidence rather
+        than a verdict. And ${esc(BLIND_SPOTS)}</div>
+    </details>
+
+    <details class="explain">
+      <summary>Where to look next</summary>
+      <div class="doc"><ol>
+        <li><b>Findings</b>, filtered to <code>unresolved</code> — things the code reaches
+          for that are not there. The shortest path to a real bug.</li>
+        <li><b>DOM Wiring</b> — elements more than one file writes. Two writers on one
+          element is the usual cause of a value that flickers or reverts.</li>
+        <li><b>Map</b> — click any node to see the chain that reaches it, hop by hop. The
+          <b>PAGE</b> picker also has the buckets for everything no page reaches.</li>
+        <li><b>Files</b> — click a file to draw its symbols; <code>edit</code> opens it.
+          Any <code>file:line</code> anywhere here opens in your editor.</li>
+      </ol></div>
+    </details>
 
     <div class="colophon">
       <p>Built by
         <a href="https://github.com/dardameiz/seamcheck" target="_blank" rel="noreferrer">Seamcheck</a>
-        — free, MIT, no company behind it. Got a finding wrong?
-        <a href="https://github.com/dardameiz/seamcheck/issues" target="_blank" rel="noreferrer">Say so</a>
-        — that is worth more than money.</p>
+        — free, MIT. Got a finding wrong?
+        <a href="https://github.com/dardameiz/seamcheck/issues" target="_blank" rel="noreferrer">Say so</a>.</p>
       <a href="https://github.com/sponsors/dardameiz" class="sponsor"
          target="_blank" rel="noreferrer">\u2665 Sponsor Seamcheck</a>
     </div>`;
@@ -1815,8 +1864,11 @@ function renderPanel() {
   }
   if (mode === "overview") { panel.innerHTML = overviewHtml(); return; }
   if (mode === "changes") { panel.innerHTML = changesHtml(); return; }
+  if (mode === "map") { panel.innerHTML = mapListHtml(); return; }
   const sec = D.sections.find(x => x.key === mode);
-  if (!sec) return;
+  // No section owns this view. Returning left whatever the panel last held on screen -
+  // which was the Overview - so "Show as list" on the map looked like it navigated away.
+  if (!sec) { panel.innerHTML = mapListHtml(); return; }
   if (sec.unavailable) {
     panel.innerHTML = `<h2>${esc(sec.title)}</h2><p class="blurb">${esc(sec.blurb)}</p>
       <div class="gap">${esc(sec.unavailable)}</div>`;
@@ -1899,6 +1951,30 @@ function trendChart(entries) {
   </svg>`;
 }
 
+// The map as a list: every node currently drawn, under the same page, layer and status
+// filters as the canvas. On a phone a list of relationships is more legible than any
+// node-link drawing, and it loses nothing - each row IS what the canvas would show.
+function mapListHtml() {
+  const p = currentPage();
+  const rows = p ? lensed(p).filter(n => n.kind !== "page") : [];
+  const where = p ? (p.where ? `${p.title} · ${p.where}` : p.title) : "";
+  const head = `<h2>${esc(where || "Map")}</h2>`;
+  if (!rows.length) {
+    return head + `<p class="blurb">Nothing matches the current filters.</p>
+      <div class="gap">Clear the layer or the status filter to see the rest.</div>`;
+  }
+  const shown = rows.slice(0, 400);
+  return head +
+    `<p class="blurb">${n(rows.length)} thing${rows.length === 1 ? "" : "s"} on this page,
+      under the filters you have set.</p>` +
+    shown.map(r => `<div class="row" data-open="${esc(r.id)}">
+      <span class="badge ${esc(r.status)}">${esc(r.status)}</span>
+      <div class="t">${esc(r.label)}</div>
+      <div class="w">${esc(r.kind)}${r.file ? " · " + loc(r.file, r.line) : ""}</div>
+      ${r.note ? `<div class="n">${esc(r.note)}</div>` : ""}</div>`).join("") +
+    (rows.length > shown.length
+      ? `<div class="gloss">Showing ${n(shown.length)} of ${n(rows.length)}.</div>` : "");
+}
 function changesHtml() {
   const sec = D.sections.find(x => x.key === "changes");
   const entries = (SERIES && SERIES.entries) || [];

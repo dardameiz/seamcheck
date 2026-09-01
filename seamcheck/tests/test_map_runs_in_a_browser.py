@@ -521,3 +521,80 @@ class FiltersReachTheCanvas(DirectionAOnAPhone):
             lambda p: p.select_option("#ly", "stripe"),
         ])
         self.assertGreater(stripe, 0, "picking a service drew an empty canvas")
+
+
+class PanelBehaviour(DirectionAOnAPhone):
+    """Two things the phone review caught, and one measure of the screen it caught them on."""
+
+    def _panel(self, steps, width=390):
+        from playwright.sync_api import sync_playwright
+
+        from seamcheck.console import build_console
+        from seamcheck.mapdata import build_map
+        from seamcheck.renderers.map_html import render
+        from seamcheck.report import build_report
+
+        graph = self._phone_graph()
+        html = render(
+            build_map(graph, {"orders-main": {s.id for s in graph.symbols}}, git_sha="0" * 12),
+            console=build_console(graph, build_report(
+                graph=graph, diff=None, entries=[], git_sha="0" * 12)))
+        path = pathlib.Path(tempfile.mkdtemp()) / "m.html"
+        path.write_text(html, encoding="utf-8")
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch()
+            except Exception as error:  # pragma: no cover
+                raise unittest.SkipTest(f"no chromium: {error}") from None
+            page = browser.new_page(viewport={"width": width, "height": 780})
+            page.goto(path.as_uri(), wait_until="load")
+            page.wait_for_timeout(250)
+            out = [step(page) or page.wait_for_timeout(250) for step in steps]
+            state = page.evaluate("""() => {
+              const panel = document.querySelector('#panel');
+              const seen = el => getComputedStyle(el).display !== 'none';
+              let text = '';
+              const walk = el => { if (!seen(el)) return;
+                if (el.tagName === 'DETAILS' && !el.open) {
+                  text += el.querySelector('summary').textContent + ' '; return; }
+                if (!el.children.length) { text += el.textContent + ' '; return; }
+                [...el.children].forEach(walk); };
+              walk(panel);
+              return {visible: text.trim().replace(/\\s+/g, ' ').length,
+                      folds: panel.querySelectorAll('details.explain').length,
+                      rows: panel.querySelectorAll('.row').length,
+                      head: (panel.querySelector('h2') || {}).textContent || '',
+                      empty: (() => { const e = document.getElementById('nothing');
+                                      return e && !e.hidden ? e.textContent : ""; })()};
+            }""")
+            browser.close()
+        del out
+        return state
+
+    def test_the_overview_leads_with_numbers_not_prose(self):
+        """Six hundred words stood in front of the counts a reader opened the page for."""
+        state = self._panel([])
+        self.assertGreaterEqual(state["folds"], 2, "the prose is not folded")
+        self.assertLess(state["visible"], 1200, "still a wall of text on first sight")
+
+    def test_show_as_list_stays_on_the_map(self):
+        """No section is keyed "map", so renderPanel returned and left the Overview up."""
+        state = self._panel([
+            lambda p: p.select_option("#vw", "map"),
+            lambda p: p.click("#aslist"),
+        ])
+        self.assertNotEqual(state["head"], "Overview", "the list navigated away from the map")
+        self.assertGreater(state["rows"], 0, "the map list is empty")
+
+    def test_an_empty_filter_combination_explains_itself(self):
+        """Stripe has no unresolved symbols, so the pair is legitimately empty.
+
+        An empty canvas is indistinguishable from a broken one, and the reader set the two
+        filters one at a time and cannot see the combination.
+        """
+        state = self._panel([
+            lambda p: p.select_option("#vw", "map"),
+            lambda p: p.select_option("#ly", "stripe"),
+            lambda p: p.click('#colourkey .seg button[data-status="unresolved"]'),
+        ])
+        self.assertIn("Nothing is both", state["empty"])
