@@ -71,7 +71,11 @@ _CSS = """
 [hidden] { display:none !important; }
 /* The canvas is the point. Everything else is a strip above it, and the whole document
    is exactly one screen tall so nothing scrolls the map out of view. */
+/* overscroll-behavior:none stops the page rubber-banding when a drag reaches the edge of
+   the canvas: on iOS that bounce steals the gesture mid-pan, which reads as the map
+   fighting back rather than as the page doing something. */
 body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overflow:hidden;
+       overscroll-behavior:none;
        height:100dvh; -webkit-font-smoothing:antialiased;
        font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
 /* Every value the scan read is shown in the font it was written in. */
@@ -131,6 +135,17 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overf
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .seg button:last-child { border-right:0; }
 .seg button[aria-pressed="true"] { color:var(--bg); background:var(--ink); }
+/* "all" pressed is the resting state and should look like nothing; anything else is a
+   filter the reader set and has to be findable when they come back to the screen a minute
+   later, which on a phone is the common case. The pill itself carries the signal, so it
+   reads from the corner of the eye without parsing five small words. */
+.seg button[data-status=""][aria-pressed="true"] { background:var(--sunk); color:var(--muted); }
+.pill.filtering, .legendbar.filtering .seg { border-color:var(--sig); }
+.pill.filtering { box-shadow:0 0 0 1px var(--sig), 0 10px 30px -12px rgba(0,0,0,.6); }
+.fnote { grid-column:1 / -1; font-size:11px; color:var(--sig); display:flex; gap:8px;
+  align-items:center; justify-content:space-between; }
+.fnote button { background:none; border:0; color:var(--sig); font:inherit; font-size:11px;
+  text-decoration:underline; cursor:pointer; padding:0; }
 .seg button.s-connected[aria-pressed="true"] { background:var(--ok); }
 .seg button.s-unresolved[aria-pressed="true"] { background:var(--crit); }
 .seg button.s-unused[aria-pressed="true"] { background:var(--warn); }
@@ -169,8 +184,35 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overf
    belongs in one pill at the bottom instead: over the canvas rather than above it,
    and within reach of the thumb that is already holding the phone. */
 @media (max-width: 720px) {
-  .top { padding-bottom:0; }
-  .main { position:relative; }
+  /* The canvas IS the page. Everything else floats on top of it - the header was a block
+     ABOVE the map, and with the brand line, the reading, the view picker and the crumb
+     row it took nearly half the screen before a single node was drawn. Overlaying costs
+     nothing: the map under a control is still map, and a reader pans it out from under. */
+  .content { position:relative; }
+  .top {
+    position:absolute; inset:0 0 auto; z-index:5;
+    background:linear-gradient(var(--bg) 62%, transparent);
+    border-bottom:0; padding-bottom:10px; pointer-events:none;
+  }
+  .top > * { pointer-events:auto; }
+  .main { position:absolute; inset:0; }
+
+  /* One line for identity, and the count kept small enough to sit beside it. */
+  .brand { padding:7px 12px 2px; }
+  .brand b { font-size:13px; }
+  .reading { padding:0 12px 6px; gap:12px; align-items:center; }
+  .big { display:flex; align-items:baseline; gap:8px; line-height:1; }
+  .big span { margin:0; font-size:9.5px; }
+  .big b { font-size:21px; }
+  .spark { height:20px; max-width:120px; }
+  /* The view picker moves into the pill with the others; two rows of selects at the top
+     and another two at the bottom is the same control surface, twice. */
+  .filters.onlymob { display:none; }
+  .crumbrow { padding:2px 12px 6px; }
+  .crumbrow #crumb { display:none; }
+  .zoom { left:auto; right:10px; bottom:auto; top:96px; flex-direction:column; }
+  .key { bottom:auto; top:96px; right:58px; }
+
   .filters, .legendbar {
     position:static; margin:0;
   }
@@ -184,7 +226,7 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overf
     display:grid; gap:7px;
     box-shadow:0 10px 30px -12px rgba(0,0,0,.6);
   }
-  .pill .filters { display:flex; gap:6px; padding:0; }
+  .pill .filters { display:flex; gap:6px; padding:0; flex-wrap:wrap; }
   .pill .filters label { flex:1 1 0; min-width:0; }
   .pill .filters label span { display:none; }
   .pill .legendbar { padding:0; }
@@ -748,6 +790,46 @@ function syncStatusKey() {
     const on = status ? statusFilter.has(status) : statusFilter.size === 0;
     button.setAttribute("aria-pressed", on ? "true" : "false");
   });
+  markFiltered();
+}
+
+// Anything other than "everything" has to be visible from across the room. A reader sets
+// a filter, pans for a minute, and comes back to a map that is not the whole map - with
+// no way to tell except reading five small words in a row of buttons.
+function markFiltered() {
+  const on = statusFilter.size > 0 || Boolean(layer);
+  const pill = document.querySelector(".pill");
+  if (pill) pill.classList.toggle("filtering", on);
+  colourkey.classList.toggle("filtering", statusFilter.size > 0);
+
+  let note = document.getElementById("fnote");
+  if (!on) { if (note) note.remove(); return; }
+  const holder = pill || colourkey.parentElement;
+  if (!note) {
+    note = document.createElement("div");
+    note.id = "fnote";
+    note.className = "fnote";
+    holder.appendChild(note);
+    note.addEventListener("click", event => {
+      if (!event.target.closest("button")) return;
+      statusFilter.clear();
+      layer = "";
+      const picker = document.getElementById("ly");
+      if (picker) picker.value = "";
+      const wrap = document.getElementById("pgwrap");
+      if (wrap) wrap.hidden = false;
+      syncStatusKey();
+      focus = null;
+      fillPages();
+      draw();
+    });
+  } else if (note.parentElement !== holder) {
+    holder.appendChild(note);
+  }
+  const bits = [];
+  if (layer) bits.push((LAYERS.find(([k]) => k === layer) || [, layer])[1]);
+  if (statusFilter.size) bits.push([...statusFilter].join(" + "));
+  note.innerHTML = `<span>Filtered: ${esc(bits.join(" · "))}</span><button type="button">clear</button>`;
 }
 syncStatusKey();
 
@@ -2096,6 +2178,7 @@ ly.onchange = e => {
   const global = SERVICE_LAYERS.has(layer);
   const wrap = document.getElementById("pgwrap");
   if (wrap) wrap.hidden = global;
+  markFiltered();
   fillPages();
   draw();
 };
@@ -2118,6 +2201,15 @@ ly.onchange = e => {
         main.appendChild(box);
       }
       parts.forEach(part => part && box.appendChild(part));
+      // The view picker joins them: two rows of selects at the top and two more at the
+      // bottom is the same control surface built twice, and the top copy was costing the
+      // canvas a row it could not spare.
+      const view = document.querySelector(".filters.onlymob");
+      const target = box.querySelector(".filters:not(.onlymob)");
+      if (view && target && !target.contains(document.getElementById("vw"))) {
+        const label = view.querySelector("label");
+        if (label) target.insertBefore(label, target.firstChild);
+      }
     } else if (box) {
       parts.forEach(part => part && header.insertBefore(part, document.querySelector(".crumbrow")));
       box.remove();

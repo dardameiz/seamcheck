@@ -598,3 +598,95 @@ class PanelBehaviour(DirectionAOnAPhone):
             lambda p: p.click('#colourkey .seg button[data-status="unresolved"]'),
         ])
         self.assertIn("Nothing is both", state["empty"])
+
+
+class ThePhoneCanvas(DirectionAOnAPhone):
+    """On a 15 Pro Max the map got about 40% of the screen. It is the page; it gets it all.
+
+    The header was a BLOCK above the canvas - brand line, reading, view picker, crumb row -
+    and with the pill at the bottom the drawing was squeezed into what was left. Overlaying
+    the chrome costs nothing, because map under a control is still map and a reader pans it
+    out from under.
+    """
+
+    def _measure(self, width=430, height=839):
+        from playwright.sync_api import sync_playwright
+
+        from seamcheck.console import build_console
+        from seamcheck.mapdata import build_map
+        from seamcheck.renderers.map_html import render
+        from seamcheck.report import build_report
+
+        graph = self._phone_graph()
+        html = render(
+            build_map(graph, {"orders-main": {s.id for s in graph.symbols}}, git_sha="0" * 12),
+            console=build_console(graph, build_report(
+                graph=graph, diff=None, entries=[], git_sha="0" * 12)))
+        path = pathlib.Path(tempfile.mkdtemp()) / "m.html"
+        path.write_text(html, encoding="utf-8")
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch()
+            except Exception as error:  # pragma: no cover
+                raise unittest.SkipTest(f"no chromium: {error}") from None
+            page = browser.new_page(viewport={"width": width, "height": height},
+                                    is_mobile=True, has_touch=True)
+            page.goto(path.as_uri(), wait_until="load")
+            page.wait_for_timeout(250)
+            page.select_option("#vw", "map")
+            page.wait_for_timeout(350)
+            state = page.evaluate("""() => {
+              const top = document.querySelector('.top').getBoundingClientRect();
+              const pill = document.querySelector('.pill');
+              const pr = pill ? pill.getBoundingClientRect() : null;
+              const main = document.querySelector('.main').getBoundingClientRect();
+              return {
+                canvasShare: main.height / window.innerHeight,
+                clearShare: (window.innerHeight - top.height - (pr ? pr.height : 0))
+                            / window.innerHeight,
+                viewInPill: !!(pill && pill.querySelector('#vw')),
+                topSelects: document.querySelectorAll('.top select').length,
+                headerOverlays: getComputedStyle(document.querySelector('.top')).position,
+                canDragUnderHeader:
+                  getComputedStyle(document.querySelector('.top')).pointerEvents === 'none',
+                noBounce: getComputedStyle(document.body).overscrollBehaviorY === 'none',
+              };
+            }""")
+            page.click('#colourkey .seg button[data-status="unresolved"]')
+            page.wait_for_timeout(300)
+            state["filtering"] = page.evaluate(
+                "() => document.querySelector('.pill').classList.contains('filtering')")
+            state["note"] = page.evaluate(
+                "() => (document.getElementById('fnote') || {}).textContent || ''")
+            page.click("#fnote button")
+            page.wait_for_timeout(300)
+            state["clearedNote"] = page.evaluate("() => !!document.getElementById('fnote')")
+            state["clearedFiltering"] = page.evaluate(
+                "() => document.querySelector('.pill').classList.contains('filtering')")
+            browser.close()
+        return state
+
+    def test_the_canvas_fills_the_screen(self):
+        self.assertGreaterEqual(self._measure()["canvasShare"], 0.99)
+
+    def test_most_of_the_screen_is_unobstructed_map(self):
+        self.assertGreater(self._measure()["clearShare"], 0.65)
+
+    def test_the_chrome_floats_and_does_not_swallow_the_drag(self):
+        state = self._measure()
+        self.assertEqual(state["headerOverlays"], "absolute")
+        self.assertTrue(state["canDragUnderHeader"], "the header eats gestures over the map")
+        self.assertTrue(state["noBounce"], "the page will rubber-band mid-pan on iOS")
+
+    def test_the_view_picker_is_not_built_twice(self):
+        state = self._measure()
+        self.assertTrue(state["viewInPill"])
+        self.assertEqual(state["topSelects"], 0, "two rows of selects for one control surface")
+
+    def test_an_active_filter_is_obvious_and_clearable(self):
+        """A reader sets a filter, pans for a minute, and comes back to a partial map."""
+        state = self._measure()
+        self.assertTrue(state["filtering"], "nothing marks the map as filtered")
+        self.assertIn("unresolved", state["note"])
+        self.assertFalse(state["clearedNote"], "clear did not remove the notice")
+        self.assertFalse(state["clearedFiltering"])
