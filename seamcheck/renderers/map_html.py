@@ -632,9 +632,16 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
 #cv .band { fill:var(--panel); opacity:.30; stroke:var(--line); stroke-width:1; }
 #cv .band.seam { fill:var(--sig-fill); opacity:.55; stroke:var(--sig);
                  stroke-dasharray:5 4; }
-#cv .bandlbl { font-size:10px; fill:var(--muted); letter-spacing:.19em; font-weight:500;
+#cv .bandlbl { font-size:11px; fill:var(--muted); letter-spacing:.17em; font-weight:500;
                pointer-events:none; }
+#cv .bandbig { font-size:26px; fill:var(--ink); font-weight:700; letter-spacing:-.02em;
+               font-family:var(--display); pointer-events:none; opacity:.92; }
 .listing { font-variant-ligatures:none; }
+/* The block the line belongs to: the function, the rule, the handler. The line itself
+   still gets the strongest mark; its block gets a quieter one so the eye reads the whole
+   shape and lands on the exact row. */
+.listing .ln.inblock { background:var(--sig-fill); }
+.listing .ln.inblock .num { color:var(--sig); opacity:.8; }
 /* The run of characters the row was actually about. */
 .listing mark.hit { background:var(--sig); color:var(--bg); border-radius:3px;
                     padding:0 2px; font-weight:600; }
@@ -656,8 +663,11 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
             border-radius:8px; border:1px solid var(--line); background:var(--bg);
             color:var(--ink); cursor:pointer; }
 .filters label.wide { flex:1 1 100%; }
-.panel { position:absolute; inset:0; overflow-y:auto; padding:14px 12px 40px;
-         background:var(--bg); }
+/* The panel fills the same box the canvas does, and the chrome floats over both - so its
+   first heading has to start below the dropdown and its last row above the pills. */
+.panel { position:absolute; inset:0; overflow-y:auto; background:var(--bg);
+         padding:calc(var(--chrome-top, 56px) + 10px) 12px
+                 calc(var(--chrome-bottom, 62px) + 24px); }
 .panel h2 { font-size:17px; margin:0 0 4px; }
 .panel .blurb { color:var(--muted); font-size:12.5px; margin:0 0 12px; max-width:62ch; }
 .panel .tools { display:flex; gap:8px; margin-bottom:12px; }
@@ -1544,7 +1554,7 @@ const ROW_CHOICES = [3, 4, 5, 6, 8, 10, 12, 16, 20];
 // reaches is last. Reading down the canvas is reading the request: a person touches
 // something at the top, it crosses the middle, and the bottom is what runs. Columns still
 // run left-to-right INSIDE a band, which is where the kind ordering belongs.
-const BAND_TOP = 58, BAND_BOT = 18, BAND_GAP = 22;
+const BAND_TOP = 96, BAND_BOT = 22, BAND_GAP = 26;
 
 // Cards, flowing left to right, not slivers stacked in a column. A 150x20 sliver holds one
 // truncated line and 18,000 of them is a wall nobody reads. A card is 190x48 with a name on
@@ -1840,12 +1850,29 @@ function draw() {
   // the whole chain, nudged clear of the left edge. Only the first draw of a view fits:
   // once someone pans or zooms, the view is theirs.
   if (view.k === 1 && view.x === 0 && view.y === 0) {
-    const haveW = svg.clientWidth || 800, haveH = svg.clientHeight || 600;
-    // Fit the whole page, however wide it got. The floor is low on purpose: at that zoom
-    // nobody is reading labels, they are seeing which blocks connect and which stand
-    // alone - the question the canvas exists to answer.
+    // The controls float ON the canvas, so the drawing has to open INSIDE what is left of
+    // it. Fitting to the whole element put the top band under the menu button and the
+    // bottom one under the status pills - the first and last thing a reader looks at were
+    // the two things covered up.
+    // Measured from the controls themselves, not from a custom property they publish: on
+    // a phone the status pills wrap to two rows, so the number in the variable is a frame
+    // out of date exactly when it matters most and the last band ends up under them.
+    const box = svg.getBoundingClientRect();
+    const clear = (el, edge) => {
+      if (!el || el.hidden) return 56;
+      const r = el.getBoundingClientRect();
+      if (!r.height) return 56;
+      return edge === "top" ? (r.bottom - box.top) + 14 : (box.bottom - r.top) + 14;
+    };
+    const inTop = clear(document.getElementById("menubtn"), "top");
+    const inBot = clear(document.getElementById("colourkey"), "bottom");
+    const haveW = (svg.clientWidth || 800) - 24;
+    const haveH = (svg.clientHeight || 600) - inTop - inBot;
+    // The floor is low on purpose: at that zoom nobody is reading labels, they are seeing
+    // which blocks connect and which stand alone.
     view.k = Math.min(1, Math.max(0.06, Math.min(haveW / (width + 40), haveH / (height + 40))));
-    if (height * view.k < haveH) view.y = Math.min(48, (haveH - height * view.k) / 2);
+    view.x = 12;
+    view.y = inTop + Math.max(0, (haveH - height * view.k) / 2);
   }
   // What the click lit up. Everything else stays on the canvas but recedes, so the chain
   // reads as a line through the page instead of the reader tracing edges by eye. Declared
@@ -1865,9 +1892,14 @@ function draw() {
   (bands || []).forEach(band => {
     out.push(`<rect class="band ${esc(band.id)}" x="26" y="${band.y}"
       width="${band.w}" height="${band.h}" rx="18"/>`);
-    // The topmost heading opens under the floating menu button, so it starts clear of it.
-    const x = band.first ? 150 : 44;
-    out.push(`<text class="bandlbl" x="${x}" y="${band.y + 24}">${esc(band.label)}</text>`);
+    // Two lines, and the first of them big. A 10px tracked heading is a caption; the
+    // thing a reader needs at a glance is WHICH REGION they are looking at, so the region
+    // gets display size and the sentence explaining it sits underneath in small caps.
+    const [big, ...rest] = band.label.split(" \u2014 ");
+    out.push(`<text class="bandbig" x="44" y="${band.y + 42}">${esc(big)}</text>`);
+    if (rest.length) {
+      out.push(`<text class="bandlbl" x="44" y="${band.y + 62}">${esc(rest.join(" \u2014 "))}</text>`);
+    }
   });
   columns.forEach(c => out.push(
     `<text class="col" x="${c.x}" y="${c.y}">${esc(c.label)} ${c.count}</text>`));
@@ -2010,7 +2042,10 @@ function routes(id) {
 // numbered, "1 of 5", and the last one says so.
 function hop(id, here, step, total) {
   const n = byId.get(id); if (!n) return "";
-  const code = n.context || n.snippet;
+  // A module carries no snippet and no context - a file has no single line to quote - so
+  // the button never appeared on exactly the hop a reader most wants to open. When the map
+  // is served the whole file is one request away, so a file is enough.
+  const code = n.context || n.snippet || (n.file && location.protocol !== "file:");
   // The count lives in the section heading ("2 hops"), so a per-row "of 2" only repeats
   // it. The number and the word `last` are what a row needs: where am I, and is this the
   // end of the line.
@@ -2118,14 +2153,43 @@ function markLabel(raw, label) {
     highlight(raw.slice(at + label.length));
 }
 
+// The block a line belongs to, found by indentation: the line itself, everything nested
+// under it, and the closing bracket that ends it. Marking one line answers "where", and a
+// reader opening code wants "what" - the function, the rule, the handler.
+function blockRange(lines, line) {
+  const i = line - 1;
+  if (i < 0 || i >= lines.length) return null;
+  const indent = t => { const at = t.search(/\S/); return at < 0 ? -1 : at; };
+  const base = indent(lines[i]);
+  if (base < 0) return null;
+  let end = i;
+  for (let j = i + 1; j < lines.length; j++) {
+    if (!lines[j].trim()) continue;
+    if (indent(lines[j]) <= base) break;
+    end = j;
+  }
+  // The line that closes it sits back at the opening indent - `}`, `)`, `</div>` - and
+  // belongs to the block even though it is not nested inside it.
+  for (let j = end + 1; j < lines.length; j++) {
+    const t = lines[j].trim();
+    if (!t) continue;
+    if (indent(lines[j]) <= base && /^[)}\]>;,]/.test(t)) end = j;
+    break;
+  }
+  return end > i ? [i, end] : null;
+}
+
 function renderSource(file, text, line, title, label) {
   const marks = findingsIn(file);
   const lines = text.split("\n");
   const width = String(lines.length).length;
+  const block = line ? blockRange(lines, line) : null;
   const body = lines.map((raw, i) => {
     const number = i + 1;
     const mark = marks.get(number);
-    const cls = ["ln", number === line ? "here" : "", mark ? "mark " + mark : ""].join(" ");
+    const inBlock = block && i > block[0] && i <= block[1];
+    const cls = ["ln", number === line ? "here" : "", inBlock ? "inblock" : "",
+                 mark ? "mark " + mark : ""].join(" ");
     return `<div class="${cls}" id="L${number}"><span class="num">${
       String(number).padStart(width, " ")}</span><span class="src">${
       number === line ? markLabel(raw, label) : highlight(raw)}</span></div>`;
@@ -2136,9 +2200,10 @@ function renderSource(file, text, line, title, label) {
   const target = document.getElementById("L" + line);
   if (target) target.scrollIntoView({block: "center"});
   const other = marks.size - (marks.has(line) ? 1 : 0);
-  document.getElementById("codenote").textContent = other
-    ? `${lines.length} lines · ${other} other finding${other === 1 ? "" : "s"} in this file, marked in the gutter`
-    : `${lines.length} lines`;
+  const bits = [`${lines.length} lines`];
+  if (block) bits.push(`block ${block[0] + 1}\u2013${block[1] + 1} highlighted`);
+  if (other) bits.push(`${other} other finding${other === 1 ? "" : "s"} in this file, marked in the gutter`);
+  document.getElementById("codenote").textContent = bits.join(" \u00b7 ");
 }
 
 async function showCode(id) {
@@ -3188,6 +3253,9 @@ function switchTo(next) {
     const item = rail.querySelector(`.nv[data-key="${mode}"] span`);
     label.textContent = item ? item.textContent.trim() : mode;
   }
+  // Choosing where to go is the end of using the menu, so the menu goes away. It was
+  // staying open over the thing it had just navigated to.
+  if (window.setSheet) setSheet(false);
   closeSheet();
   cq = ""; cstatus = ""; shown = ROWS_PER_PAGE;
   focus = null; view = {x:0, y:0, k:1};
@@ -3287,6 +3355,9 @@ ly.onchange = e => {
     const crumb = document.getElementById("crumb");
     const has = crumb && !crumb.hidden && crumb.textContent.trim().length > 0;
     readout.classList.toggle("show", !!has);
+    // opacity:0 still reserves a painted capsule on some engines, and an empty pill
+    // floating over the map reads as a bug. Take it out of the tree entirely.
+    readout.hidden = !has;
   };
 
   // How much of the canvas the floating controls occupy. The panel pads itself by these,
