@@ -32,11 +32,7 @@ that is the most useful thing anyone can send me.
 
 ## Install
 
-Seamcheck reads a Django project **by importing it**, so install it into the same
-virtualenv your project runs in.
-
 ```bash
-source .venv/bin/activate        # your project's virtualenv
 pip install seamcheck
 seamcheck map
 ```
@@ -45,8 +41,17 @@ That is the whole setup. It opens a map of your project and prints a link you ca
 your phone. **Have a look around before reading any further** — it explains itself better
 than this page does.
 
-Needs **Python 3.10 or newer**. Django is *not* a dependency — only a Django project needs
-it, and such a project already has it.
+Needs **Python 3.10 or newer**, and nothing else.
+
+**If your project is Django**, put it in the project's own virtualenv:
+
+```bash
+source .venv/bin/activate
+pip install seamcheck
+```
+
+A Django project is the one thing seamcheck reads by *importing* it, so it has to run where
+that project's imports resolve. Every other backend is read from source, so anywhere works.
 
 For the agent server: `pip install 'seamcheck[mcp]'`.
 
@@ -118,8 +123,8 @@ uv tool install seamcheck        # uv fetches its own Python, so no Homebrew nee
 Django project** — importing your settings needs your project's own dependencies, and they
 are not in there. Seamcheck will say so rather than showing you a traceback.
 
-They are fine for repos where nothing has to be imported: Express, NestJS, Next.js,
-Fastify.
+They are fine for everything else, since nothing there has to be imported: Express,
+Fastify, NestJS, Next.js, Flask, FastAPI, and Supabase, Firebase or Redis projects.
 </details>
 
 <details>
