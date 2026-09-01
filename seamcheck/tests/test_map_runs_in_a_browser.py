@@ -291,3 +291,115 @@ class ThemeControl(MapRunsInABrowser):
 
     def test_three_presses_return_to_the_system(self):
         self.assertIsNone(self._cycle(3))
+
+
+class DirectionAOnAPhone(MapRunsInABrowser):
+    """The phone layout: one pill at the bottom, and the canvas gets the rest.
+
+    The header was six stacked rows - brand, view, commit, page, crumb, colour key - and
+    the map got roughly a third of a 390px screen. Every control belongs in one container
+    over the canvas instead, within reach of the thumb already holding the phone.
+    """
+
+    @staticmethod
+    def _phone_graph():
+        from seamcheck.graph import Graph, Status, Symbol
+
+        def symbol(kind, label, status=Status.CONNECTED, file="a.py"):
+            return Symbol(id=f"{kind}:{label}", kind=kind, label=label, sub="", file=file,
+                          line=1, status=status, snippet="x", chain=[label], note="")
+
+        return Graph(symbols=[
+            symbol("url", "api/orders/"), symbol("view", "orders"),
+            symbol("module", "orders.js", file="s/orders.js"),
+            symbol("fetch_target", "/api/gone/", Status.UNRESOLVED, "s/orders.js"),
+            symbol("css_selector", "cart", Status.UNUSED, "a.css"),
+            symbol("stripe_webhook", "webhook"), symbol("stripe_event", "charge.refunded"),
+            symbol("celery_task", "billing.send_receipt"),
+        ], edges=[])
+
+    def _open(self, width=390):
+        from playwright.sync_api import sync_playwright
+
+        from seamcheck.console import build_console
+        from seamcheck.mapdata import build_map
+        from seamcheck.renderers.map_html import render
+        from seamcheck.report import build_report
+        from seamcheck.trend import Entry, trend
+
+        graph = self._phone_graph()
+        series = trend([
+            Entry(sha=str(i) * 40, at=f"2026-0{i + 1}-01T00:00:00", symbols=8, findings=f,
+                  by_status={}, by_kind={"css_selector": f}) for i, f in enumerate((40, 22, 12))
+        ])
+        html = render(
+            build_map(graph, {"orders-main": {s.id for s in graph.symbols}}, git_sha="0" * 12),
+            console=build_console(graph, build_report(
+                graph=graph, diff=None, entries=[], git_sha="0" * 12)),
+            series=series)
+        path = pathlib.Path(tempfile.mkdtemp()) / "m.html"
+        path.write_text(html, encoding="utf-8")
+
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch()
+            except Exception as error:  # pragma: no cover
+                raise unittest.SkipTest(f"no chromium: {error}") from None
+            page = browser.new_page(viewport={"width": width, "height": 780})
+            errors: list[str] = []
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.goto(path.as_uri(), wait_until="load")
+            page.wait_for_timeout(300)
+            # The phone gets a View select; the desktop keeps the rail. Same destination,
+            # two controls, because the rail does not fit on 390px.
+            if width <= 720:
+                page.select_option("#vw", "map")
+            else:
+                page.click('#nav .nv[data-key="map"]')
+            page.wait_for_timeout(300)
+            state = page.evaluate("""() => ({
+                pill: !!document.querySelector('.pill'),
+                page: !!document.querySelector('.pill #pg'),
+                layer: !!document.querySelector('.pill #ly'),
+                status: !!document.querySelector('.pill #colourkey'),
+                reading: !document.getElementById('reading').hidden,
+                big: (document.getElementById('bignum') || {}).textContent,
+                spark: document.querySelectorAll('#spark polyline').length,
+                layers: [...document.querySelectorAll('#ly option')].map(o => o.value),
+                canvasShare: document.querySelector('.main').getBoundingClientRect().height / 780,
+                selects: document.querySelectorAll('#pg').length,
+            })""")
+            browser.close()
+        self.assertEqual(errors, [], f"the phone layout raised: {errors}")
+        return state
+
+    def test_every_control_is_in_one_pill(self):
+        state = self._open()
+        self.assertTrue(state["pill"], "no pill was built")
+        for control in ("page", "layer", "status"):
+            self.assertTrue(state[control], f"the {control} control is not in the pill")
+
+    def test_the_controls_are_moved_not_duplicated(self):
+        """Two copies of the page select is two answers to which page is open."""
+        self.assertEqual(self._open()["selects"], 1)
+
+    def test_the_canvas_gets_most_of_the_screen(self):
+        self.assertGreater(self._open()["canvasShare"], 0.6)
+
+    def test_the_reading_shows_the_count_and_its_trend(self):
+        state = self._open()
+        self.assertTrue(state["reading"])
+        self.assertTrue(state["big"])
+        self.assertEqual(state["spark"], 1, "three scans should draw a sparkline")
+
+    def test_each_service_is_its_own_layer(self):
+        """"Show me Stripe" is the question; "does this talk to anything" is not."""
+        layers = self._open()["layers"]
+        self.assertIn("stripe", layers)
+        self.assertIn("celery", layers)
+        self.assertNotIn("graphql", layers, "a service the scan did not find is not offered")
+        self.assertIn("", layers, "there must be a way back to everything")
+
+    def test_the_desktop_keeps_its_header(self):
+        state = self._open(width=1200)
+        self.assertFalse(state["pill"], "the pill is a phone layout, not a redesign of both")

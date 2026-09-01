@@ -138,6 +138,48 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overf
 .seg button:focus-visible, .tmode:focus-visible { outline:2px solid var(--sig); outline-offset:-2px; }
 .tmode { flex:none; width:30px; height:30px; border-radius:8px; border:1px solid var(--line);
   background:var(--panel); color:var(--muted); font-size:14px; cursor:pointer; line-height:1; }
+
+/* The reading: one number given real size, because it is the number a reader opened the
+   page for, with the trend beside it as a sparkline rather than a second screen. */
+.reading { display:flex; align-items:flex-end; gap:18px; padding:2px 12px 10px; }
+.big { line-height:.9; }
+.big span { display:block; font-size:10px; letter-spacing:.14em; text-transform:uppercase;
+  color:var(--muted); margin-bottom:6px; }
+.big b { font-size:38px; font-weight:600; letter-spacing:-.03em; font-variant-numeric:tabular-nums; }
+.spark { flex:1; height:30px; min-width:0; }
+
+/* ── Direction A, on the screen it was drawn for ────────────────────────────
+   On a phone the header was six stacked rows - brand, view, commit, page, crumb,
+   legend - and the map got what was left, which was about a third. Every control
+   belongs in one pill at the bottom instead: over the canvas rather than above it,
+   and within reach of the thumb that is already holding the phone. */
+@media (max-width: 720px) {
+  .top { padding-bottom:0; }
+  .main { position:relative; }
+  .filters, .legendbar {
+    position:static; margin:0;
+  }
+  .pill {
+    position:absolute; left:8px; right:8px; bottom:8px; z-index:6;
+    /* Solid, not translucent. The palette bans mixing against the panel because a
+       near-black ground turns any mix to grey mush - and a control sitting over a graph
+       of hairlines needs to be read, not seen through. */
+    background:var(--panel);
+    border:1px solid var(--line); border-radius:14px; padding:8px;
+    display:grid; gap:7px;
+    box-shadow:0 10px 30px -12px rgba(0,0,0,.6);
+  }
+  .pill .filters { display:flex; gap:6px; padding:0; }
+  .pill .filters label { flex:1 1 0; min-width:0; }
+  .pill .filters label span { display:none; }
+  .pill .legendbar { padding:0; }
+  .pill .flabel { display:none; }
+  .pill .seg button { font-size:10px; padding:8px 1px; }
+  /* The crumb row keeps its search, but stops being a row of its own. */
+  .crumbrow { padding:4px 12px 8px; }
+  .reading { padding-bottom:8px; }
+  .zoom { bottom:auto; top:10px; }
+}
 /* The key was already the vocabulary of the map; making it the filter means the control
    and its explanation are the same object, instead of a second control that repeats it. */
 button.k { background:none; border:0; padding:2px 6px; margin:-2px -6px; border-radius:5px;
@@ -546,6 +588,38 @@ const SECTION_KINDS = {
                          "celery_schedule", "graphql_field", "graphql_selection"]),
 };
 
+// A service is its own layer. "Integrations" as one bucket answers "does this project
+// talk to anything", which nobody asks; the question is "show me Stripe" - one service,
+// its entry point and every name it dispatches on, with the rest of the graph out of the
+// way. Kept separate from SECTION_KINDS because a layer filters the CANVAS while a
+// section switches the whole view.
+const LAYERS = [
+  ["", "Everything"],
+  ["boundary", "Frontend ↔ Backend"],
+  ["dom", "DOM wiring"],
+  ["css", "CSS & tokens"],
+  ["backend", "Backend"],
+  ["stripe", "Stripe"],
+  ["celery", "Celery"],
+  ["graphql", "GraphQL"],
+];
+const LAYER_KINDS = {
+  stripe: new Set(["stripe_webhook", "stripe_event"]),
+  celery: new Set(["celery_task", "celery_schedule"]),
+  graphql: new Set(["graphql_field", "graphql_selection"]),
+};
+// A layer only offers itself when the scan actually found that service.
+function layersPresent() {
+  const kinds = new Set();
+  PAGES.forEach(p => p.nodes.forEach(n => kinds.add(n.kind)));
+  return LAYERS.filter(([key]) => {
+    if (!key) return true;
+    const want = LAYER_KINDS[key] || SECTION_KINDS[key];
+    return !want || [...want].some(k => kinds.has(k));
+  });
+}
+let layer = "";
+
 // Empty means "every status". A Set rather than a single value because "show me the
 // unresolved AND the unused" - the two that are actionable - is the common ask.
 const statusFilter = new Set();
@@ -662,8 +736,10 @@ applyTheme();
 // "16 nodes" over a canvas showing two is the tool lying about its own view.
 function lensed(p) {
   const kinds = SECTION_KINDS[mode];
+  const only = layer ? (LAYER_KINDS[layer] || SECTION_KINDS[layer]) : null;
   return p.nodes.filter(n =>
     (!kinds || n.kind === "page" || kinds.has(n.kind)) &&
+    (!only || only.has(n.kind)) &&
     (!statusFilter.size || n.kind === "page" || statusFilter.has(n.status)));
 }
 
@@ -1860,6 +1936,82 @@ document.getElementById("up").onclick = () => { focus = null; view = {x:0,y:0,k:
 draw();
 viewer.value = OPENS_ON;
 switchTo(OPENS_ON);
+// ── The reading ───────────────────────────────────────────────────────────
+// The count and its trend, drawn once. It answers "how bad is it, and which way is it
+// going" before a reader has touched anything, which is the whole reason to open the map.
+(function reading() {
+  const box = document.getElementById("reading");
+  const entries = (typeof SERIES !== "undefined" && SERIES && SERIES.entries) || [];
+  let total = 0;
+  const sections = (typeof D !== "undefined" && D.sections) || [];
+  const findings = sections.find(x => x.key === "findings");
+  if (findings) total = findings.total || (findings.rows || []).length;
+  else if (entries.length) total = entries[entries.length - 1].findings;
+  if (!total) return;
+  box.hidden = false;
+  document.getElementById("bignum").textContent = n(total);
+
+  const spark = document.getElementById("spark");
+  if (entries.length < 2) { spark.remove(); return; }
+  const values = entries.map(e => e.findings);
+  const top = Math.max(...values, 1);
+  const x = i => i * 120 / (entries.length - 1);
+  const y = v => 30 - (v / top) * 26;
+  const points = entries.map((e, i) => `${x(i)},${y(e.findings)}`).join(" ");
+  const down = values[values.length - 1] <= values[0];
+  const colour = down ? "var(--ok)" : "var(--crit)";
+  spark.innerHTML =
+    `<polyline points="${points}" fill="none" stroke="${colour}" stroke-width="1.5"/>` +
+    `<circle cx="${x(entries.length - 1)}" cy="${y(values[values.length - 1])}" r="2.5" ` +
+    `fill="${colour}"/>`;
+  spark.setAttribute("aria-label",
+    `${values[0]} findings then, ${values[values.length - 1]} now, over ${entries.length} scans`);
+})();
+
+// ── Layers ────────────────────────────────────────────────────────────────
+const ly = document.getElementById("ly");
+(function fillLayers() {
+  const available = layersPresent();
+  // With nothing but the frontend there is one layer, and a control offering one choice
+  // is furniture. Stripe and Celery are exactly why it appears.
+  if (available.length <= 2) { document.getElementById("lywrap").hidden = true; return; }
+  ly.innerHTML = available
+    .map(([key, label]) => `<option value="${key}">${esc(label)}</option>`).join("");
+})();
+ly.onchange = e => {
+  layer = e.target.value;
+  focus = null;
+  fillPages();
+  draw();
+};
+
+// ── The pill ──────────────────────────────────────────────────────────────
+// One container, built by moving the controls rather than duplicating them: two copies of
+// a <select> is two sources of truth for which page is open, and they drift.
+(function pill() {
+  const narrow = window.matchMedia("(max-width: 720px)");
+  const main = document.querySelector(".main");
+  const header = document.querySelector(".top");
+  const parts = [document.querySelector(".filters:not(.onlymob)"),
+                 document.getElementById("colourkey")];
+  let box = null;
+  function place() {
+    if (narrow.matches) {
+      if (!box) {
+        box = document.createElement("div");
+        box.className = "pill";
+        main.appendChild(box);
+      }
+      parts.forEach(part => part && box.appendChild(part));
+    } else if (box) {
+      parts.forEach(part => part && header.insertBefore(part, document.querySelector(".crumbrow")));
+      box.remove();
+      box = null;
+    }
+  }
+  place();
+  narrow.addEventListener("change", place);
+})();
 """
 
 
@@ -2026,11 +2178,18 @@ def render(connectivity_map: ConnectivityMap, console=None, files=None,
         f'<span class="meta">HEAD {_esc(connectivity_map.git_sha[:12])} · {_esc(mode)}'
         f'{_adapter_label(adapters)}</span>'
         f"</div>",
+        # Direction A: the number a reader came for, at a size that says so, with the
+        # trend beside it. Everything else folds into the pill at the bottom of the canvas.
+        '<div class="reading" id="reading" hidden>'
+        '<div class="big"><span>to look at</span><b id="bignum">0</b></div>'
+        '<svg class="spark" id="spark" viewBox="0 0 120 34" preserveAspectRatio="none"></svg>'
+        "</div>",
         '<div class="filters onlymob"><label class="wide"><span>View</span>'
         '<select id="vw"></select></label></div>',
         '<div class="filters">'
         '<label><span>Commit</span><select id="cm"></select></label>'
-        '<label id="pgwrap"><span>Page</span><select id="pg"></select></label></div>',
+        '<label id="pgwrap"><span>Page</span><select id="pg"></select></label>'
+        '<label id="lywrap"><span>Layer</span><select id="ly"></select></label></div>',
         '<div class="crumbrow"><button id="up" type="button" hidden>\u2190</button>'
         '<button id="aslist" type="button" hidden>Show as list</button>'
         '<span id="crumb"></span>'
