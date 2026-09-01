@@ -132,7 +132,9 @@ def scan(
     )
 
     scanned = relativise(run_scan(
-        urlconf_module=config["urlconf_module"],
+        # Empty for a project that is not Django. The Django adapter is the only reader
+        # that wants it, and it is not the one running in that case.
+        urlconf_module=config.get("urlconf_module", ""),
         js_entry_files=js_entry_files,
         js_project_root=js_project_root,
         entry_point_files=_entry_point_files(config, repo_root),

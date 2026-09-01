@@ -8,7 +8,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "seamcheck"
-version = "0.6.1"
+version = "0.7.0"
 description = "Find the code your project no longer connects to - and the connections it only thinks it has. A frontend-to-backend seam checker with a visual map."
 readme = "README.md"
 license = "MIT"
@@ -43,9 +43,17 @@ classifiers = [
   "Operating System :: OS Independent",
   "Typing :: Typed",
 ]
-dependencies = ["django>=5.0"]
+# Nothing. Seamcheck reads six backends and only one of them is Django - requiring it to
+# scan an Express repository was backwards. And for a DJANGO project it was worse than
+# useless: seamcheck runs inside that project's own virtualenv, where Django is already
+# installed, so a hard `django>=5.0` could try to UPGRADE a project running Django 4.2
+# just because someone installed a linter.
+dependencies = []
 
 [project.optional-dependencies]
+# Only for scanning a Django project, and only when the project does not already provide
+# it - which it almost always does, since seamcheck runs inside its virtualenv.
+django = ["django>=4.2"]
 # Model extraction shells out to django-extensions' graph_models --json.
 models = ["django-extensions>=4.0"]
 # Exposes the scan to an agent over MCP.

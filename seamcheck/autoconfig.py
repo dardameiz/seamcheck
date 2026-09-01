@@ -114,7 +114,7 @@ def _densest(candidates: list[pathlib.Path], pattern: str, repo_root: pathlib.Pa
 def _template_dirs(repo_root: pathlib.Path) -> list[pathlib.Path]:
     from django.conf import settings
 
-    dirs = []
+    dirs: list[pathlib.Path] = []
     for engine in getattr(settings, "TEMPLATES", []) or []:
         for entry in engine.get("DIRS", []) or []:
             resolved = _inside(entry, repo_root)
@@ -157,9 +157,25 @@ def _find_file(repo_root: pathlib.Path, names: tuple[str, ...]) -> pathlib.Path 
     return matches[0] if matches else None
 
 
+def _settings():
+    """Django's settings, or None when this is not a Django project.
+
+    None is a real answer. Five of the six backend adapters have nothing to do with
+    Django, and asking them to produce a settings module to be scanned was the reason
+    `seamcheck` answered "no Django project here" on a perfectly good Express repository.
+    """
+    try:
+        from django.conf import settings
+
+        settings.INSTALLED_APPS  # noqa: B018 - forces the lazy object, raises if unset
+        return settings
+    except Exception:
+        return None
+
+
 def detect(repo_root: str = ".") -> tuple[dict, dict[str, str]]:
     """(config, provenance). Every value paired with how it was arrived at."""
-    from django.conf import settings
+    settings = _settings()
 
     root = pathlib.Path(repo_root).resolve()
     config: dict = {}
@@ -169,6 +185,12 @@ def detect(repo_root: str = ".") -> tuple[dict, dict[str, str]]:
         if value not in (None, "", [], {}):
             config[key] = value
             why[key] = source
+
+    if settings is None:
+        # No Django. Everything below reads Django's settings for paths Django already
+        # knows; without it the filesystem is the only source, and it is a good one - the
+        # JS, CSS, template and Vite discovery underneath was always filesystem-based.
+        return _detect_without_django(root, put, config, why)
 
     put("urlconf_module", getattr(settings, "ROOT_URLCONF", None), "settings.ROOT_URLCONF")
 
@@ -219,6 +241,102 @@ def detect(repo_root: str = ".") -> tuple[dict, dict[str, str]]:
     return config, why
 
 
+# Where a project that is not Django tends to keep the things a scan needs. Ordered, and
+# the first that exists wins - these are conventions, not guesses: every one of them is
+# the documented layout of a framework the adapters already read.
+_TEMPLATE_DIRS = ("templates", "views", "public", "src/views", "app/views", "src/pages",
+                  "pages", "app", "src")
+_STATIC_DIRS = ("public", "static", "assets", "src/assets", "src/static", "www", "dist",
+                "src", "client", "frontend")
+
+
+def _detect_without_django(root, put, config, why):
+    """The same config, read off the filesystem instead of out of Django's settings."""
+    templates = _densest([root / d for d in _TEMPLATE_DIRS if (root / d).is_dir()],
+                         "*.html", root)
+    if templates:
+        put("templates_root", _rel(templates[0][1], root),
+            f"found in the repo ({templates[0][0]} html files)")
+
+    statics = [root / d for d in _STATIC_DIRS if (root / d).is_dir()]
+    if statics:
+        best = _densest(statics, "*", root)
+        if best:
+            put("static_root", _rel(best[0][1], root), "found in the repo")
+        css = _densest(statics, "*.css", root)
+        if css:
+            put("css_source_root", _rel(css[0][1], root),
+                f"found in the repo ({css[0][0]} stylesheets)")
+
+    vite = _find_file(root, _VITE_NAMES)
+    if vite:
+        put("vite_config", _rel(vite, root), "found in the repo")
+
+    tailwind = _find_file(root, _TAILWIND_HINTS)
+    if tailwind:
+        put("tailwind_build_output", _rel(tailwind, root), "found in the repo")
+
+    # The JavaScript. Django projects find their entries through `{% static %}` script
+    # tags and a Vite config, and neither exists here - so without this the frontend half
+    # of the graph is empty, every route comes back `uncertain`, and the scan has read one
+    # side of a seam it exists to compare.
+    entries = _js_entries(root, config)
+    if entries:
+        put("js_entry_files", entries, f"javascript found in the repo ({len(entries)} files)")
+
+    # No URLconf, and that is correct - the Express, Fastify, NestJS, Next.js, Flask and
+    # FastAPI adapters read routes from source, not from a Python module Django imports.
+    why.setdefault("urlconf_module", "not a Django project")
+    return config, why
+
+
+# Built output, not source. Reading these finds the same code twice and calls the second
+# copy unused.
+_JS_SKIP = ("node_modules", ".git", "dist", "build", "out", ".next", "coverage",
+            "vendor", "__pycache__", ".venv", "venv")
+
+
+def _js_entries(root: pathlib.Path, config: dict) -> list[str]:
+    """Every first-party script, as an entry.
+
+    A Django project has one entry per bundle and the imports fan out from there. A plain
+    project usually has no bundler to ask, so each script is treated as its own entry -
+    which over-counts entries and under-counts nothing, and the alternative was reading no
+    JavaScript at all.
+    """
+    bases = [root / config[key] for key in ("static_root", "templates_root") if key in config]
+    bases = [b for b in dict.fromkeys(bases) if b.is_dir()] or [root]
+    found: list[str] = []
+    for base in bases:
+        for path in base.rglob("*.js"):
+            if any(part in _JS_SKIP for part in path.parts):
+                continue
+            # A minified sibling is the same code compiled; reading both reports every
+            # symbol twice.
+            if path.name.endswith((".min.js", ".bundle.js")):
+                continue
+            found.append(str(path))
+            if len(found) >= 400:
+                return sorted(dict.fromkeys(found))
+    return sorted(dict.fromkeys(found))
+
+
+def _declared() -> dict:
+    """SEAMCHECK_CONFIG out of Django settings, when there are Django settings.
+
+    A project with no Django in it has nowhere to put that setting, and asking for it is
+    not an error - it is an Express repository.
+    """
+    try:
+        from django.conf import settings
+
+        return dict(getattr(settings, "SEAMCHECK_CONFIG", {}) or {})
+    except Exception:
+        # ImportError (no Django) or ImproperlyConfigured (Django, no settings). Both mean
+        # the same thing here: nothing was declared, so detection is the whole answer.
+        return {}
+
+
 def effective(repo_root: str = ".") -> tuple[dict, dict[str, str]]:
     """The config a scan will actually use: what was written, over what was detected.
 
@@ -226,10 +344,8 @@ def effective(repo_root: str = ".") -> tuple[dict, dict[str, str]]:
     so adding this cannot change the answer for a project that had already configured
     itself - it only gives one to a project that had not.
     """
-    from django.conf import settings
-
     detected, why = detect(repo_root)
-    declared = dict(getattr(settings, "SEAMCHECK_CONFIG", {}) or {})
+    declared = _declared()
     merged = {**detected, **declared}
     for key in declared:
         why[key] = "SEAMCHECK_CONFIG"

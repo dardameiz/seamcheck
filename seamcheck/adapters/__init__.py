@@ -9,7 +9,6 @@ stays inspectable rather than magic.
 from __future__ import annotations
 
 from seamcheck.adapters.base import ServerAdapter, ServerScan
-from seamcheck.adapters.django_adapter import DjangoAdapter
 from seamcheck.adapters.express_adapter import ExpressAdapter
 from seamcheck.adapters.fastapi_adapter import FastAPIAdapter
 from seamcheck.adapters.flask_adapter import FlaskAdapter
@@ -18,18 +17,46 @@ from seamcheck.adapters.nextjs_adapter import NextJSAdapter
 
 # Ordered for stable tie-breaking: an exact tie picks the earlier entry, so the ordering
 # here is a deliberate preference and not an accident of dictionary iteration.
-ADAPTERS: tuple[ServerAdapter, ...] = (
-    DjangoAdapter(),
+#
+# Django is loaded LAZILY, and that is the whole reason six of these are usable at all.
+# `DjangoAdapter` imports django.urls at module scope, so importing this registry used to
+# import Django - which meant scanning an Express repository required Django to be
+# installed, and the CLI refused to start without a Django project. The other five never
+# needed it.
+_LAZY: tuple[tuple[str, str, str], ...] = (
+    ("django", "seamcheck.adapters.django_adapter", "DjangoAdapter"),
+)
+_EAGER: tuple[ServerAdapter, ...] = (
     FastAPIAdapter(),
     FlaskAdapter(),
     NestJSAdapter(),
     NextJSAdapter(),
     ExpressAdapter(),
 )
+_loaded: dict[str, ServerAdapter] = {}
+
+
+def _django() -> ServerAdapter | None:
+    """The Django adapter, if Django is importable. None is a real answer here."""
+    if "django" in _loaded:
+        return _loaded["django"]
+    try:
+        from seamcheck.adapters.django_adapter import DjangoAdapter
+    except ImportError:
+        # No Django in this environment. That is not an error - it is an Express repo.
+        _loaded["django"] = None
+        return None
+    _loaded["django"] = DjangoAdapter()
+    return _loaded["django"]
+
+
+def _adapters() -> tuple[ServerAdapter, ...]:
+    django = _django()
+    return ((django,) if django else ()) + _EAGER
 
 
 def available() -> tuple[str, ...]:
-    return tuple(adapter.name for adapter in ADAPTERS)
+    return tuple(adapter.name for adapter in _adapters())
 
 
 def select(repo_root: str, config: dict) -> tuple[ServerAdapter, float]:
@@ -43,7 +70,7 @@ def select(repo_root: str, config: dict) -> tuple[ServerAdapter, float]:
     """
     forced = (config or {}).get("server_adapter")
     if forced:
-        for adapter in ADAPTERS:
+        for adapter in _adapters():
             if adapter.name == forced:
                 return adapter, 1.0
         raise ValueError(
@@ -59,7 +86,7 @@ _CONFIDENT = 0.5
 
 def _ranked(repo_root: str, config: dict) -> list[tuple[ServerAdapter, float]]:
     return sorted(
-        ((adapter, adapter.detect(repo_root, config or {})) for adapter in ADAPTERS),
+        ((adapter, adapter.detect(repo_root, config or {})) for adapter in _adapters()),
         key=lambda pair: -pair[1],
     )
 
@@ -83,4 +110,4 @@ def select_all(repo_root: str, config: dict) -> list[tuple[ServerAdapter, float]
     return confident or ranked[:1]
 
 
-__all__ = ["ADAPTERS", "ServerAdapter", "ServerScan", "available", "select", "select_all"]
+__all__ = ["ServerAdapter", "ServerScan", "available", "select", "select_all"]

@@ -29,7 +29,13 @@ _STATIC_JS_RE = re.compile(
 def vite_entry_map(vite_config: str) -> dict[str, str]:
     """Entry name -> file. The name is what a template asks for by `{% vite_asset %}`,
     so it is the only handle that connects a bundle back to the page that loads it."""
-    source = pathlib.Path(vite_config).read_text(encoding="utf-8")
+    # A project with no Vite config is the normal case outside Django+Vite, and it is an
+    # empty answer rather than a crash - the same reasoning the templates_root default
+    # already used one caller up.
+    try:
+        source = pathlib.Path(vite_config).read_text(encoding="utf-8")
+    except OSError:
+        return {}
     return {
         quoted or bare: path
         for quoted, bare, path in _VITE_ENTRY_RE.findall(source)

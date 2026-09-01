@@ -439,6 +439,70 @@ def _resolve(known, parser, passthrough: list[str] | None = None) -> tuple[str, 
     return name, arguments + rest + passthrough
 
 
+def _run_without_django(arguments, verbose: bool) -> int:
+    """Scan a repository that is not a Django project.
+
+    Everything below the adapter is framework-agnostic already - JavaScript, CSS, DOM,
+    templates, matching, classification all read the graph and never the backend. The only
+    thing Django was providing was the settings module the management command needed, so
+    this path goes to the API directly and skips the management layer entirely.
+    """
+    from seamcheck import api
+    from seamcheck.adapters import select
+
+    root = str(pathlib.Path.cwd())
+    adapter, confidence = select(root, {})
+    if confidence <= 0:
+        print(
+            "seamcheck: nothing here that this knows how to read.\n\n"
+            "It looks for a Django project (manage.py), or one of: FastAPI, Flask,\n"
+            "Express, Fastify, NestJS, Next.js. Run it from the root of one of those.",
+            file=sys.stderr,
+        )
+        return 2
+
+    fmt, out, serve, checking = _plain_args(arguments)
+    with quiet(not verbose):
+        if checking:
+            # The CI gate. api.check() returns the counts; the exit code is what a build
+            # reads, and the digest is what a person reads.
+            result = api.check(repo_root=root)
+            print(api.report(repo_root=root, fmt="terminal"))
+            return 1 if result.get("findings") else 0
+        rendered = api.report(repo_root=root, fmt=fmt)
+    return _emit(rendered, fmt, out, serve, root)
+
+
+def _plain_args(arguments) -> tuple[str, str | None, bool, bool]:
+    """The handful of flags this path understands, read without Django's parser."""
+    fmt, out, serve, checking = "terminal", None, False, False
+    items = list(arguments)
+    for i, item in enumerate(items):
+        if item == "--format" and i + 1 < len(items):
+            fmt = items[i + 1]
+        elif item == "--out" and i + 1 < len(items):
+            out = items[i + 1]
+        elif item == "--serve":
+            serve = True
+        elif item == "--check":
+            checking = True
+    return fmt, out, serve, checking
+
+
+def _emit(rendered: str, fmt: str, out: str | None, serve: bool, root: str) -> int:
+    if out:
+        pathlib.Path(out).write_text(rendered, encoding="utf-8")
+        print(f"seamcheck: wrote {out}", file=sys.stderr)
+        return 0
+    if fmt == "map" and serve:
+        from seamcheck import api as _api
+        from seamcheck.serve import serve_forever
+
+        return serve_forever(rendered, sources=set(_api.LAST_MAP_FILES), repo_root=root)
+    print(rendered)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     argv, passthrough = _split_passthrough(argv)
@@ -476,14 +540,12 @@ def main(argv: list[str] | None = None) -> int:
     else:
         settings_module, root = os.environ.get("DJANGO_SETTINGS_MODULE"), None
     if not settings_module:
-        print(
-            "seamcheck: no Django project here.\n\n"
-            "Run it from a directory with a manage.py in it or above it, or set\n"
-            "DJANGO_SETTINGS_MODULE. Seamcheck reads a project's URLconf, templates and\n"
-            "static files, so it needs to know which project it is looking at.",
-            file=sys.stderr,
-        )
-        return 2
+        # NOT an error. Five of the six backend adapters have nothing to do with Django,
+        # and this gate is why none of them were reachable: `seamcheck check` on a perfectly
+        # good Express repository answered "no Django project here" and stopped. There is no
+        # settings module to set up, so the Django bootstrap below is skipped and the scan
+        # runs straight against the repository.
+        return _run_without_django(arguments, verbose)
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", settings_module)
     if no_progress:
         # Read back by the management command, which owns the bar. An environment
