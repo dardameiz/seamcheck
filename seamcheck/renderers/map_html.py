@@ -59,6 +59,7 @@ _CSS = """
   --r-pill:999px; --r-card:18px; --r-node:12px;
   --ease:cubic-bezier(.34,1.4,.5,1); --dur:520ms;
   --wire:2.2; --glow:0 0 22px; --grid:rgba(124,108,255,.07);
+  --wire-style:curve;
   --shadow:0 2px 8px rgba(0,0,0,.5),0 18px 50px rgba(50,30,140,.28);
   color-scheme:dark;
 }
@@ -75,6 +76,7 @@ _CSS = """
   --r-pill:999px; --r-card:12px; --r-node:5px;
   --ease:cubic-bezier(.2,.9,.25,1); --dur:320ms;
   --wire:2; --glow:0 0 0; --grid:rgba(43,92,230,.055);
+  --wire-style:ortho;
   --shadow:0 1px 2px rgba(20,29,46,.07),0 10px 28px rgba(20,29,46,.06);
   color-scheme:light;
 }
@@ -101,6 +103,7 @@ _CSS = """
   --r-pill:4px; --r-card:4px; --r-node:2px;
   --ease:steps(5,end); --dur:180ms;
   --wire:1.6; --glow:0 0 14px; --grid:rgba(78,232,143,.05);
+  --wire-style:ortho;
   --shadow:0 0 0 1px rgba(78,232,143,.07);
   color-scheme:dark;
 }
@@ -118,6 +121,7 @@ _CSS = """
   --r-pill:999px; --r-card:16px; --r-node:16px;
   --ease:cubic-bezier(.16,1,.3,1); --dur:640ms;
   --wire:2.4; --glow:0 0 0; --grid:rgba(36,29,24,.045);
+  --wire-style:organic;
   --shadow:0 1px 2px rgba(36,29,24,.06),0 14px 34px rgba(36,29,24,.07);
   color-scheme:light;
 }
@@ -144,6 +148,7 @@ _CSS = """
   --r-pill:8px; --r-card:10px; --r-node:4px;
   --ease:cubic-bezier(.4,0,.2,1); --dur:240ms;
   --wire:1.8; --glow:0 0 0; --grid:rgba(15,27,42,.038);
+  --wire-style:ortho;
   --shadow:0 1px 2px rgba(15,27,42,.06),0 6px 18px rgba(15,27,42,.05);
   color-scheme:light;
 }
@@ -617,6 +622,12 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
 #cv .mt { font-size:14px; fill:var(--ink); }
 #cv .mt.sub { font-size:13px; fill:var(--muted); }
 #cv .mt tspan.hl { fill:var(--sig); }
+/* Two lines per card: the name, then what it is. */
+.nd .sub { font-size:9.5px; fill:var(--muted); }
+.nd .big { font-size:19px; font-weight:600; fill:var(--ink);
+           font-variant-numeric:tabular-nums; }
+.nd.agg { cursor:pointer; }
+.nd.agg rect { stroke-width:2; }
 /* The bands sit behind everything and are barely there - a region marker, not a panel. */
 #cv .band { fill:var(--panel); opacity:.30; stroke:var(--line); stroke-width:1; }
 #cv .band.seam { fill:var(--sig-fill); opacity:.55; stroke:var(--sig);
@@ -1476,8 +1487,51 @@ function fit(text, max) {
 }
 
 const NODE_W = 150, LANE = 160, ROW = 30;
+// The second line of a card, in a reader's words rather than the extractor's.
+const KIND_WORD = {
+  page: "page", module: "javascript file", js_call: "fetch call",
+  fetch_target: "request", url: "route", view: "handler", model: "model",
+  dom_selector: "selector in js", dom_attr: "element in a template",
+  multi_writer_element: "written by more than one file",
+  css_selector: "css rule", css_token_def: "design token", css_token_use: "var() use",
+  json_field: "response field", url_reference: "link or reverse()",
+  celery_task: "background task", celery_schedule: "scheduled",
+  stripe_webhook: "stripe webhook", stripe_event: "stripe event",
+  signal_receiver: "signal receiver", admin_action: "admin action",
+  template_tag: "template tag", graphql_field: "graphql field",
+  graphql_selection: "graphql query",
+};
+// Which aggregate a reader has opened, if any. One at a time: opening a
+// second while the first is out would put 18,000 cards on the canvas.
+let expandedKind = null;
 
-const ROW_CHOICES = [16, 22, 30, 42, 58, 80, 110, 150, 210];
+// Read once per draw from the pack, not per edge: getComputedStyle in a loop over four
+// thousand edges is the difference between a map that pans and one that stutters.
+let NODE_R = 5, WIRE_STYLE = "curve";
+function readPack() {
+  const cs = getComputedStyle(document.documentElement);
+  NODE_R = parseFloat(cs.getPropertyValue("--r-node")) || 5;
+  WIRE_STYLE = (cs.getPropertyValue("--wire-style") || "curve").trim() || "curve";
+}
+function wirePath(ax, ay, bx, by) {
+  if (WIRE_STYLE === "ortho") {
+    // Right angles: a schematic. The turn happens halfway, so parallel runs stay parallel.
+    const mx = ax + (bx - ax) / 2;
+    return `M${ax},${ay} L${mx},${ay} L${mx},${by} L${bx},${by}`;
+  }
+  if (WIRE_STYLE === "organic") {
+    // A long, lazy sweep - it leaves its origin sideways and arrives the same way.
+    const d = Math.max(70, Math.abs(bx - ax) * 0.7);
+    return `M${ax},${ay} C${ax + d},${ay} ${bx - d},${by} ${bx},${by}`;
+  }
+  const mx = (ax + bx) / 2;
+  return `M${ax},${ay} C${mx},${ay} ${mx},${by} ${bx},${by}`;
+}
+
+// Cards per row. The layout is tried at each and the one that fits the canvas largest
+// wins - a wide screen wants long rows, a phone wants short ones, and neither should be
+// a constant somebody guessed.
+const ROW_CHOICES = [3, 4, 5, 6, 8, 10, 12, 16, 20];
 
 // How tall a column runs before wrapping into another lane. Fixed at 42, the widest page
 // laid out 6,600 x 1,300 and fitting that to a landscape canvas shrank it to 18% with two
@@ -1492,14 +1546,24 @@ const ROW_CHOICES = [16, 22, 30, 42, 58, 80, 110, 150, 210];
 // run left-to-right INSIDE a band, which is where the kind ordering belongs.
 const BAND_TOP = 58, BAND_BOT = 18, BAND_GAP = 22;
 
-function place(buckets, used, rows) {
+// Cards, flowing left to right, not slivers stacked in a column. A 150x20 sliver holds one
+// truncated line and 18,000 of them is a wall nobody reads. A card is 190x48 with a name on
+// one line and what it IS on the next, and a kind with more of them than fit collapses to a
+// single big card carrying the count - which is the one that matters at this zoom anyway.
+const CARD_W = 190, CARD_H = 48, GAP_X = 12, GAP_Y = 10;
+const BIG_W = 268, BIG_H = 62;
+const KIND_GAP = 26, KIND_LABEL = 22;
+// Above this a kind is a number, not a list. Twenty-eight cards is already two full rows.
+const AGGREGATE_OVER = 28;
+
+function place(buckets, used, perRow) {
   const pos = new Map();
   const columns = [];
   const bands = [];
+  const aggregates = [];
   const bandOfKind = new Map();
   BANDS.forEach((band, i) => band.kinds.forEach(k => bandOfKind.set(k, i)));
 
-  // Which columns belong to which band, in band order rather than kind order.
   const groups = new Map();
   used.forEach(c => {
     const kind = COLS[c] ? COLS[c][0] : "other";
@@ -1508,37 +1572,54 @@ function place(buckets, used, rows) {
     groups.get(at).push(c);
   });
 
+  const rowWidth = perRow * (CARD_W + GAP_X);
   let y = 12, width = 0;
+
   [...groups.keys()].sort((m, n) => m - n).forEach(at => {
-    let x = 40, deepest = 1;
+    let x = 44, rowTop = y + BAND_TOP, tallest = 0;
     groups.get(at).forEach(c => {
       const items = buckets.get(c);
-      // A column still wraps into lanes rather than running off the bottom of its band -
-      // one page here holds 839 selectors, and stacked in single file that is a column
-      // 25,000px tall that no amount of scrolling makes legible.
-      const lanes = Math.max(1, Math.ceil(items.length / rows));
-      items.forEach((n, i) => pos.set(n.id, {
-        x: x + Math.floor(i / rows) * LANE,
-        y: y + BAND_TOP + (i % rows) * ROW,
-      }));
-      deepest = Math.max(deepest, Math.min(items.length, rows));
-      columns.push({x, y: y + BAND_TOP - 11,
-                    kind: COLS[c] ? COLS[c][0] : "other",
-                    label: COLS[c] ? COLS[c][1] : "Other", count: items.length});
-      x += lanes * LANE + 50;
+      const kind = COLS[c] ? COLS[c][0] : "other";
+      const label = COLS[c] ? COLS[c][1] : "Other";
+      // A new kind starts on a fresh row, so the group heading always sits over its own
+      // cards rather than over the tail of the previous kind's.
+      if (x > 44) { x = 44; rowTop += tallest + GAP_Y + KIND_GAP; tallest = 0; }
+      columns.push({x, y: rowTop - 9, kind, label, count: items.length});
+
+      if (items.length > AGGREGATE_OVER && !expandedKind) {
+        // One card for the whole kind, sized up because it stands for more.
+        const worst = ["unresolved", "unused", "uncertain", "connected"]
+          .find(st => items.some(n => n.status === st)) || "connected";
+        const open = items.filter(n => n.status === "unresolved" || n.status === "unused").length;
+        aggregates.push({kind, label, x, y: rowTop, w: BIG_W, h: BIG_H,
+                         count: items.length, open, status: worst});
+        // Every node in the kind is parked on the card, so edges still land somewhere
+        // truthful and the chain a reader lights still reaches the right region.
+        items.forEach(n => pos.set(n.id, {x, y: rowTop, w: BIG_W, h: BIG_H, agg: true}));
+        x += BIG_W + GAP_X;
+        tallest = Math.max(tallest, BIG_H);
+        return;
+      }
+      items.forEach((n, i) => {
+        const col = i % perRow, row = Math.floor(i / perRow);
+        pos.set(n.id, {x: x + col * (CARD_W + GAP_X),
+                       y: rowTop + row * (CARD_H + GAP_Y), w: CARD_W, h: CARD_H});
+      });
+      const rows = Math.ceil(items.length / perRow);
+      tallest = Math.max(tallest, rows * (CARD_H + GAP_Y) - GAP_Y);
+      x += Math.min(items.length, perRow) * (CARD_W + GAP_X);
+      width = Math.max(width, x);
     });
-    const h = BAND_TOP + deepest * ROW + BAND_BOT;
+    width = Math.max(width, x, rowWidth + 44);
+    const h = BAND_TOP + (rowTop - (y + BAND_TOP)) + tallest + BAND_BOT;
     const band = BANDS[at] || {id: "other", label: "EVERYTHING ELSE THE SCAN FOUND",
                                short: "EVERYTHING ELSE"};
     bands.push({id: band.id, label: band.label, short: band.short || band.label,
                 y, h, first: bands.length === 0});
-    width = Math.max(width, x);
     y += h + BAND_GAP;
   });
-  // Every band spans the whole drawing, so the strips line up and the eye reads them as
-  // regions rather than as boxes of different sizes.
-  bands.forEach(band => { band.w = Math.max(width - 26, 200); });
-  return {pos, columns, bands, width, height: y};
+  bands.forEach(band => { band.w = Math.max(width - 26, 300); });
+  return {pos, columns, bands, aggregates, width: width + 44, height: y};
 }
 
 // A column wraps into lanes instead of running off the bottom of the world. One page here
@@ -1687,7 +1768,7 @@ function layoutKey() {
   // cached layout - the dropdown said 35 nodes over a canvas still drawing all 392. A
   // cache keyed on less than its function reads is a cache that lies.
   return [current, mode, focus, fileFilter, only, isolate ? lit : "", asList,
-          layer, [...statusFilter].sort().join(",")].join("\u0000");
+          layer, expandedKind || "", [...statusFilter].sort().join(",")].join("\u0000");
 }
 
 function layoutFor(p) {
@@ -1704,6 +1785,7 @@ function layoutFor(p) {
 function draw() {
   const p = currentPage();
   if (!p) return;
+  readPack();
   pages.value = String(current);
   const here = p.where ? `${p.title} · ${p.where}` : p.title;
   // Count what is DRAWN, not what the file holds: now that a filter narrows a file
@@ -1753,7 +1835,7 @@ function draw() {
       `<text x="20" y="98" class="mt sub">Take one off, or pick another page.</text>`;
     return;
   }
-  const {keep, value: {pos, columns, bands, width, height}} = layoutFor(p);
+  const {keep, value: {pos, columns, bands, aggregates, width, height}} = layoutFor(p);
   // A phone is narrower than two columns of this map, so an untouched view opens showing
   // the whole chain, nudged clear of the left edge. Only the first draw of a view fits:
   // once someone pans or zooms, the view is theirs.
@@ -1795,9 +1877,9 @@ function draw() {
     const ends = [byId.get(e.source), byId.get(e.target)];
     const dim = (chain && !(chain.has(e.source) && chain.has(e.target)))
       || (fading && query && !ends.every(n => n && hit(n)));
-    const mx = (a.x + 150 + b.x) / 2;
     out.push(`<path class="ed${dim ? " faded" : ""}" stroke="${S[e.status] || "var(--dim)"}"
-      d="M${a.x + 150},${a.y + 10} C${mx},${a.y + 10} ${mx},${b.y + 10} ${b.x},${b.y + 10}"/>`);
+      d="${wirePath(a.x + (a.w || CARD_W), a.y + (a.h || CARD_H) / 2,
+                    b.x, b.y + (b.h || CARD_H) / 2)}"/>`);
   });
   // "Alone" is the STATUS, not the edge count. A symbol reaches a page by an edge, so
   // nothing here can have no edges, and the map's edge set carries no self-loops either -
@@ -1810,23 +1892,40 @@ function draw() {
   // wheel tick a full rebuild. They are always emitted now and hidden by a class on the
   // svg (see applyView), so the threshold costs one attribute instead of re-parsing
   // thousands of nodes.
+  // The aggregate cards first, behind the individual ones: a kind with more members than
+  // fit is a single card carrying its count, which is the fact that matters at this zoom.
+  (aggregates || []).forEach(g => {
+    out.push(`<g class="nd agg st-${esc(g.status)}" data-kind="${esc(g.kind)}">
+      <rect x="${g.x}" y="${g.y}" width="${g.w}" height="${g.h}" rx="${NODE_R}"
+            fill="${F[g.status] || "var(--panel)"}" stroke="${S[g.status] || "var(--dim)"}"
+            stroke-width="2"/>
+      <title>${esc(g.count.toLocaleString())} ${esc(g.label.toLowerCase())} — tap to open</title>
+      <text class="big" x="${g.x + 14}" y="${g.y + 27}">${g.count.toLocaleString()}</text>
+      <text class="sub" x="${g.x + 14}" y="${g.y + 45}">${esc(g.label.toLowerCase())}${
+        g.open ? " · " + g.open.toLocaleString() + " to look at" : ""}</text>
+    </g>`);
+  });
+
   drawnNodes.forEach(n => {
     const q = pos.get(n.id); if (!q) return;
+    // A node parked on its kind's aggregate card is represented by that card, not by a
+    // sliver hidden underneath it.
+    if (q.agg) return;
     const ch = CHANGED[n.id];
     const stroke = ch ? CH[ch] : (S[n.status] || "var(--dim)");
     const alone = n.status === "unresolved" || n.status === "unused";
-    const label = fit(n.label, 20);
-    // The drawn box is 20px tall and the view opens scaled down, so on a phone the
-    // visible target can be 8px. The transparent rect below it fills the row pitch.
     const shown = (!fading || hit(n)) && (!chain || chain.has(n.id));
+    // Two lines: what it is called, and what it IS. One truncated line was the whole
+    // reason nothing on this canvas could be read.
+    const label = fit(n.label, 24);
+    const sub = fit(KIND_WORD[n.kind] || n.kind.replace(/_/g, " "), 26);
     out.push(`<g class="nd${shown ? "" : " faded"}${n.id === lit ? " lit" : ""}" data-id="${n.id}">
-      <rect x="${q.x - 5}" y="${q.y - 5}" width="160" height="30" fill="transparent"
-            pointer-events="all"/>
-      <rect x="${q.x}" y="${q.y}" width="150" height="20" rx="5"
+      <rect x="${q.x}" y="${q.y}" width="${q.w}" height="${q.h}" rx="${NODE_R}"
             fill="${alone ? (F[n.status] || "var(--panel)") : "var(--panel)"}"
             stroke="${stroke}" stroke-width="${ch ? 3 : 1.5}"/>
       <title>${esc(n.label)}${n.file ? "\n" + esc(n.file) + (n.line ? ":" + n.line : "") : ""}</title>
-      <text x="${q.x + 7}" y="${q.y + 14}">${esc(label)}</text></g>`);
+      <text x="${q.x + 12}" y="${q.y + 20}">${esc(label)}</text>
+      <text class="sub" x="${q.x + 12}" y="${q.y + 36}">${esc(sub)}</text></g>`);
   });
   out.push("</g>");
   svg.innerHTML = out.join("");
@@ -1852,6 +1951,18 @@ function applyView() {
 // Delegated, not per-node: draw() replaces svg.innerHTML, and panning redraws on every
 // mousemove, so a handler bound to a node is destroyed between mousedown and mouseup and
 // the click never lands.
+// An aggregate card opens its kind out into individual cards, and opening a second one
+// closes the first - two expanded kinds on one canvas is the wall this replaced.
+svg.addEventListener("click", e => {
+  const agg = e.target.closest && e.target.closest(".nd.agg");
+  if (agg) {
+    e.stopPropagation();
+    expandedKind = expandedKind === agg.dataset.kind ? null : agg.dataset.kind;
+    _layout.key = null;
+    draw();
+    return;
+  }
+}, true);
 svg.addEventListener("click", e => {
   if (moved) return;
   const g = e.target.closest(".nd");
