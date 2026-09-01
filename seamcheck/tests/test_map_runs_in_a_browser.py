@@ -96,14 +96,17 @@ class MapRunsInABrowser(SimpleTestCase):
             populated = page.evaluate("""() => ({
                 nav: document.querySelectorAll('#nav .nv').length,
                 pages: document.querySelectorAll('#pg option').length,
-                key: document.querySelectorAll('#colourkey button[data-status]').length,
+                key: document.querySelectorAll('#colourkey .seg button[data-status]').length,
+                theme: document.querySelectorAll('#tmode').length,
             })""")
             browser.close()
 
         self.assertEqual(errors, [], f"the map raised in the browser: {errors}")
         self.assertGreater(populated["nav"], 0, "navigation never rendered")
         self.assertGreater(populated["pages"], 0, "page selector never filled")
-        self.assertEqual(populated["key"], 4, "the status filter chips are missing")
+        # Four statuses plus "all", which is the way back to everything.
+        self.assertEqual(populated["key"], 5, "the status filter is missing")
+        self.assertEqual(populated["theme"], 1, "the theme control is missing")
 
     def test_clicking_a_status_chip_filters_the_page_counts(self):
         """The filter the key promises has to change what the canvas claims to hold."""
@@ -123,10 +126,11 @@ class MapRunsInABrowser(SimpleTestCase):
             page.click('#nav .nv[data-key="map"]')
             page.wait_for_timeout(200)
             before = page.eval_on_selector("#pg option", "el => el.textContent")
-            page.click('#colourkey button[data-status="unresolved"]')
+            page.click('#colourkey .seg button[data-status="unresolved"]')
             page.wait_for_timeout(200)
             after = page.eval_on_selector("#pg option", "el => el.textContent")
-            pressed = page.get_attribute('#colourkey button[data-status="unresolved"]', "aria-pressed")
+            pressed = page.get_attribute(
+                '#colourkey .seg button[data-status="unresolved"]', "aria-pressed")
             browser.close()
 
         self.assertNotEqual(before, after, "filtering changed nothing")
@@ -248,3 +252,42 @@ class SyntaxHighlighting(MapRunsInABrowser):
         self.assertIn('<i class="s">', rendered)
         # The keyword inside the string belongs to the string, not to the keyword rule.
         self.assertEqual(rendered.count('<i class="k">const</i>'), 1)
+
+
+class ThemeControl(MapRunsInABrowser):
+    """The map is read on a phone in a light OS as often as on a dark desktop.
+
+    It followed prefers-color-scheme and offered no way to disagree, so a reader whose
+    system is light had no way to see the dark design at all.
+    """
+
+    def _cycle(self, clicks: int) -> str:
+        from playwright.sync_api import sync_playwright
+
+        url = self._render()
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch()
+            except Exception as error:  # pragma: no cover
+                raise unittest.SkipTest(f"no chromium: {error}") from None
+            page = browser.new_page()
+            page.goto(url, wait_until="load")
+            page.wait_for_timeout(200)
+            page.click('#nav .nv[data-key="map"]')
+            for _ in range(clicks):
+                page.click("#tmode")
+            stamped = page.get_attribute("html", "data-theme")
+            browser.close()
+        return stamped
+
+    def test_it_follows_the_system_until_told_otherwise(self):
+        self.assertIsNone(self._cycle(0), "nothing is stamped before a reader chooses")
+
+    def test_one_press_forces_dark(self):
+        self.assertEqual(self._cycle(1), "dark")
+
+    def test_two_presses_force_light(self):
+        self.assertEqual(self._cycle(2), "light")
+
+    def test_three_presses_return_to_the_system(self):
+        self.assertIsNone(self._cycle(3))

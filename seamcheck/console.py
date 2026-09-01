@@ -136,6 +136,14 @@ def build_console(graph: Graph, report: Report) -> Console:
             rows=_rows(graph, ("css_selector", "css_token_def", "css_token_use"), findings_only=True),
         ),
         Section(
+            "integrations", "Integrations",
+            "Services this project talks to, and the names it talks to them by. None of "
+            "these are reached by an HTTP request from the browser, so nothing else in "
+            "this report can see them.",
+            rows=_rows(graph, ("stripe_webhook", "stripe_event", "celery_task",
+                               "celery_schedule", "graphql_field", "graphql_selection")),
+        ),
+        Section(
             "findings", "Findings",
             "Everything the scan is willing to claim, grouped and worst first.",
             rows=_rows(graph, tuple(BACKEND_KINDS + FRONTEND_KINDS), findings_only=True),

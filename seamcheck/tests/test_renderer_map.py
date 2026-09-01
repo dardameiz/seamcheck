@@ -175,12 +175,24 @@ class MobileLayoutTests(SimpleTestCase):
         self.assertIn('<select id="cm">', out)
         self.assertIn('<select id="pg">', out)
 
-    def test_pages_are_a_grouped_select_not_a_scrolling_rail(self):
+    def test_pages_are_a_select_not_a_scrolling_rail(self):
         out = map_html.render(_map())
 
-        self.assertIn("<optgroup", out)
+        self.assertIn('id="pg"', out)
         self.assertNotIn('id="pages"', out)
         self.assertNotIn('class="pg"', out)
+
+    def test_each_page_option_names_the_page_rather_than_the_build_artefact(self):
+        """The title and the URL were spent on a grey optgroup heading.
+
+        On a phone that heading is the first thing to truncate, so the only legible part
+        of the control read "base-main - 392 nodes": the name of a build artefact and a
+        number. The option itself carries the name now, and the grouping is gone.
+        """
+        out = map_html.render(_map())
+
+        self.assertNotIn("<optgroup", out)
+        self.assertIn("function pageLabel", out)
 
     def test_the_document_is_exactly_one_screen_and_the_canvas_takes_the_rest(self):
         out = map_html.render(_map())
@@ -482,13 +494,21 @@ class ReadabilityTests(SimpleTestCase):
         self.assertIn("Math.exp(-e.deltaY * 0.01)", out)
         self.assertNotIn("e.deltaY < 0 ? 1.1 : 0.9", out)
 
-    def test_the_colour_key_is_on_screen_not_behind_a_button(self):
+    def test_the_status_control_is_on_screen_not_behind_a_button(self):
+        """The key became a control, and the meanings moved to where they fit.
+
+        Five lines of prose explaining four colours cost more of a phone screen than the
+        map they described - and the one line that was NOT clickable ("filled in", a note
+        about drawing style) sat in the same row looking exactly like the four that were.
+        Each status is a labelled button now, with its sentence on the button itself.
+        """
         out = map_html.render(_map())
 
         self.assertIn('id="colourkey"', out)
         for status in ("connected", "unresolved", "unused", "uncertain"):
-            self.assertIn(f'class="k {status}"', out)
-        self.assertIn("not a claim it is dead", out)
+            self.assertIn(f'data-status="{status}"', out)
+        self.assertIn("not a claim it is dead", out, "the meaning is still reachable")
+        self.assertIn('data-status=""', out, "there must be a way back to everything")
 
     def test_the_legend_does_not_borrow_the_key_buttons_class(self):
         # Both were called .key, so the strip inherited the button's absolute position and

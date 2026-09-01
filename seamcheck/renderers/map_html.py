@@ -46,14 +46,24 @@ _CSS = """
   --ok:#1a7f4b; --crit:#d1332a; --warn:#7c3aed; --dim:#8b95a5;
   --ok-fill:#e6f4ec; --crit-fill:#fdeae8; --warn-fill:#f1ebfe; --dim-fill:#eef0f4;
 }
+/* Guarded so an explicit light choice beats a dark OS, and repeated under
+   [data-theme="dark"] so the toggle wins in the other direction. Most readers never stamp
+   anything - the un-stamped document is the common case and it is this media query. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg:#0d1117; --panel:#151b24; --sunk:#0a0e14;
     --ink:#dde4ee; --muted:#8b97a8; --line:#252d38;
     --sig:#4aa3ff; --sig-fill:#12243a; --sig-fill-hi:#183353;
     --ok:#3fb27f; --crit:#f0736a; --warn:#a78bfa; --dim:#6f7b8c;
     --ok-fill:#10281e; --crit-fill:#2c1618; --warn-fill:#211a35; --dim-fill:#161c24;
   }
+}
+:root[data-theme="dark"] {
+    --bg:#0d1117; --panel:#151b24; --sunk:#0a0e14;
+    --ink:#dde4ee; --muted:#8b97a8; --line:#252d38;
+    --sig:#4aa3ff; --sig-fill:#12243a; --sig-fill-hi:#183353;
+    --ok:#3fb27f; --crit:#f0736a; --warn:#a78bfa; --dim:#6f7b8c;
+    --ok-fill:#10281e; --crit-fill:#2c1618; --warn-fill:#211a35; --dim-fill:#161c24;
 }
 * { box-sizing:border-box; }
 /* An author `display` beats the UA rule that [hidden] relies on, so el.hidden = true read
@@ -112,6 +122,22 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overf
 .legendbar .k i { width:9px; height:9px; border-radius:2px; border:1.5px solid; flex:none;
             transform:translateY(1px); }
 .legendbar .k em { font-style:normal; color:var(--muted); }
+.legendbar { align-items:center; gap:8px; padding:0 12px 8px; }
+.flabel { font-size:11px; letter-spacing:.09em; text-transform:uppercase; color:var(--muted); }
+.seg { display:flex; flex:1 1 auto; min-width:0; border:1px solid var(--line);
+  border-radius:8px; overflow:hidden; background:var(--panel); }
+.seg button { flex:1 1 0; min-width:0; background:none; border:0; border-right:1px solid var(--line);
+  color:var(--muted); font:inherit; font-size:11px; padding:7px 2px; cursor:pointer;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.seg button:last-child { border-right:0; }
+.seg button[aria-pressed="true"] { color:var(--bg); background:var(--ink); }
+.seg button.s-connected[aria-pressed="true"] { background:var(--ok); }
+.seg button.s-unresolved[aria-pressed="true"] { background:var(--crit); }
+.seg button.s-unused[aria-pressed="true"] { background:var(--warn); }
+.seg button.s-uncertain[aria-pressed="true"] { background:var(--dim); }
+.seg button:focus-visible, .tmode:focus-visible { outline:2px solid var(--sig); outline-offset:-2px; }
+.tmode { flex:none; width:30px; height:30px; border-radius:8px; border:1px solid var(--line);
+  background:var(--panel); color:var(--muted); font-size:14px; cursor:pointer; line-height:1; }
 /* The key was already the vocabulary of the map; making it the filter means the control
    and its explanation are the same object, instead of a second control that repeats it. */
 button.k { background:none; border:0; padding:2px 6px; margin:-2px -6px; border-radius:5px;
@@ -516,6 +542,8 @@ const SECTION_KINDS = {
   backend: new Set(["url", "view", "model", "admin_action", "signal_receiver",
                     "template_tag", "management_command"]),
   css: new Set(["css_selector", "css_token_def", "css_token_use"]),
+  integrations: new Set(["stripe_webhook", "stripe_event", "celery_task",
+                         "celery_schedule", "graphql_field", "graphql_selection"]),
 };
 
 // Empty means "every status". A Set rather than a single value because "show me the
@@ -549,20 +577,26 @@ const FILE_TOTALS = new Map(
 // The pages a reader recognises, each holding the bundles it loads. A scrolling rail of
 // 34 rows cost more than half a phone screen; an optgroup says the same thing in one
 // control and gives every pixel of it back to the canvas.
+// "Push Arena · /push_arena/" - the name and the address, which is how a reader knows
+// where they are. Falls back to the entry filename for a root no template references,
+// because inventing a nicer name for it would be inventing evidence.
+function pageLabel(p) {
+  const where = (p.where || "").split(" - ")[0].trim();
+  const title = p.title || p.page;
+  if (!where) return title;
+  return title === where ? title : `${title} · ${where}`;
+}
+
 function fillPages(counts) {
-  let group = null, heading = null, out = [];
-  PAGES.forEach((p, i) => {
-    const key = p.title + "\u0000" + p.where;
-    if (key !== heading) {
-      if (group) out.push(group + "</optgroup>");
-      heading = key;
-      group = `<optgroup label="${esc(p.title)}${p.where ? " · " + esc(p.where) : ""}">`;
-    }
+  // Each option says what a PERSON would call the page. The title and the URL were
+  // already known and were spent on a grey optgroup heading, while the option itself read
+  // "base-main — 392 nodes" - the name of a build artefact and a number. On a phone the
+  // heading is the first thing to truncate, so the only legible part named nothing.
+  const out = PAGES.map((p, i) => {
     const drawn = lensed(p).length;
     const tail = counts ? `${counts[i]} changed` : `${drawn} node${drawn === 1 ? "" : "s"}`;
-    group += `<option value="${i}">${esc(p.page)} — ${tail}</option>`;
+    return `<option value="${i}">${esc(pageLabel(p))} — ${tail}</option>`;
   });
-  if (group) out.push(group + "</optgroup>");
   pages.innerHTML = out.join("");
   pages.value = String(current);
 }
@@ -577,10 +611,12 @@ pages.onchange = e => {
 // leaving an empty canvas that reads as "nothing here".
 const colourkey = document.getElementById("colourkey");
 colourkey.addEventListener("click", event => {
-  const button = event.target.closest("button.k[data-status]");
+  const button = event.target.closest(".seg button[data-status]");
   if (!button) return;
   const status = button.dataset.status;
-  if (statusFilter.has(status)) statusFilter.delete(status);
+  // "all" is the absence of a filter, not a fifth status - so it clears rather than joins.
+  if (!status) statusFilter.clear();
+  else if (statusFilter.has(status)) statusFilter.delete(status);
   else statusFilter.add(status);
   syncStatusKey();
   focus = null;
@@ -589,12 +625,37 @@ colourkey.addEventListener("click", event => {
 });
 
 function syncStatusKey() {
-  colourkey.classList.toggle("filtering", statusFilter.size > 0);
-  colourkey.querySelectorAll("button.k[data-status]").forEach(button => {
-    button.setAttribute("aria-pressed", statusFilter.has(button.dataset.status) ? "true" : "false");
+  colourkey.querySelectorAll(".seg button[data-status]").forEach(button => {
+    const status = button.dataset.status;
+    const on = status ? statusFilter.has(status) : statusFilter.size === 0;
+    button.setAttribute("aria-pressed", on ? "true" : "false");
   });
 }
 syncStatusKey();
+
+// Theme: follow the system until a reader says otherwise, then remember it. The map is
+// read on a phone in a light OS as often as on a dark desktop, and a graph of hairlines
+// is a different document on each.
+const themes = ["auto", "dark", "light"];
+const tmode = document.getElementById("tmode");
+let themeAt = 0;
+try {
+  const saved = localStorage.getItem("seamcheck-theme");
+  if (saved && themes.includes(saved)) themeAt = themes.indexOf(saved);
+} catch { /* private window, or storage refused: the system default is fine */ }
+function applyTheme() {
+  const mode = themes[themeAt];
+  if (mode === "auto") document.documentElement.removeAttribute("data-theme");
+  else document.documentElement.setAttribute("data-theme", mode);
+  tmode.textContent = mode === "dark" ? "\u25cf" : mode === "light" ? "\u25cb" : "\u25d1";
+  tmode.title = "Theme: " + mode;
+}
+tmode.addEventListener("click", () => {
+  themeAt = (themeAt + 1) % themes.length;
+  try { localStorage.setItem("seamcheck-theme", themes[themeAt]); } catch { /* fine */ }
+  applyTheme();
+});
+applyTheme();
 
 // The nodes a page contributes under the current lens AND status filter. One function,
 // because the page selector's count and the canvas must agree: a dropdown that promises
@@ -1975,18 +2036,25 @@ def render(connectivity_map: ConnectivityMap, console=None, files=None,
         '<span id="crumb"></span>'
         '<input id="q" type="search" placeholder="Filter">'
         '<span id="qn" class="qn"></span></div>',
+        # A labelled control, not a colour key doing double duty. The key explained five
+        # things in five lines of prose and quietly expected four of them to be clicked -
+        # so the one that was NOT clickable ("filled in", a caption about drawing style)
+        # looked exactly like the four that were, and the five lines cost more of a phone
+        # screen than the map they described.
         '<div class="legendbar" id="colourkey">'
-        '<button type="button" class="k connected" data-status="connected"><i></i>connected'
-        '<em>something reaches it, evidence attached</em></button>'
-        '<button type="button" class="k unresolved" data-status="unresolved"><i></i>unresolved'
-        '<em>something reaches for it and it is not there</em></button>'
-        '<button type="button" class="k unused" data-status="unused"><i></i>unused'
-        '<em>both ends observable, nothing uses it</em></button>'
-        '<button type="button" class="k uncertain" data-status="uncertain"><i></i>uncertain'
-        '<em>no evidence either way \u2014 not a claim it is dead</em></button>'
-        '<span class="k filled"><i></i>filled in<em>= unresolved or unused. The two to look at '
-        'are drawn solid, the rest as outlines.</em></span>'
-        '<span class="k hint" id="statushint">Click a colour to show only those.</span>'
+        '<span class="flabel">Show</span>'
+        '<div class="seg" role="group" aria-label="Show only these statuses">'
+        '<button type="button" data-status="" aria-pressed="true">all</button>'
+        '<button type="button" class="s-connected" data-status="connected" '
+        'title="Something reaches it, evidence attached">connected</button>'
+        '<button type="button" class="s-unresolved" data-status="unresolved" '
+        'title="Something reaches for it and it is not there">unresolved</button>'
+        '<button type="button" class="s-unused" data-status="unused" '
+        'title="Both ends observable, nothing uses it">unused</button>'
+        '<button type="button" class="s-uncertain" data-status="uncertain" '
+        'title="No evidence either way \u2014 not a claim it is dead">uncertain</button>'
+        "</div>"
+        '<button type="button" class="tmode" id="tmode" aria-label="Theme">\u25d1</button>'
         "</div>",
         '<div class="note" id="cmnote"></div>'
         '<div class="note capnote" id="capnote"></div>'
