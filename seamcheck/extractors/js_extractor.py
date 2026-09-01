@@ -122,7 +122,14 @@ def _carrier_name(node: dict) -> str | None:
         (node.get("value") or {}).get("type") in _FUNCTION_TYPES or node_type != "Property"
     ):
         key = node.get("key") or {}
-        return key.get("name") or key.get("value")
+        # `key.value` is whatever the literal held. A webpack bundle is one big object
+        # keyed by NUMERIC module ids - `{3726: function(){...}}` - so this returned an
+        # int, which travelled all the way to relativise() and crashed the whole scan on
+        # any repo that ships a bundled app.js. Coerced here, where the type is known.
+        name = key.get("name")
+        if name is None:
+            name = key.get("value")
+        return None if name is None else str(name)
     if node_type == "VariableDeclarator" and (node.get("init") or {}).get("type") in _FUNCTION_TYPES:
         return (node.get("id") or {}).get("name")
     return None

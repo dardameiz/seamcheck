@@ -16,6 +16,7 @@ What it cannot see is what no reader of text could - routes Django generates at 
 
 from __future__ import annotations
 
+import contextlib
 import os
 import pathlib
 
@@ -25,6 +26,7 @@ from seamcheck.extractors.asgi_extractor import extract_asgi_routes
 from seamcheck.extractors.django_extractor import extract_django_urls_views, route_name_index
 from seamcheck.extractors.django_models_extractor import extract_django_models
 from seamcheck.extractors.django_static_extractor import extract_urls_views_static
+from seamcheck.nodetools import report
 
 
 class DjangoAdapter:
@@ -78,8 +80,31 @@ class DjangoAdapter:
         if config.get("static_urls"):
             symbols, edges, names = extract_urls_views_static(repo_root, urlconf, first_party)
         else:
-            symbols, edges = extract_django_urls_views(urlconf, first_party)
-            names = route_name_index(urlconf)
+            try:
+                symbols, edges = extract_django_urls_views(urlconf, first_party)
+                names = route_name_index(urlconf)
+            except Exception as error:  # noqa: BLE001 - see below
+                # Import mode needs the project to RUN: its settings importable, its apps
+                # installed, its dependencies present. A global `pip install seamcheck`
+                # pointed at somebody else's checkout has none of that, and this used to
+                # propagate - so `seamcheck map` CRASHED on four of the largest open Django
+                # codebases (sentry, wagtail, saleor, django-oscar) with a bare
+                # ModuleNotFoundError naming a package the reader never asked for.
+                #
+                # The source reader needs none of it and recovers ~95% of the routes
+                # declared in a urls.py, so falling back is strictly better than an
+                # exception. Broad by intent: a project's own import side effects can raise
+                # anything at all, and none of it is this tool's business.
+                report(
+                    "django-import-fallback",
+                    f"could not import this project ({type(error).__name__}: "
+                    f"{str(error)[:80]}), so its routes were read from source instead. "
+                    "That misses routes Django builds at runtime, such as the admin's. "
+                    "Run seamcheck from the project's own virtualenv for the exact list.",
+                )
+                symbols, edges, names = extract_urls_views_static(
+                    repo_root, urlconf, first_party
+                )
 
         progress.step("ASGI routes")
         asgi_file = config.get("asgi_file")
@@ -89,6 +114,9 @@ class DjangoAdapter:
         progress.step("models")
         app_labels = config.get("app_labels")
         if app_labels:
-            symbols = symbols + extract_django_models(app_labels)
+            # Same reason as the URLconf above: reading models asks Django's app
+            # registry, which only exists in a project that could be imported.
+            with contextlib.suppress(Exception):
+                symbols = symbols + extract_django_models(app_labels)
 
         return ServerScan(symbols=symbols, edges=edges, route_names=names)

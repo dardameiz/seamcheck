@@ -34,6 +34,7 @@ from seamcheck.adapters.discovery import SKIP_DIRS
 from seamcheck.extractors.js_extractor import _parse_files, _walk
 from seamcheck.extractors.sql_schema_extractor import Schema, find_sql, read_schema
 from seamcheck.graph import Edge, Status, Symbol
+from seamcheck.nodetools import report
 
 _EXTENSIONS = (".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx")
 
@@ -42,6 +43,15 @@ _EXTENSIONS = (".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx")
 _MAX_BYTES = 400_000
 _STAR = ("*", "")
 _NEEDLES = ("supabase", "Supabase", "createClient")
+
+# Said once per finding, because the reader meets these one at a time in a list and the
+# terminal warning scrolls away. It names the remedy, not just the gap.
+_NO_SCHEMA_NOTE = (
+    "No SQL schema in this repository, so there is nothing to check this name against - "
+    "not a claim that it is missing from your database. Seamcheck reads "
+    "supabase/migrations/*.sql; if your schema lives in the dashboard, "
+    "`supabase db pull` writes it into the repo and this becomes checkable."
+)
 
 
 
@@ -262,8 +272,24 @@ def extract_supabase(root: str) -> tuple[list[Symbol], list[Edge]]:
     # Relativised here, not in the reader: every other symbol in the graph carries a
     # repo-relative file and the map joins it to the repo root itself. An absolute path
     # renders as an unreadable line and breaks the editor link.
-    schema: Schema = read_schema(find_sql(root))
+    sql_files = find_sql(root)
+    schema: Schema = read_schema(sql_files)
     _relativise(schema, root)
+    # Whether this repo contains a schema AT ALL. Without one there is no oracle, and
+    # every name the client uses is unknowable rather than wrong. A Supabase user reported
+    # 728 "unresolved" against a project whose SQL is kept outside the repo and run by hand
+    # in the dashboard - every one of them a table that does exist. Saying "no migration
+    # declares this" when the repo has no migrations is a claim about the database drawn
+    # from the absence of a file, which is exactly what the house rule forbids.
+    has_schema = bool(sql_files) and bool(schema.tables)
+    if not has_schema:
+        report(
+            "supabase-no-schema",
+            "Supabase client code found, but no SQL schema in this repository, so table, "
+            "column and rpc names cannot be checked against anything - they are reported "
+            "uncertain, NOT missing. If your schema lives in the Supabase dashboard, run "
+            "`supabase db pull` to write it into supabase/migrations/ and re-scan.",
+        )
     edge_dirs = _edge_functions(root)
     uses = _collect(root)
     symbols: list[Symbol] = []
@@ -341,13 +367,22 @@ def extract_supabase(root: str) -> tuple[list[Symbol], list[Edge]]:
         ))
 
     # ── what the client uses ────────────────────────────────────────────
-    def use_symbol(use: _Use, kind: str, known: bool, missing: str, sub: str) -> Symbol:
+    def use_symbol(
+        use: _Use, kind: str, known: bool, missing: str, sub: str, *, checkable: bool = True
+    ) -> Symbol:
         if use.dynamic or not use.name:
             return Symbol(
                 id=f"{kind}:<dynamic>:{use.file}:{use.line}", kind=kind,
                 label="<assembled at runtime>", sub=sub, file=use.file, line=use.line,
                 status=Status.UNCERTAIN, snippet="", chain=[],
                 note="The name is a variable, so the scan cannot tell which one this is.",
+            )
+        if not known and not checkable:
+            # Known-unknown, not known-wrong.
+            return Symbol(
+                id=f"{kind}:{use.name}:{use.file}:{use.line}", kind=kind, label=use.name,
+                sub=sub, file=use.file, line=use.line, status=Status.UNCERTAIN,
+                snippet=use.name, chain=[use.name], note=_NO_SCHEMA_NOTE,
             )
         return Symbol(
             id=f"{kind}:{use.name}:{use.file}:{use.line}", kind=kind, label=use.name,
@@ -360,7 +395,8 @@ def extract_supabase(root: str) -> tuple[list[Symbol], list[Edge]]:
         known = use.name in schema.tables
         symbol = use_symbol(
             use, "db_table_use", known,
-            "No migration in this repo declares a table with that name.", "reads a table")
+            "No migration in this repo declares a table with that name.", "reads a table",
+            checkable=has_schema)
         symbols.append(symbol)
         if known:
             edges.append(Edge(symbol.id, f"db_table:{use.name}", Status.CONNECTED))
@@ -368,10 +404,14 @@ def extract_supabase(root: str) -> tuple[list[Symbol], list[Edge]]:
     for use in uses["column"]:
         table, _, column = use.name.partition(".")
         known = schema.column(table, column)
+        # A column can only be judged against a table the schema actually declares.
+        # Where the table is unknown, "table X has no column Y" reads as a finding about
+        # the column when the truth is that nothing here knows anything about X.
         symbol = use_symbol(
             use, "db_column_use", known,
             f"Table {table} has no column with that name. PostgREST returns the row "
-            "without it and the client reads undefined.", "selects a column")
+            "without it and the client reads undefined.", "selects a column",
+            checkable=has_schema and table in schema.tables)
         symbols.append(symbol)
         if known:
             edges.append(Edge(symbol.id, f"db_column:{use.name}", Status.CONNECTED))
@@ -380,7 +420,8 @@ def extract_supabase(root: str) -> tuple[list[Symbol], list[Edge]]:
         known = use.name in schema.functions
         symbol = use_symbol(
             use, "db_function_use", known,
-            "No migration declares a function with that name.", "calls rpc()")
+            "No migration declares a function with that name.", "calls rpc()",
+            checkable=has_schema)
         symbols.append(symbol)
         if known:
             edges.append(Edge(symbol.id, f"db_function:{use.name}", Status.CONNECTED))
@@ -389,7 +430,8 @@ def extract_supabase(root: str) -> tuple[list[Symbol], list[Edge]]:
         known = use.name in edge_dirs
         symbol = use_symbol(
             use, "edge_function_use", known,
-            "No supabase/functions directory of that name.", "invokes an edge function")
+            "No supabase/functions directory of that name.", "invokes an edge function",
+            checkable=os.path.isdir(os.path.join(root, "supabase", "functions")))
         symbols.append(symbol)
         if known:
             edges.append(Edge(symbol.id, f"edge_function:{use.name}", Status.CONNECTED))

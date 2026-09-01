@@ -54,7 +54,7 @@ showing, and nobody's project is in it.
 
 ## What "it works" means, per repo
 
-Four gates, in order. A repo that fails an early one tells us more than one that passes.
+Five gates, in order. A repo that fails an early one tells us more than one that passes.
 
 1. **It runs.** Config detection picks a URLconf; static mode parses it; the scan finishes
    without an exception. *Failure here is the most valuable result of the whole phase* — it
@@ -66,6 +66,16 @@ Four gates, in order. A repo that fails an early one tells us more than one that
    took the reference project from 73% to 98.3%.
 4. **It is not absurd.** 4,000 findings on a 5,000-line project means an extractor is
    misfiring, whatever the precision on the sample says.
+5. **The output is sound.** `tools/verify_output.py` — added 2026-09-02, because gates 1–4
+   all stop at the graph and every one of them can pass while the document a person opens is
+   broken. It renders the real map and interrogates it: every emitted `<script>` parses under
+   `node --check`, each node row carries kind and status indices that are in range, no edge
+   points at a node that is not on its page, a repo with pages produces pages, and nothing
+   leaked into the page as raw text. The map's JavaScript is built from a Python string, so a
+   stray character is a **blank page** that no Python test and no linter can see.
+
+Gates 1 and 5 are run by machine on every commit (see CLAUDE.md). Gates 2 and 4 are reported
+by `tools/corpus.py`. Gate 3 is a human reading a sample and cannot be automated.
 
 ## Choosing the repos
 

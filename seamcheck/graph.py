@@ -92,6 +92,11 @@ def relativise(graph: Graph, repo_root: str) -> Graph:
     def shorten(text: str | None) -> str | None:
         if not text:
             return text
+        # Every symbol from every extractor passes through here, so this is the one place
+        # that can promise the graph holds strings. One extractor handing back a number
+        # used to take down the entire scan from the last step before rendering.
+        if not isinstance(text, str):
+            text = str(text)
         if prefix in text:
             text = text.replace(prefix, "")
         # `./pointless/x.js` and `pointless/x.js` are one file with two spellings. Five of

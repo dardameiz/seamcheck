@@ -13,6 +13,31 @@ setting only covers the `Co-Authored-By` line — do not hand-write either trail
 
 Write the commit message and stop.
 
+## Before every commit: run seamcheck on seamcheck
+
+**Owner rule, 2026-09-02. Never commit to this repository without running the tool on
+itself and on the corpus, and reading the result.**
+
+```bash
+python -m seamcheck.cli check          # this repo: must not crash, must stay at 0/0/0
+python tools/corpus.py scan            # every cloned repo: no CRASH row, no new NO ROUTES
+```
+
+`check` on this repo reports **connected 0 unused 0 unresolved 0 uncertain 0** — seamcheck
+is a library with no frontend, so there is genuinely no seam to cross. That is the correct
+answer, which makes it a *crash-and-regression* gate rather than a findings gate: if it
+ever prints something other than four zeros, either the tool broke or this repo grew a
+surface that needs reading.
+
+**The findings gate is the corpus**, because that is where the tool meets code it did not
+grow up on. A commit may not:
+
+- turn any repo's gate 1 into `CRASH` (an exception is always a bug, never a finding),
+- turn a repo that found routes into `NO ROUTES`,
+- raise the corpus-wide `uncertain` share.
+
+Record the before/after numbers in the commit message when they move.
+
 ## What this is
 
 Seamcheck reads a project's source and reports what connects to what — specifically across
