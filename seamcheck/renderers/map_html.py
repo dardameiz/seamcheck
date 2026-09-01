@@ -16,19 +16,22 @@ from seamcheck.mapdata import ConnectivityMap
 
 # Column order is the story: browser on the left, database on the right.
 _COLUMNS = [
+    # ── the browser ─────────────────────────────────────────────────────────
     ("page", "Page"),
     ("module", "Module"),
     ("js_call", "JS call"),
-    ("dom_selector", "DOM"),
+    ("dom_selector", "Selector"),
     ("multi_writer_element", "Multi-writer"),
-    ("fetch_target", "Endpoint"),
-    ("url", "URL"),
-    ("view", "View"),
-    ("json_field", "Field"),
-    ("dom_attr", "Template"),
+    ("dom_attr", "Element"),
     ("css_selector", "CSS"),
     ("css_token_def", "Token"),
     ("css_token_use", "var()"),
+    # ── the seam ────────────────────────────────────────────────────────────
+    ("fetch_target", "Request"),
+    ("json_field", "Response"),
+    # ── the server ──────────────────────────────────────────────────────────
+    ("url", "Route"),
+    ("view", "Handler"),
 ]
 
 _CSS = """
@@ -172,7 +175,124 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overf
 /* Every value the scan read is shown in the font it was written in. */
 .mono, #crumb, .meta, .hf, .hl, .row .t, .row .w, .tree, .fl, .covn,
 .filters select, #q, .badge, .pill { font-family:var(--mono); }
+/* ═══ THE FLOATING CHROME ═══════════════════════════════════════════════
+   Nothing sits above the map. One dropdown, four pills, the zoom, and a readout
+   that appears only when it has something to say. Everything else the script
+   still writes to lives offstage.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.offstage { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%);
+            pointer-events:none; }
+.hud { position:absolute; z-index:6; display:flex; gap:8px; align-items:center; }
+.hud.tl { top:14px; left:14px; }
+.hud.tr { top:14px; right:14px; }
+.hud.bl { bottom:14px; left:14px; right:14px; flex-wrap:wrap; }
+.hud.br { bottom:14px; right:14px; flex-direction:column; }
+
+.menuwrap { position:relative; }
+.menubtn {
+  display:flex; align-items:center; gap:9px; cursor:pointer; padding:8px 15px 8px 12px;
+  border:1.2px solid var(--line-2); background:var(--panel); color:var(--ink);
+  border-radius:var(--r-pill); font-family:var(--font); font-size:13.5px; font-weight:600;
+  box-shadow:var(--shadow); transition:border-color var(--dur) var(--ease); max-width:62vw;
+}
+.menubtn:hover, .menubtn:focus-visible { border-color:var(--sig); outline:none; }
+.menubtn > span:last-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.menubtn .bars { display:flex; flex-direction:column; gap:3px; flex:none; }
+.menubtn .bars i { width:14px; height:1.6px; background:currentColor; border-radius:2px;
+                   transition:transform var(--dur) var(--ease), opacity var(--dur) var(--ease); }
+.menubtn[aria-expanded="true"] .bars i:nth-child(1) { transform:translateY(4.6px) rotate(45deg); }
+.menubtn[aria-expanded="true"] .bars i:nth-child(2) { opacity:0; }
+.menubtn[aria-expanded="true"] .bars i:nth-child(3) { transform:translateY(-4.6px) rotate(-45deg); }
+
+.mapsheet {
+  position:absolute; top:calc(100% + 9px); left:0; width:min(360px, calc(100vw - 34px));
+  background:var(--panel); border:1.2px solid var(--line); border-radius:var(--r-card);
+  box-shadow:var(--shadow); padding:8px; z-index:9;
+  opacity:0; transform:translateY(-8px) scale(.98); pointer-events:none;
+  transition:opacity var(--dur) var(--ease), transform var(--dur) var(--ease);
+  max-height:min(72dvh, 620px); overflow-y:auto; overscroll-behavior:contain;
+}
+.mapsheet.open { opacity:1; transform:none; pointer-events:auto; }
+.mapsheet .mlab { font-family:var(--mono); font-size:10px; letter-spacing:.15em;
+                  text-transform:uppercase; color:var(--muted); padding:10px 10px 6px; }
+.mapsheet .msep { height:1px; background:var(--line); margin:6px 4px; }
+.mapsheet .mfilters { display:grid; gap:7px; padding:0 8px 4px; }
+.mapsheet .mfilters label { display:grid; gap:3px; }
+.mapsheet .mfilters label > span { font-family:var(--mono); font-size:10px;
+  letter-spacing:.13em; text-transform:uppercase; color:var(--muted); }
+.mapsheet .mfilters select {
+  width:100%; padding:8px 10px; border-radius:calc(var(--r-card) - 4px);
+  border:1px solid var(--line); background:var(--bg); color:var(--ink);
+  font-family:var(--mono); font-size:12.5px;
+}
+.mapsheet .msearch { padding:0 8px 8px; display:grid; gap:4px; }
+.mapsheet .msearch input {
+  width:100%; padding:9px 11px; border-radius:calc(var(--r-card) - 4px);
+  border:1px solid var(--line); background:var(--bg); color:var(--ink);
+  font-family:var(--mono); font-size:12.5px;
+}
+.mapsheet .msearch input:focus { outline:none; border-color:var(--sig); }
+.mapsheet .qn { font-family:var(--mono); font-size:11px; color:var(--muted); padding:0 2px; }
+/* The nav is the view control now, so it reads as a list of places rather than a rail. */
+.mapsheet .nav { display:grid; gap:2px; padding:0 4px; }
+
+/* Back / show-as-list share the appearance button's shape. */
+.iconbtn {
+  height:30px; min-width:30px; padding:0 9px; display:grid; place-items:center; cursor:pointer;
+  border:1.2px solid var(--line-2); background:var(--panel); color:var(--muted);
+  border-radius:var(--r-pill); font-family:var(--mono); font-size:13px;
+  box-shadow:var(--shadow); transition:color var(--dur) var(--ease),
+             border-color var(--dur) var(--ease);
+}
+.iconbtn:hover { color:var(--sig); border-color:var(--sig); }
+.iconbtn.wide { font-size:12px; padding:0 13px; }
+
+/* What you are looking at. Empty and invisible the rest of the time. */
+.readout {
+  position:absolute; top:14px; left:50%; transform:translateX(-50%); z-index:5;
+  font-family:var(--mono); font-size:11.5px; color:var(--muted); pointer-events:none;
+  background:var(--panel); border:1px solid var(--line); padding:6px 14px;
+  border-radius:var(--r-pill); box-shadow:var(--shadow); white-space:nowrap;
+  max-width:min(46vw, 640px); overflow:hidden; text-overflow:ellipsis;
+  opacity:0; transition:opacity var(--dur) var(--ease);
+}
+.readout.show { opacity:1; }
+/* The canvas is full-bleed, so the first row of the drawing has to clear the chrome. The
+   layout leaves this much headroom above the first column heading. */
+:root { --chrome-top:56px; --chrome-bottom:62px; }
+
+/* ── the four words, as pills on the glass ─────────────────────────────── */
+#colourkey .seg { display:flex; gap:8px; flex-wrap:wrap; border:0; background:none;
+                  padding:0; border-radius:0; }
+#colourkey .seg button {
+  display:inline-flex; align-items:center; gap:7px; cursor:pointer; flex:none;
+  font-family:var(--mono); font-size:12.5px; font-weight:500;
+  border-radius:var(--r-pill); padding:7px 14px; white-space:nowrap;
+  border:1.2px solid var(--line-2); background:var(--panel); color:var(--muted);
+  box-shadow:var(--shadow);
+  transition:color var(--dur) var(--ease), border-color var(--dur) var(--ease),
+             background var(--dur) var(--ease), transform var(--dur) var(--ease);
+}
+#colourkey .seg button:hover { transform:translateY(-1px); }
+#colourkey .seg button i { width:7px; height:7px; border-radius:50%; flex:none;
+                           background:currentColor; }
+#colourkey .seg button b { font-weight:500; opacity:.7; font-variant-numeric:tabular-nums; }
+#colourkey .seg button b:empty { display:none; }
+#colourkey .seg .s-connected i { background:var(--ok); }
+#colourkey .seg .s-unresolved i { background:var(--crit); }
+#colourkey .seg .s-unused i { background:var(--warn); }
+#colourkey .seg .s-uncertain i { background:var(--dim); }
+#colourkey .seg .s-connected[aria-pressed="true"] { color:var(--ok); border-color:var(--ok);
+  background:var(--ok-fill); box-shadow:var(--glow) var(--ok-fill), var(--shadow); }
+#colourkey .seg .s-unresolved[aria-pressed="true"] { color:var(--crit); border-color:var(--crit);
+  background:var(--crit-fill); box-shadow:var(--glow) var(--crit-fill), var(--shadow); }
+#colourkey .seg .s-unused[aria-pressed="true"] { color:var(--warn); border-color:var(--warn);
+  background:var(--warn-fill); box-shadow:var(--glow) var(--warn-fill), var(--shadow); }
+#colourkey .seg .s-uncertain[aria-pressed="true"] { color:var(--dim); border-color:var(--dim);
+  background:var(--dim-fill); }
+
 .shell { display:flex; height:100%; }
+
 .content { flex:1 1 auto; min-width:0; display:flex; flex-direction:column; }
 /* The rail is the desktop's navigation. A phone has no room for it and uses the VIEW
    select instead; both drive the same switch, from one list of items. */
@@ -401,11 +521,16 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
 .col { font-size:9.5px; fill:var(--muted); text-transform:uppercase; letter-spacing:.1em;
        font-family:var(--mono); }
 
-.zoom { position:absolute; left:10px; bottom:10px; display:flex; gap:6px; z-index:2; }
-.zoom button, .key { width:40px; height:40px; font-size:15px; line-height:1;
-                     border-radius:10px; border:1px solid var(--line);
-                     background:var(--panel); color:var(--ink); cursor:pointer; }
-.key { position:absolute; right:10px; bottom:10px; z-index:2; }
+.zoom { position:absolute; right:14px; bottom:62px; display:flex; flex-direction:column;
+        gap:7px; z-index:6; }
+.zoom button, .key { width:38px; height:38px; font-size:15px; line-height:1;
+                     border-radius:var(--r-pill); border:1.2px solid var(--line-2);
+                     background:var(--panel); color:var(--muted); cursor:pointer;
+                     box-shadow:var(--shadow); font-family:var(--mono);
+                     transition:color var(--dur) var(--ease),
+                                border-color var(--dur) var(--ease); }
+.zoom button:hover, .key:hover { color:var(--sig); border-color:var(--sig); }
+.key { position:absolute; right:14px; bottom:14px; z-index:6; }
 /* Pinned over the canvas, the legend sat on top of the nodes it explains. It opens now
    only when asked, and closes by tapping anywhere. */
 .legend { position:absolute; right:10px; bottom:58px; background:var(--panel);
@@ -492,6 +617,12 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
 #cv .mt { font-size:14px; fill:var(--ink); }
 #cv .mt.sub { font-size:13px; fill:var(--muted); }
 #cv .mt tspan.hl { fill:var(--sig); }
+/* The bands sit behind everything and are barely there - a region marker, not a panel. */
+#cv .band { fill:var(--panel); opacity:.30; stroke:var(--line); stroke-width:1; }
+#cv .band.seam { fill:var(--sig-fill); opacity:.55; stroke:var(--sig);
+                 stroke-dasharray:5 4; }
+#cv .bandlbl { font-size:10px; fill:var(--muted); letter-spacing:.19em; font-weight:500;
+               pointer-events:none; }
 .listing { font-variant-ligatures:none; }
 /* The run of characters the row was actually about. */
 .listing mark.hit { background:var(--sig); color:var(--bg); border-radius:3px;
@@ -742,8 +873,27 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
   /* Clear of the floating header, and stacked so they take a thumb's width rather than a
      row of the map. `bottom:auto` matters as much as `top`: with both set the control
      stretches between them, which is how it came to cover the entire canvas. */
-  .zoom { left:auto; right:10px; top:124px; bottom:auto; flex-direction:column;
-          width:44px; height:auto; }
+  /* A phone is not a small desktop. The top row holds the menu and the appearance
+     control and nothing else; the readout drops to its own line under them rather than
+     being run over by a button; and the zoom stacks ABOVE the pills instead of through
+     them, because the pills wrap to two rows and the stack has to clear both. */
+  .hud.tl { top:12px; left:12px; }
+  .hud.tr { top:12px; right:12px; gap:6px; }
+  .menubtn { max-width:44vw; }
+  .readout { top:auto; bottom:calc(var(--chrome-bottom, 62px) + 56px);
+             max-width:calc(100vw - 24px); font-size:11px; }
+  .hud.bl { bottom:12px; left:12px; right:12px; gap:7px; }
+  #colourkey .seg { gap:7px; }
+  #colourkey .seg button { padding:6px 12px; font-size:12px; }
+  .zoom { left:auto; right:12px; top:auto;
+          bottom:calc(var(--chrome-bottom, 62px) + 108px);
+          flex-direction:column; width:44px; height:auto; gap:6px; }
+  .zoom button, .key { width:44px; height:40px; }
+  /* The colour key joins the zoom stack rather than sitting under it in the pills' way. */
+  .key { right:12px; bottom:calc(var(--chrome-bottom, 62px) + 58px); }
+  /* "Show as list" is a phrase on a desktop and an icon on a phone. */
+  .iconbtn.wide { font-size:0; padding:0; min-width:30px; }
+  .iconbtn.wide::after { content:"\2630"; font-size:13px; }
   /* A file row does not fit on one phone line: name, coverage bar, ratio, up to four
      status badges and an editor link. Unwrapped, the name lost - which is the one part
      of the row a reader is looking for. It takes its own line; the rest follows under. */
@@ -822,7 +972,7 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
   /* The crumb row keeps its search, but stops being a row of its own. */
   .crumbrow { padding:4px 12px 8px; }
   .reading { padding-bottom:8px; }
-  .zoom { bottom:auto; top:10px; }
+
 }
 
 """
@@ -838,6 +988,23 @@ const CH = {added:"var(--ok)", removed:"var(--crit)", status:"var(--warn)"};
 // real scan). Expanded once, here, into exactly the objects the rest of this script has
 // always read - so the wire format is a detail of loading and of nothing else.
 const COLS = MAPDATA.columns, COMMITS = MAPDATA.commits || [];
+// Three regions and a strip, named the way a person would name them rather than by the
+// kind of symbol that happens to land there. A reader opening this map for the first time
+// does not know what a `dom_attr` is and should not have to.
+const BANDS = [
+  {id: "browser", label: "THE BROWSER \u2014 WHAT A PERSON TOUCHES", short: "THE BROWSER",
+   kinds: ["page", "module", "js_call", "dom_selector", "multi_writer_element",
+           "dom_attr", "css_selector", "css_token_def", "css_token_use"]},
+  {id: "seam", label: "THE SEAM \u2014 THE NETWORK BOUNDARY", short: "THE SEAM",
+   kinds: ["fetch_target", "json_field"]},
+  {id: "server", label: "THE SERVER \u2014 WHAT RUNS WHEN THE REQUEST LANDS",
+   short: "THE SERVER",
+   kinds: ["url", "view", "model", "signal_receiver", "admin_action", "template_tag",
+           "url_reference", "management_command"]},
+  {id: "off", label: "REACHED WITHOUT A BROWSER", short: "NO BROWSER",
+   kinds: ["celery_task", "celery_schedule", "stripe_webhook", "stripe_event",
+           "graphql_field", "graphql_selection"]},
+];
 const PAGES = (() => {
   const F = MAPDATA.fields, K = MAPDATA.kinds, S_ = MAPDATA.statuses, FI = MAPDATA.files;
   const inflate = row => {
@@ -1021,7 +1188,7 @@ function fillPages(counts) {
 pages.onchange = e => {
   current = Number(e.target.value); focus = null; view = {x:0, y:0, k:1};
   closeSheet(); draw();
-  if (window.syncPillSummary) syncPillSummary();
+  if (window.syncReadout) syncReadout();
 };
 
 // Clicking a colour in the key filters the canvas to that status. Toggling, so several
@@ -1042,7 +1209,7 @@ colourkey.addEventListener("click", event => {
   draw();
   // A list is filtered by the same control, so it has to be rebuilt with it.
   if (panel && !panel.hidden) renderPanel();
-  if (window.syncPillSummary) syncPillSummary();
+  if (window.syncReadout) syncReadout();
 });
 
 window.syncStatusKey = syncStatusKey;
@@ -1318,22 +1485,60 @@ const ROW_CHOICES = [16, 22, 30, 42, 58, 80, 110, 150, 210];
 // pages worse, because what drives the width is every column's lanes, not one column's
 // depth. So the layout is simply computed at each candidate and the one that fits largest
 // wins - a handful of arithmetic passes over a few thousand nodes, once per draw.
+// Bands stack, they do not sit side by side. The browser is a horizontal strip across the
+// top, the seam is the strip under it, the server is under that, and anything no browser
+// reaches is last. Reading down the canvas is reading the request: a person touches
+// something at the top, it crosses the middle, and the bottom is what runs. Columns still
+// run left-to-right INSIDE a band, which is where the kind ordering belongs.
+const BAND_TOP = 58, BAND_BOT = 18, BAND_GAP = 22;
+
 function place(buckets, used, rows) {
   const pos = new Map();
   const columns = [];
-  let x = 40, deepest = 1;
+  const bands = [];
+  const bandOfKind = new Map();
+  BANDS.forEach((band, i) => band.kinds.forEach(k => bandOfKind.set(k, i)));
+
+  // Which columns belong to which band, in band order rather than kind order.
+  const groups = new Map();
   used.forEach(c => {
-    const items = buckets.get(c);
-    const lanes = Math.max(1, Math.ceil(items.length / rows));
-    items.forEach((n, i) => pos.set(n.id, {
-      x: x + Math.floor(i / rows) * LANE,
-      y: 62 + (i % rows) * ROW,
-    }));
-    deepest = Math.max(deepest, Math.min(items.length, rows));
-    columns.push({x, label: COLS[c] ? COLS[c][1] : "Other", count: items.length});
-    x += lanes * LANE + 50;
+    const kind = COLS[c] ? COLS[c][0] : "other";
+    const at = bandOfKind.has(kind) ? bandOfKind.get(kind) : BANDS.length;
+    if (!groups.has(at)) groups.set(at, []);
+    groups.get(at).push(c);
   });
-  return {pos, columns, width: x, height: 62 + deepest * ROW};
+
+  let y = 12, width = 0;
+  [...groups.keys()].sort((m, n) => m - n).forEach(at => {
+    let x = 40, deepest = 1;
+    groups.get(at).forEach(c => {
+      const items = buckets.get(c);
+      // A column still wraps into lanes rather than running off the bottom of its band -
+      // one page here holds 839 selectors, and stacked in single file that is a column
+      // 25,000px tall that no amount of scrolling makes legible.
+      const lanes = Math.max(1, Math.ceil(items.length / rows));
+      items.forEach((n, i) => pos.set(n.id, {
+        x: x + Math.floor(i / rows) * LANE,
+        y: y + BAND_TOP + (i % rows) * ROW,
+      }));
+      deepest = Math.max(deepest, Math.min(items.length, rows));
+      columns.push({x, y: y + BAND_TOP - 11,
+                    kind: COLS[c] ? COLS[c][0] : "other",
+                    label: COLS[c] ? COLS[c][1] : "Other", count: items.length});
+      x += lanes * LANE + 50;
+    });
+    const h = BAND_TOP + deepest * ROW + BAND_BOT;
+    const band = BANDS[at] || {id: "other", label: "EVERYTHING ELSE THE SCAN FOUND",
+                               short: "EVERYTHING ELSE"};
+    bands.push({id: band.id, label: band.label, short: band.short || band.label,
+                y, h, first: bands.length === 0});
+    width = Math.max(width, x);
+    y += h + BAND_GAP;
+  });
+  // Every band spans the whole drawing, so the strips line up and the eye reads them as
+  // regions rather than as boxes of different sizes.
+  bands.forEach(band => { band.w = Math.max(width - 26, 200); });
+  return {pos, columns, bands, width, height: y};
 }
 
 // A column wraps into lanes instead of running off the bottom of the world. One page here
@@ -1515,6 +1720,9 @@ function draw() {
     : focus ? `${here} › ${(byId.get(focus) || {}).label || ""}`
     : `${here} — pick a module`;
   document.getElementById("up").hidden = !focus;
+  // draw() is what WRITES the breadcrumb, so the readout has to be told after it, not
+  // before - switchTo asked the question while the answer was still the previous view's.
+  if (window.syncReadout) syncReadout();
   const cap = document.getElementById("capnote");
   if (cap) {
     cap.textContent = capped
@@ -1545,7 +1753,7 @@ function draw() {
       `<text x="20" y="98" class="mt sub">Take one off, or pick another page.</text>`;
     return;
   }
-  const {keep, value: {pos, columns, width, height}} = layoutFor(p);
+  const {keep, value: {pos, columns, bands, width, height}} = layoutFor(p);
   // A phone is narrower than two columns of this map, so an untouched view opens showing
   // the whole chain, nudged clear of the left edge. Only the first draw of a view fits:
   // once someone pans or zooms, the view is theirs.
@@ -1569,8 +1777,18 @@ function draw() {
   reportEmpty(drawnNodes.length);
   const chain = lit && !isolate ? chainOf(p, lit) : null;
   const out = ['<g id="vp">'];
+  // The bands, drawn first and behind everything: full-width horizontal strips a reader
+  // goes DOWN, which is the direction a request actually travels. A person touches
+  // something in the top strip, it crosses the middle, and the bottom is what runs.
+  (bands || []).forEach(band => {
+    out.push(`<rect class="band ${esc(band.id)}" x="26" y="${band.y}"
+      width="${band.w}" height="${band.h}" rx="18"/>`);
+    // The topmost heading opens under the floating menu button, so it starts clear of it.
+    const x = band.first ? 150 : 44;
+    out.push(`<text class="bandlbl" x="${x}" y="${band.y + 24}">${esc(band.label)}</text>`);
+  });
   columns.forEach(c => out.push(
-    `<text class="col" x="${c.x}" y="44">${esc(c.label)} ${c.count}</text>`));
+    `<text class="col" x="${c.x}" y="${c.y}">${esc(c.label)} ${c.count}</text>`));
   p.edges.forEach(e => {
     const a = pos.get(e.source), b = pos.get(e.target);
     if (!a || !b) return;
@@ -2833,37 +3051,32 @@ function switchTo(next) {
   // extractor feeds yet) has nothing to draw and falls back to its rows.
   if (mode !== "map") { fileFilter = null; fileQuery = mode === "files" ? fileQuery : ""; }
   const drawable = SECTION_KINDS[mode] !== undefined && !asList;
-  // A panel is read, not panned, so the header drops what only the map needs.
-  document.querySelector(".top").classList.toggle("panelmode", !drawable);
   // Filters belong where they filter something. Overview is a page of numbers about the
   // whole scan, so a control offering to narrow it is offering something it cannot do -
   // and the pill was sitting there on every view, over content it had no relationship to.
-  if (window.syncPillControls) syncPillControls();
-  if (window.syncPillSummary) syncPillSummary();
+  if (window.syncChrome) syncChrome();
+  if (window.syncReadout) syncReadout();
   if (window.chromeMeasure) requestAnimationFrame(window.chromeMeasure);
   panel.hidden = drawable; svg.hidden = !drawable;
   const hasLens = SECTION_KINDS[mode] !== undefined;
   // The status filter narrows the DATA, not the drawing, so it survives the switch to a
   // list. Hiding it with the canvas left the list filtered by whatever was set before and
   // no control to change it - the filter was still on, and invisible.
-  // On a phone syncPillControls owns this; on a desktop the lens decides.
-  if (!window.matchMedia("(max-width: 720px)").matches) {
-    document.getElementById("colourkey").hidden = !hasLens;
-  }
+  // syncChrome owns which controls a view actually has, on every screen size.
   // These two really are about the canvas.
   document.querySelector(".zoom").hidden = !drawable;
   document.getElementById("lg").hidden = !drawable;
-  // The row stays while a lens exists, or the button that switches back to the map goes
-  // with it and the list becomes a dead end.
-  document.querySelector(".crumbrow").hidden = !hasLens;
   document.getElementById("crumb").hidden = !drawable;
-  // The search reaches the whole scan now, so it is never out of place: hiding it on a
-  // list view meant the one control that can answer "where is this?" disappeared exactly
-  // when a reader was reading names.
+  // The search reaches the whole scan, so it is never out of place.
   document.getElementById("q").hidden = false;
   pgwrap.hidden = !drawable;
   listToggle.hidden = !hasLens;
-  listToggle.textContent = asList ? "\u25f1  Show as map" : "\u2630  Show as list";
+  listToggle.textContent = asList ? "Show as map" : "Show as list";
+  const label = document.getElementById("menulabel");
+  if (label) {
+    const item = rail.querySelector(`.nv[data-key="${mode}"] span`);
+    label.textContent = item ? item.textContent.trim() : mode;
+  }
   closeSheet();
   cq = ""; cstatus = ""; shown = ROWS_PER_PAGE;
   focus = null; view = {x:0, y:0, k:1};
@@ -2930,111 +3143,60 @@ ly.onchange = e => {
   fillPages();
   draw();
   if (panel && !panel.hidden) renderPanel();
-  if (window.syncPillSummary) syncPillSummary();
+  if (window.syncReadout) syncReadout();
 };
 
-// ── The pill ──────────────────────────────────────────────────────────────
-// One container, built by moving the controls rather than duplicating them: two copies of
-// a <select> is two sources of truth for which page is open, and they drift.
-(function pill() {
-  const narrow = window.matchMedia("(max-width: 720px)");
-  const main = document.querySelector(".main");
-  const header = document.querySelector(".top");
-  const parts = [document.querySelector(".filters:not(.onlymob)"),
-                 document.getElementById("colourkey")];
-  let box = null;
-  function place() {
-    if (narrow.matches) {
-      if (!box) {
-        box = document.createElement("div");
-        box.className = "pill";
-        // At rest the control is ONE line saying what is set, because four pickers spend a
-        // fifth of a phone screen answering a question asked once a session. The line is
-        // also the answer to "am I looking at everything?", which is the question a reader
-        // actually has after panning for a minute.
-        box.innerHTML =
-          '<div class="pillbar"><span class="now" id="pillnow"></span>' +
-          '<button type="button" class="open" id="pillopen">Filters</button></div>' +
-          '<div class="pillsheet" id="pillsheet" hidden>' +
-          '<button type="button" class="sheetclose" id="pillclose" aria-label="Close">' +
-          "\u00d7</button></div>";
-        main.appendChild(box);
-        document.getElementById("pillopen").onclick = () => setSheet(true);
-        document.getElementById("pillclose").onclick = () => setSheet(false);
-      }
-      const sheet = document.getElementById("pillsheet");
-      parts.forEach(part => part && sheet.appendChild(part));
-      // The view picker joins them: two rows of selects at the top and two more at the
-      // bottom is the same control surface built twice, and the top copy was costing the
-      // canvas a row it could not spare.
-      // The view picker is NAVIGATION and stays at the top. Folding it into the filters
-      // put "where am I going" inside "what am I hiding", and then hiding the filters on
-      // Overview - which has nothing to filter - took the menu away with them.
-    } else if (box) {
-      parts.forEach(part => part && header.insertBefore(part, document.querySelector(".crumbrow")));
-      box.remove();
-      box = null;
-    }
-  }
-  place();
-  narrow.addEventListener("change", place);
+// ── The floating chrome ───────────────────────────────────────────────────
+// One dropdown on every screen size. The old build moved the filter row and the colour key
+// into a phone-only sheet and left them stacked above the canvas on a desktop - two
+// layouts, two sets of bugs, and eight controls over the map on the wider one.
+(function chrome() {
+  const menubtn = document.getElementById("menubtn");
+  const mapsheet = document.getElementById("mapsheet");
+  const readout = document.getElementById("readout");
+  const key = document.getElementById("colourkey");
 
-  // What the floating chrome actually occupies, published as custom properties. Guessing
-  // a number here is how the top and bottom of every list ended up under the header and
-  // the pill: the header is shorter without the reading, and the pill grows by a row when
-  // a filter notice appears.
-  // Open or shut. The sheet REPLACES the bar rather than sitting above it, so the control
-  // never has two footprints and the map never loses more than it has to.
   window.setSheet = open => {
-    const sheet = document.getElementById("pillsheet");
-    const bar = box && box.querySelector(".pillbar");
-    if (!sheet || !bar) return;
-    sheet.hidden = !open;
-    bar.hidden = open;
-    if (window.chromeMeasure) requestAnimationFrame(window.chromeMeasure);
+    if (!mapsheet) return;
+    mapsheet.classList.toggle("open", !!open);
+    menubtn.setAttribute("aria-expanded", open ? "true" : "false");
+  };
+  menubtn.addEventListener("click", e => {
+    e.stopPropagation();
+    setSheet(!mapsheet.classList.contains("open"));
+  });
+  // A click anywhere else shuts it; a click inside must not.
+  mapsheet.addEventListener("click", e => e.stopPropagation());
+  document.addEventListener("click", () => setSheet(false));
+  document.addEventListener("keydown", e => { if (e.key === "Escape") setSheet(false); });
+
+  // The readout says what you are looking at, and disappears when it has nothing to say -
+  // an always-on label over a map is just a smaller map.
+  window.syncReadout = () => {
+    const crumb = document.getElementById("crumb");
+    const has = crumb && !crumb.hidden && crumb.textContent.trim().length > 0;
+    readout.classList.toggle("show", !!has);
   };
 
-  // What the bar says. Named things only: the view, where you are, and anything narrowing
-  // it - a reader does not need to be told they are looking at everything.
-  window.syncPillSummary = () => {
-    const now = document.getElementById("pillnow");
-    if (!now) return;
-    const bits = [];
-    if (SERVICE_LAYERS.has(layer)) {
-      bits.push((LAYERS.find(([k]) => k === layer) || [, layer])[1]);
-    } else {
-      const p = PAGES[current];
-      if (p && SECTION_KINDS[mode] !== undefined) bits.push(p.title || p.page);
-      if (layer) bits.push((LAYERS.find(([k]) => k === layer) || [, layer])[1]);
-    }
-    if (statusFilter.size) bits.push([...statusFilter].join(" + "));
-    const commit = document.querySelector("#cm option:checked");
-    if (commit && commit.value !== "") bits.push(commit.textContent.trim().split(" · ")[0]);
-    now.innerHTML = bits.map((b, i) =>
-      (i ? '<b> · </b>' : "") + esc(b)).join("");
-  };
-
-  // `header` is the one declared at the top of this function.
+  // How much of the canvas the floating controls occupy. The panel pads itself by these,
+  // or its first and last rows sit under the dropdown and the pills.
   let lastTop = -1, lastBottom = -1;
-  function measure() {
-    const top = Math.round(header ? header.getBoundingClientRect().height : 0);
-    const bottom = Math.round(box ? box.getBoundingClientRect().height : 0);
-    // Write only on a real change. These properties feed the panel's padding, the padding
-    // changes layout, and the observer fires again - an unguarded write is a loop that
-    // never settles, which turned a 100-second test suite into one that did not finish.
+  window.chromeMeasure = () => {
+    const top = 14 + Math.round(menubtn.getBoundingClientRect().height);
+    const bottom = key && !key.hidden
+      ? 14 + Math.round(key.getBoundingClientRect().height) : 14;
+    // Write only on a real change: the properties feed the panel's padding, the padding
+    // changes layout, and an unguarded write is an observer loop that never settles.
     if (top === lastTop && bottom === lastBottom) return;
     lastTop = top; lastBottom = bottom;
     const root = document.documentElement.style;
-    root.setProperty("--chrome-top", top + "px");
-    root.setProperty("--chrome-bottom", bottom + "px");
-  }
-  window.chromeMeasure = measure;
-  measure();
-  // Which controls this view actually has. Map has all four; Findings has the status
-  // filter and the search; Changes has the commit picker; Overview has none, and gets no
-  // pill at all.
-  window.syncPillControls = () => {
-    if (!box) return;
+    root.setProperty("--chrome-top", top + 10 + "px");
+    root.setProperty("--chrome-bottom", bottom + 10 + "px");
+  };
+
+  // Which controls a view actually has. Overview is a page of numbers about the whole
+  // scan, so a control offering to narrow it is offering something it cannot do.
+  window.syncChrome = () => {
     const onMap = SECTION_KINDS[mode] !== undefined;
     const wants = {
       overview: [],
@@ -3044,34 +3206,36 @@ ly.onchange = e => {
       changes: ["cm"],
     }[mode] || (onMap ? ["cm", "pg", "ly", "status"] : ["cm"]);
 
-    box.hidden = wants.length === 0;
     ["cm", "pg", "ly"].forEach(id => {
-      const control = document.getElementById(id);
-      const wrap = control && control.closest("label");
+      const wrap = (document.getElementById(id) || {}).closest
+        ? document.getElementById(id).closest("label") : null;
       if (wrap) wrap.hidden = !wants.includes(id);
     });
-    const key = document.getElementById("colourkey");
     if (key) key.hidden = !wants.includes("status");
-    // Nothing left to open means the button is furniture.
-    // One control needs no sheet to hold it.
-    const open = document.getElementById("pillopen");
-    const single = wants.filter(w => w !== "status").length <= 1 && !wants.includes("status");
-    if (open) open.hidden = single;
-    if (single) setSheet(false);
+    // Counts on the pills, from the page actually drawn - a pill that says "unresolved"
+    // with no number is a control with no information in it.
+    if (!key.hidden) {
+      const counts = {};
+      const p = typeof currentPage === "function" ? currentPage() : null;
+      const pool = p ? p.nodes : [];
+      pool.forEach(n => { counts[n.status] = (counts[n.status] || 0) + 1; });
+      key.querySelectorAll(".seg button[data-status]").forEach(btn => {
+        const st = btn.dataset.status;
+        if (!st) return;
+        const b = btn.querySelector("b");
+        if (b) b.textContent = counts[st] ? counts[st].toLocaleString() : "";
+        // A status this page has none of is not a filter, it is a dead control.
+        btn.hidden = !counts[st] && !statusFilter.has(st);
+      });
+    }
     if (window.chromeMeasure) requestAnimationFrame(window.chromeMeasure);
   };
-  syncPillControls();
 
-  // The bar is the only thing on screen at rest, so it has to say something before the
-  // reader touches anything.
-  if (window.syncPillSummary) syncPillSummary();
-  window.addEventListener("resize", () => { place(); measure(); });
-  if (window.ResizeObserver) {
-    const watch = new ResizeObserver(measure);
-    if (header) watch.observe(header);
-    const pill = document.querySelector(".pill");
-    if (pill) watch.observe(pill);
-  }
+  syncChrome();
+  syncReadout();
+  chromeMeasure();
+  window.addEventListener("resize", () => chromeMeasure());
+  if (window.ResizeObserver) new ResizeObserver(() => chromeMeasure()).observe(menubtn);
 })();
 """
 
@@ -3246,62 +3410,83 @@ def render(connectivity_map: ConnectivityMap, console=None, files=None,
         'family=Space+Mono:wght@400;700&display=swap">',
         f"<title>Seamcheck — {_esc(connectivity_map.git_sha[:12])}</title>",
         f"<style>{_CSS}</style></head><body>",
-        '<div class="shell"><aside class="rail">'
-        # No wordmark here: the header above the content already carries it, and on a
-        # desktop both were visible at once, one directly above the other.
-        '<div class="nav" id="nav"></div></aside>'
-        '<div class="content">'
-        '<header class="top">',
-        f'<div class="brand"><b>Seamcheck</b>'
-        f'<span class="meta">HEAD {_esc(connectivity_map.git_sha[:12])} · {_esc(mode)}'
-        f'{_adapter_label(adapters)}</span>'
-        '<span class="packwrap">'
-        '<button type="button" class="tmode" id="tmode" aria-label="Appearance">Aurora</button>'
-        '<div class="packmenu" id="packmenu"></div></span>'
-        f"</div>",
-        # Direction A: the number a reader came for, at a size that says so, with the
-        # trend beside it. Everything else folds into the pill at the bottom of the canvas.
-        '<div class="reading" id="reading" hidden>'
-        '<div class="big"><span>to look at</span><b id="bignum">0</b></div>'
-        '<svg class="spark" id="spark" viewBox="0 0 120 34" preserveAspectRatio="none"></svg>'
-        "</div>",
-        '<div class="filters onlymob"><label class="wide"><span>View</span>'
-        '<select id="vw"></select></label></div>',
-        '<div class="filters">'
-        '<label><span>Commit</span><select id="cm"></select></label>'
-        '<label id="pgwrap"><span>Page</span><select id="pg"></select></label>'
-        '<label id="lywrap"><span>Layer</span><select id="ly"></select></label></div>',
-        '<div class="crumbrow"><button id="up" type="button" hidden>\u2190</button>'
-        '<button id="aslist" type="button" hidden>Show as list</button>'
-        '<span id="crumb"></span>'
-        '<input id="q" type="search" placeholder="Filter">'
-        '<span id="qn" class="qn"></span></div>',
-        # A labelled control, not a colour key doing double duty. The key explained five
-        # things in five lines of prose and quietly expected four of them to be clicked -
-        # so the one that was NOT clickable ("filled in", a caption about drawing style)
-        # looked exactly like the four that were, and the five lines cost more of a phone
-        # screen than the map they described.
-        '<div class="legendbar" id="colourkey">'
-        '<span class="flabel">Show</span>'
-        '<div class="seg" role="group" aria-label="Show only these statuses">'
-        '<button type="button" data-status="" aria-pressed="true">all</button>'
-        '<button type="button" class="s-connected" data-status="connected" '
-        'title="Something reaches it, evidence attached">connected</button>'
-        '<button type="button" class="s-unresolved" data-status="unresolved" '
-        'title="Something reaches for it and it is not there">unresolved</button>'
-        '<button type="button" class="s-unused" data-status="unused" '
-        'title="Both ends observable, nothing uses it">unused</button>'
-        '<button type="button" class="s-uncertain" data-status="uncertain" '
-        'title="No evidence either way \u2014 not a claim it is dead">uncertain</button>'
-        "</div>"
-        "</div>",
-        '<div class="note" id="cmnote"></div>'
-        '<div class="note capnote" id="capnote"></div>'
-        '<div class="gone" id="gone"></div>',
-        "</header>",
+        # NOTHING SITS ABOVE THE MAP ANY MORE. The header used to stack eight controls -
+        # brand, the big number, a view select, three filter selects, a breadcrumb row with
+        # a search box, and a five-button colour key - over the one thing a reader opened
+        # the page for. All of it now floats ON the canvas: one dropdown holds the menu and
+        # every filter, four status pills carry the whole vocabulary, and that is the lot.
+        '<div class="shell"><div class="content">',
         '<main class="main">',
         '<svg id="cv"></svg>',
         '<div class="panel" id="panel" hidden></div>',
+
+        # ── the one dropdown ──────────────────────────────────────────────────
+        '<div class="hud tl"><div class="menuwrap">'
+        '<button type="button" class="menubtn" id="menubtn" aria-expanded="false">'
+        '<span class="bars"><i></i><i></i><i></i></span>'
+        '<span id="menulabel">Map</span></button>'
+        '<div class="mapsheet" id="mapsheet">'
+        '<div class="mlab">View</div>'
+        '<div class="nav" id="nav"></div>'
+        '<div class="msep"></div>'
+        '<div class="mlab">Narrow it down</div>'
+        '<div class="mfilters">'
+        '<label><span>Commit</span><select id="cm"></select></label>'
+        '<label id="pgwrap"><span>Page</span><select id="pg"></select></label>'
+        '<label id="lywrap"><span>Emphasis</span><select id="ly"></select></label>'
+        '</div>'
+        '<div class="msep"></div>'
+        '<div class="mlab">Search everything</div>'
+        '<div class="msearch"><input id="q" type="search" placeholder="Any symbol, file, '
+        'route or element"><span id="qn" class="qn"></span></div>'
+        # Kept because switchTo() writes to it; the nav above is what a reader touches.
+        '<select id="vw" hidden></select>'
+        '</div></div></div>',
+
+        # ── appearance, top right ─────────────────────────────────────────────
+        '<div class="hud tr">'
+        '<button type="button" class="iconbtn" id="up" hidden aria-label="Back">\u2190</button>'
+        '<button type="button" class="iconbtn wide" id="aslist" hidden>Show as list</button>'
+        '<span class="packwrap">'
+        '<button type="button" class="tmode" id="tmode" aria-label="Appearance">Aurora</button>'
+        '<div class="packmenu" id="packmenu"></div></span>'
+        "</div>",
+
+        # ── what you are looking at, only when there is something to say ──────
+        '<div class="readout" id="readout"><span id="crumb"></span></div>',
+
+        # ── the four words the whole tool is built on ─────────────────────────
+        '<div class="hud bl" id="colourkey">'
+        '<div class="seg" role="group" aria-label="Show only these statuses">'
+        '<button type="button" class="s-connected" data-status="connected" '
+        'title="Something reaches it, evidence attached">'
+        '<i></i>connected<b></b></button>'
+        '<button type="button" class="s-unresolved" data-status="unresolved" '
+        'title="Something reaches for it and it is not there">'
+        '<i></i>unresolved<b></b></button>'
+        '<button type="button" class="s-unused" data-status="unused" '
+        'title="Both ends observable, nothing uses it">'
+        '<i></i>unused<b></b></button>'
+        '<button type="button" class="s-uncertain" data-status="uncertain" '
+        'title="No evidence either way \u2014 not a claim it is dead">'
+        '<i></i>uncertain<b></b></button>'
+        '<button type="button" data-status="" class="allbtn" hidden>all</button>'
+        "</div></div>",
+
+        # Every element the script still writes to, kept in the tree and out of the way.
+        '<div class="offstage">'
+        '<div class="reading" id="reading" hidden>'
+        '<div class="big"><span>to look at</span><b id="bignum">0</b></div>'
+        '<svg class="spark" id="spark" viewBox="0 0 120 34" preserveAspectRatio="none"></svg>'
+        "</div>"
+        f'<div class="brand"><b>Seamcheck</b>'
+        f'<span class="meta">HEAD {_esc(connectivity_map.git_sha[:12])} · {_esc(mode)}'
+        f'{_adapter_label(adapters)}</span></div>'
+        '<div class="crumbrow"></div>'
+        '<div class="note" id="cmnote"></div>'
+        '<div class="note capnote" id="capnote"></div>'
+        '<div class="gone" id="gone"></div>'
+        "</div>",
         '<div class="zoom"><button id="zo" type="button" aria-label="Zoom out">\u2212</button>'
         '<button id="zi" type="button" aria-label="Zoom in">+</button>'
         '<button id="zf" type="button" aria-label="Fit to screen">\u2316</button></div>',
