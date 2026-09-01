@@ -23,11 +23,15 @@ python -m seamcheck.cli check          # this repo: must not crash, must stay at
 python tools/corpus.py scan            # every cloned repo: no CRASH row, no new NO ROUTES
 ```
 
-`check` on this repo reports **connected 0 unused 0 unresolved 0 uncertain 0** — seamcheck
-is a library with no frontend, so there is genuinely no seam to cross. That is the correct
-answer, which makes it a *crash-and-regression* gate rather than a findings gate: if it
-ever prints something other than four zeros, either the tool broke or this repo grew a
-surface that needs reading.
+`check` on this repo currently reports **connected 0 unused 0 unresolved 0 uncertain 1** —
+seamcheck is a library with no frontend, so there is almost no seam to cross; the single
+uncertain is its own configuration keys, which have no `.env.example` to check against.
+That makes this a *crash-and-regression* gate rather than a findings gate. What matters is
+not the exact number but that it **never crashes and never reports `unresolved`**: an
+unresolved finding against this repository means an extractor is matching its own source.
+That has happened once — the `_CAUSES` constant in `stripe_extractor.py` made seamcheck
+report itself as handling seven Stripe events — so when the count moves, read it rather
+than updating it.
 
 **The findings gate is the corpus**, because that is where the tool meets code it did not
 grow up on. A commit may not:

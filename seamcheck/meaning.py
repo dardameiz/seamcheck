@@ -53,6 +53,36 @@ _STATUS: dict[str, tuple[str, str]] = {
 
 # kind|status -> (means, check). Falls back to the status-only text above.
 _SPECIFIC: dict[str, tuple[str, str]] = {
+    # ---- background work ----------------------------------------------------------
+    "job_enqueue|unresolved": (
+        "This code puts work on a queue under a name no handler in this repository "
+        "registers.",
+        "If the worker lives in this repository, the message goes onto the queue and "
+        "nothing ever takes it off - no exception, no failed build, no failing test. It "
+        "is found when somebody notices the work never happened.",
+    ),
+    "job|uncertain": (
+        "A handler is registered for this job and nothing here puts work on it.",
+        "Not evidence that it is dead: another service, a console or a scheduled trigger "
+        "can enqueue by name, and none of those appear in any source file here.",
+    ),
+    "job_schedule|unresolved": (
+        "This is not a schedule any cron parser will accept.",
+        "The job it guards never runs. The usual cause is a five-field expression pasted "
+        "into a library that wants six, or the reverse - which shifts every run by a "
+        "factor of sixty rather than failing outright.",
+    ),
+    "env_read|uncertain": (
+        "The code reads this configuration key and no file in the repository declares it.",
+        "Not a claim that it is unset - secrets live in a dashboard and CI injects its "
+        "own. It matters when a new environment is set up: a missing key usually turns a "
+        "feature off silently rather than raising, which is why it is found by a customer.",
+    ),
+    "env_var|unused": (
+        "Declared in an example or compose file and read nowhere in this repository.",
+        "Either something outside the repo consumes it - a base image, a sidecar, a deploy "
+        "script - or it is left over from a feature that is gone.",
+    ),
     # ---- the data layer -----------------------------------------------------------
     "db_table_use|unresolved": (
         "The client reads a table with this name and no migration in this repo declares "

@@ -33,7 +33,10 @@ from seamcheck.extractors.js_extractor import (
     extract_template_js,
 )
 from seamcheck.extractors.template_scanner import scan_templates
-from seamcheck.extractors.url_reference_extractor import extract_url_references
+from seamcheck.extractors.url_reference_extractor import (
+    extract_url_references,
+    find_js_files,
+)
 from seamcheck.field_matcher import match_json_response_fields
 from seamcheck.graph import Edge, Graph, Status, Symbol
 from seamcheck.matcher import match_js_to_django
@@ -66,6 +69,11 @@ SCAN_PHASES = (
     "GraphQL",
     "Celery",
     "Stripe",
+    "Supabase",
+    "Firebase",
+    "Redis",
+    "background jobs",
+    "configuration",
     "Python entry points",
     "references to routes",
     "response fields",
@@ -286,6 +294,27 @@ def run_scan(
     graphql_symbols += [s for s in redis_symbols if s.id not in known]
     graphql_edges += redis_edges
 
+    progress.step("background jobs")
+    # Celery's seam, in every other ecosystem: BullMQ, Agenda, Inngest, pg-boss, Temporal,
+    # RQ, Dramatiq, arq. A job named by a string on one side and registered by a string on
+    # the other, with nothing checking that the two agree.
+    from seamcheck.extractors.job_queue_extractor import extract_jobs
+
+    job_symbols, job_edges = extract_jobs(repo_root)
+    known = {symbol.id for symbol in graphql_symbols}
+    graphql_symbols += [s for s in job_symbols if s.id not in known]
+    graphql_edges += job_edges
+
+    progress.step("configuration")
+    # The one seam every backend shares, and the cheapest to read: a string key into a
+    # dictionary, declared in a file the repository already has.
+    from seamcheck.extractors.env_extractor import extract_env
+
+    env_symbols, env_edges = extract_env(repo_root)
+    known = {symbol.id for symbol in graphql_symbols}
+    graphql_symbols += [s for s in env_symbols if s.id not in known]
+    graphql_edges += env_edges
+
     progress.step("Python entry points")
     entry_point_symbols = extract_entry_points(entry_point_files or set())
 
@@ -297,6 +326,10 @@ def run_scan(
     reference_symbols, reference_edges = extract_url_references(
         template_files or [], sorted(entry_point_files or []),
         route_names, server_symbols,
+        # The whole repository, not the import graph from a JS entry point: a Next.js app
+        # directory has no entry file to walk from, and its pages are exactly where the
+        # links live.
+        js_files=find_js_files(repo_root),
     )
     symbols += reference_symbols
     edges += reference_edges

@@ -1083,7 +1083,8 @@ const BANDS = [
            "url_reference", "management_command"]},
   {id: "off", label: "REACHED WITHOUT A BROWSER", short: "NO BROWSER",
    kinds: ["celery_task", "celery_schedule", "stripe_webhook", "stripe_event",
-           "graphql_field", "graphql_selection"]},
+           "graphql_field", "graphql_selection",
+           "job", "job_enqueue", "job_schedule", "env_var", "env_read"]},
 ];
 const PAGES = (() => {
   const F = MAPDATA.fields, K = MAPDATA.kinds, S_ = MAPDATA.statuses, FI = MAPDATA.files;
@@ -1134,7 +1135,8 @@ const SECTION_KINDS = {
                     "template_tag", "management_command"]),
   css: new Set(["css_selector", "css_token_def", "css_token_use"]),
   integrations: new Set(["stripe_webhook", "stripe_event", "celery_task",
-                         "celery_schedule", "graphql_field", "graphql_selection"]),
+                         "celery_schedule", "graphql_field", "graphql_selection",
+                         "job", "job_enqueue", "job_schedule"]),
 };
 
 // A service is its own layer. "Integrations" as one bucket answers "does this project
@@ -1150,11 +1152,15 @@ const LAYERS = [
   ["backend", "Backend"],
   ["stripe", "Stripe"],
   ["celery", "Celery"],
+  ["jobs", "Background jobs"],
+  ["config", "Configuration"],
   ["graphql", "GraphQL"],
 ];
 const LAYER_KINDS = {
   stripe: new Set(["stripe_webhook", "stripe_event"]),
   celery: new Set(["celery_task", "celery_schedule"]),
+  jobs: new Set(["job", "job_enqueue", "job_schedule"]),
+  config: new Set(["env_var", "env_read"]),
   graphql: new Set(["graphql_field", "graphql_selection"]),
 };
 // A layer only offers itself when the scan actually found that service.
@@ -1569,6 +1575,8 @@ const KIND_WORD = {
   css_selector: "css rule", css_token_def: "design token", css_token_use: "var() use",
   json_field: "response field", url_reference: "link or reverse()",
   celery_task: "background task", celery_schedule: "scheduled",
+  job: "background job", job_enqueue: "queues work", job_schedule: "schedule",
+  env_var: "config key", env_read: "reads config",
   stripe_webhook: "stripe webhook", stripe_event: "stripe event",
   signal_receiver: "signal receiver", admin_action: "admin action",
   template_tag: "template tag", graphql_field: "graphql field",

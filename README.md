@@ -193,7 +193,16 @@ Only Django is imported; the rest are read from source, so nothing has to run an
 their dependencies have to be installed.
 
 **Frontends** — plain JavaScript · TypeScript · Django templates · CSS and design tokens
-**Also reads** — Stripe webhooks · Celery tasks and beat schedules · GraphQL schemas
+**Also reads** — Stripe (the webhook, the events your code dispatches on, and the events
+your own API calls will make Stripe send that nothing handles) · background jobs (Celery,
+BullMQ, Inngest, Agenda, pg-boss, Temporal, RQ, Dramatiq, arq — plus cron expressions that
+no parser will accept) · configuration keys against your `.env.example` or compose file ·
+GraphQL schemas
+
+**Monorepos** — a repository with several services is not one application. Seamcheck reads
+the workspace manifests, project files and Dockerfiles, tells the deployables apart from
+the libraries, and can say which service owns a file (`seamcheck share`, or the `services`
+MCP tool). cal.com declares 113 packages and deploys six of them.
 
 Also tried against 20 open-source projects: 53,361 files, 9.5M lines, 2,435 routes. If
 yours does not work, I would genuinely like to know.
@@ -275,6 +284,7 @@ seamcheck triage     # record "this one is fine, and here is why"
 seamcheck backfill   # scan the last N commits so the map has history
 seamcheck observe    # drive your pages in a real browser and record what it saw
 seamcheck config     # what was detected, and how it was worked out
+seamcheck share      # a report about the scan containing none of your code
 ```
 
 `seamcheck help <command>` explains any of them with examples.
@@ -307,6 +317,8 @@ claude mcp add seamcheck -- seamcheck-mcp
 | `seamcheck_explain` | one symbol: where it is, how it was reached, why it is classified so |
 | `seamcheck_report` | the digest as markdown, to paste into a PR |
 | `seamcheck_triage` | records "this one is fine, and here is why", so it stops being raised |
+| `seamcheck_services` | which services this repository declares, and which are deployable |
+| `seamcheck_share` | the code-free scan report, for an agent to show you before you send it |
 
 The server talks over stdin/stdout — no port, no daemon. Run it with the agent's working
 directory set to the project root. **For a Django project it has to run inside that
@@ -324,6 +336,37 @@ seamcheck check --since $BASE_SHA
 
 Exit 1 on new findings, 2 if there is no baseline yet, 0 when clean. It also writes a
 markdown digest you can post as a PR comment with `--format markdown`.
+
+## If it gets your project wrong, I would like to know
+
+This is the one thing I would actually ask for. The scans worth learning from are the ones
+that got something wrong, and those are almost always private repositories nobody can send.
+
+A real example, and the reason this section exists: someone ran it on a Supabase project
+and got **728 findings claiming their tables did not exist**. They all existed. Their schema
+lives in the Supabase dashboard rather than in `supabase/migrations/`, so seamcheck found no
+schema and read that absence as proof. It was fixed the same day. One aggregate line —
+*Supabase detected, no schema present, 728 findings against it* — would have made it obvious
+long before, and that line contains nothing of theirs.
+
+```bash
+seamcheck share
+```
+
+It prints a report of **counts and fixed words**: how many findings of each kind, in each
+status, and why the uncertain ones are uncertain. No file paths. No symbol, table, column or
+route names. No code. No repository name, no git remote, no SHA. Every value is a number or a
+word seamcheck itself defines — which you can verify by reading one file,
+[`seamcheck/share.py`](seamcheck/share.py), rather than taking my word for it.
+
+**Nothing is sent.** Seamcheck makes no network calls at all, and never has. The report is
+printed, written to `seamcheck-share.md`, and followed by a link that opens a pre-filled
+GitHub issue in your browser — which submits nothing until you press the button. Or paste it
+into an email. Or read it, decide it is too much, and delete it; that is a fine outcome too.
+
+One thing worth saying plainly: **if the repository belongs to an employer or a client, that
+is their call rather than yours.** Please do not send metrics about someone else's code
+because a README asked nicely.
 
 ## What it cannot see
 

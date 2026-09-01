@@ -17,3 +17,4 @@ docs/mockups/_build/
 
 # Scan artefacts written by running seamcheck on itself (the self-gate in CLAUDE.md).
 OTHER/
+seamcheck-share.md

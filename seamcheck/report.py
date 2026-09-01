@@ -45,6 +45,12 @@ _GROUP_TITLES = {
     "firestore_rule": "Rules guarding nothing",
     "redis_key": "Redis keys",
     "redis_ttl": "Cache keys written with no expiry",
+    # Background work, outside Celery. Named for the consequence, not the library.
+    "job": "Background jobs",
+    "job_enqueue": "Work queued for a job that does not exist",
+    "job_schedule": "Schedules",
+    "env_var": "Configuration keys",
+    "env_read": "Configuration the code reads",
 }
 
 # A caveat for a kind with a known recall gap in the extractor that produces it - shown

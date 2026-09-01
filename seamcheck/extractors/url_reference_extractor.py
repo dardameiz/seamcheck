@@ -140,11 +140,96 @@ def _python_route_references(source: str):
             yield name, first.value, node.lineno
 
 
+# ── the JavaScript side of the same question ────────────────────────────────
+# A React or Next project points at its own routes with markup and a router, never with a
+# `{% url %}` tag, so a reader that knew only Django vocabulary saw none of it. In a
+# 32-repository corpus `<Link href>` appears in 169 files and `router.push` in 337.
+_JS_EXTENSIONS = (".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts")
+# Attributes that carry a route: `href` (Next, plain anchors), `to` (React Router),
+# `action` (a form, and a Next server action's target when written as a string).
+_NAV_ATTRS = frozenset({"href", "to", "action"})
+# Calls that navigate. `redirect` and `permanentRedirect` are Next server-side; `navigate`
+# is React Router's hook; `push`/`replace`/`prefetch` are the router object's.
+_NAV_METHODS = frozenset({"push", "replace", "prefetch"})
+_NAV_FUNCTIONS = frozenset({"redirect", "permanentRedirect", "navigate", "revalidatePath"})
+_NAV_RECEIVERS = frozenset({"router", "history", "navigation", "nav", "$router"})
+# Cheap text gate before parsing: most files in a repository contain none of this, and
+# parsing every one of them is the difference between a scan and a coffee break.
+_NAV_NEEDLES = ("href", "to=", "router.", "redirect(", "navigate(", "action=")
+
+
+def _js_nav_targets(ast: dict) -> list[tuple[str, int, str]]:
+    """(path, line, how) for every route this module points at.
+
+    Only STATIC paths, and only ones beginning with `/`. A route assembled from a variable
+    is exactly the case the four statuses exist for, and it is left to the fetch reader
+    which already records it as a sighting rather than a claim.
+    """
+    from seamcheck.extractors.js_extractor import _static_url, _walk
+
+    found: list[tuple[str, int, str]] = []
+
+    def _line(node: dict) -> int:
+        return ((node.get("loc") or {}).get("start") or {}).get("line") or 0
+
+    for node, _ in _walk(ast):
+        node_type = node.get("type")
+
+        if node_type == "JSXAttribute":
+            name = (node.get("name") or {}).get("name")
+            if name not in _NAV_ATTRS:
+                continue
+            value = node.get("value") or {}
+            if value.get("type") == "JSXExpressionContainer":
+                value = value.get("expression") or {}
+            path, _exact = _static_url(value)
+            if path and path.startswith("/"):
+                found.append((path, _line(node), f'{name}="{path}"'))
+            continue
+
+        if node_type != "CallExpression":
+            continue
+        callee = node.get("callee") or {}
+        arguments = node.get("arguments") or []
+        first = arguments[0] if arguments else None
+        how = ""
+        if callee.get("type") == "Identifier" and callee.get("name") in _NAV_FUNCTIONS:
+            how = f"{callee['name']}()"
+        elif callee.get("type") == "MemberExpression":
+            prop = (callee.get("property") or {}).get("name") or ""
+            obj = callee.get("object") or {}
+            receiver = obj.get("name") if obj.get("type") == "Identifier" else ""
+            if prop in _NAV_METHODS and receiver in _NAV_RECEIVERS:
+                how = f"{receiver}.{prop}()"
+        if not how:
+            continue
+        path, _exact = _static_url(first)
+        if path and path.startswith("/"):
+            found.append((path, _line(node), f"{how[:-1]}'{path}')"))
+    return found
+
+
+def find_js_files(repo_root: str) -> list[str]:
+    """Every first-party JavaScript-family file, vendored trees excluded."""
+    import os
+
+    from seamcheck.adapters.discovery import SKIP_DIRS
+
+    found: list[str] = []
+    for current, directories, files in os.walk(repo_root):
+        directories[:] = [d for d in directories if d not in SKIP_DIRS and not d.startswith(".")]
+        for name in files:
+            if name.endswith(_JS_EXTENSIONS) and not name.endswith((".min.js", ".d.ts")):
+                found.append(os.path.join(current, name))
+    return found
+
+
 def extract_url_references(
     template_files: list[str],
     python_files: list[str],
     route_names: dict[str, str],
     url_symbols: list[Symbol],
+    js_files: list[str] | None = None,
 ) -> tuple[list[Symbol], list[Edge]]:
     """(reference symbols, edges to the routes they reach).
 
@@ -229,4 +314,38 @@ def extract_url_references(
                 continue
             _add(_reference(handle, call, file_path, line, f"{call}('{handle}')"), target, exists)
 
+    _read_js_references(js_files or [], index, _add)
     return symbols, edges
+
+
+def _read_js_references(js_files: list[str], index, _add) -> None:
+    """Navigation in JavaScript, resolved against the same route index as everything else.
+
+    An unresolved path claims NOTHING here, exactly as a template's `<a href>` does: most
+    paths in a React app point at a CDN asset, an external site or a route served by a
+    different service, and reporting those as broken links would bury the real findings.
+    So this pass can only ever ADD evidence that a route is reached - it cannot invent a
+    failure, which is what makes it safe to turn on across a whole repository.
+    """
+    if not js_files:
+        return
+    from seamcheck.extractors.js_extractor import _parse_files
+
+    candidates = []
+    for path in js_files:
+        try:
+            text = pathlib.Path(path).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        # A bundle is the same code already read from source, and megabytes of it.
+        if len(text) > 400_000:
+            continue
+        if any(needle in text for needle in _NAV_NEEDLES):
+            candidates.append(path)
+
+    for path, parsed in _parse_files(candidates).items():
+        for target_path, line, snippet in _js_nav_targets(parsed):
+            resolved = index.resolve(target_path)
+            if resolved is None:
+                continue
+            _add(_reference(target_path, "link", path, line, snippet[:80]), resolved)

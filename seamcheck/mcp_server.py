@@ -51,6 +51,38 @@ def seamcheck_report(fmt: str = "markdown", repo_root: str = ".") -> str:
     return api.report(repo_root, fmt)
 
 
+@mcp.tool()
+def seamcheck_share(repo_root: str = ".") -> str:
+    """Build a report about the scan that contains none of the scanned code.
+
+    Counts and fixed words only - no paths, names, routes, snippets or repository
+    identity. Returns markdown for a person to read and decide whether to send. This
+    makes no network call; nothing is transmitted by generating it.
+    """
+    from seamcheck import share
+
+    markdown, payload = share.report(repo_root)
+    return markdown + "\n\nPre-filled issue link (submits nothing until pressed):\n" + share.issue_url(payload)
+
+
+@mcp.tool()
+def seamcheck_services(repo_root: str = ".") -> dict:
+    """List the services this repository declares, and which of them are deployable.
+
+    A monorepo is not one application. Returns each service's name, root directory,
+    language, and the evidence that made it a service.
+    """
+    from seamcheck.services import detect_services
+
+    return {
+        "services": [
+            {"name": s.name, "root": s.root, "language": s.language,
+             "deployable": s.deployable, "evidence": s.evidence}
+            for s in detect_services(repo_root)
+        ]
+    }
+
+
 def _setup_django_if_present() -> None:
     """Bootstrap Django only when this actually is a Django project.
 

@@ -49,6 +49,34 @@ class Command:
 
 
 COMMANDS: dict[str, Command] = {
+    "share": Command(
+        args=[],
+        summary="A report about the scan that contains none of your code.",
+        detail=(
+            "Scans, then reduces the result to counts and fixed words: how many findings "
+            "of each kind, in each status, and why the uncertain ones are uncertain. No "
+            "file paths, no symbol, table, column or route names, no code, no repository "
+            "identity, no git SHA. Every value is a number or a word seamcheck itself "
+            "defines, which is a property you can check by reading one file - "
+            "seamcheck/share.py - rather than a promise.\n\n"
+            "Nothing is sent. Seamcheck makes no network calls at all. The report is "
+            "printed, written to seamcheck-share.md, and accompanied by a link that opens "
+            "a pre-filled GitHub issue in your browser - which submits nothing until you "
+            "press the button.\n\n"
+            "It exists because the scans worth learning from are the ones that got a "
+            "private repository wrong, and those are exactly the ones nobody can send. "
+            "One aggregate line - a data layer detected, no schema present, hundreds of "
+            "findings against it - is enough to find a bug like that, and it says nothing "
+            "about the code.\n\n"
+            "If the repository belongs to an employer or a client, sharing metrics about "
+            "it is their decision rather than yours."
+        ),
+        examples=[
+            ("seamcheck share", "print the report, write seamcheck-share.md, show the link"),
+            ("seamcheck share --json", "the raw payload, for a script or an agent"),
+            ("seamcheck share --quiet", "just the report, no explanation or link"),
+        ],
+    ),
     "map": Command(
         args=["--format", "map", "--serve"],
         summary="Scan, then open the UI. Start here.",
@@ -582,6 +610,44 @@ def _plain_args(arguments) -> dict:
     return options
 
 
+def _share(rest: list[str]) -> int:
+    """Build the shareable report, write it, and print where to send it.
+
+    No network call is made here or anywhere in this package. The report is printed and
+    written to a file; the person decides what to do with it.
+    """
+    from seamcheck import share
+
+    want_json = "--json" in rest
+    quiet_mode = "--quiet" in rest or "-q" in rest
+    with quiet():
+        markdown, payload = share.report(".")
+
+    if want_json:
+        print(share.as_json(payload))
+        return 0
+
+    print(markdown)
+    target = pathlib.Path("seamcheck-share.md")
+    try:
+        target.write_text(markdown, encoding="utf-8")
+        written = f"  written to  {target}"
+    except OSError:
+        written = "  (could not write seamcheck-share.md - copy the text above instead)"
+
+    if not quiet_mode:
+        print("\n" + "-" * 72)
+        print("This report contains no file paths, names, routes, snippets or repository")
+        print("identity. Nothing has been sent anywhere - seamcheck makes no network calls.")
+        print(written)
+        print("\n  Open a pre-filled issue (nothing is submitted until you press the button):")
+        print("  " + share.issue_url(payload))
+        print("\n  Or paste the report above into an email, a chat, or an issue by hand.")
+        print("\n  Only share a repository you are allowed to share metrics about - if it")
+        print("  belongs to an employer or a client, that is their decision, not yours.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     argv, passthrough = _split_passthrough(argv)
@@ -603,6 +669,12 @@ def main(argv: list[str] | None = None) -> int:
             print(f"seamcheck: no command named {name!r}\n", file=sys.stderr)
         parser.print_help()
         return 0 if not name else 2
+
+    if argv[0] == "share":
+        # Handled here rather than through the management command: it needs no Django, no
+        # server and no arguments, and routing it through the generic path would make a
+        # report about a repository depend on that repository being a Django project.
+        return _share(argv[1:])
 
     known = parser.parse_args(argv)
     resolved = _resolve(known, parser, passthrough)
