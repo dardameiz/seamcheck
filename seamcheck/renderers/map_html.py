@@ -185,8 +185,12 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overf
 .nothing { position:absolute; inset:auto 12px 78px; text-align:center; pointer-events:none;
   color:var(--muted); font-size:13px; display:grid; gap:4px; }
 .nothing b { color:var(--ink); font-size:15px; font-weight:600; }
-.tmode { flex:none; width:30px; height:30px; border-radius:8px; border:1px solid var(--line);
-  background:var(--panel); color:var(--muted); font-size:14px; cursor:pointer; line-height:1; }
+/* A word, not a symbol: the glyph needed a tooltip to explain itself, and a phone has
+   no tooltip. Fixed width so cycling Dark/Light/Auto does not shift the header. */
+.tmode { flex:none; min-width:58px; height:30px; border-radius:8px; border:1px solid var(--line);
+  background:var(--panel); color:var(--muted); font-size:12px; cursor:pointer; line-height:1;
+  font-family:inherit; padding:0 10px; }
+.tmode:hover { color:var(--ink); border-color:var(--sig); }
 
 /* The reading: one number given real size, because it is the number a reader opened the
    page for, with the trend beside it as a sparkline rather than a second screen. */
@@ -260,15 +264,15 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
 .gone { max-height:26dvh; overflow-y:auto; }
 
 .main { flex:1 1 auto; position:relative; min-height:0; background:var(--sunk); }
-svg { position:absolute; inset:0; width:100%; height:100%; display:block;
+#cv { position:absolute; inset:0; width:100%; height:100%; display:block;
       cursor:grab; touch-action:none; }
-svg.drag { cursor:grabbing; }
+#cv.drag { cursor:grabbing; }
 .nd rect { stroke-width:1.5; }
 .nd text { font-size:10.5px; fill:var(--ink); pointer-events:none; letter-spacing:-.1px;
            font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
 .nd { cursor:pointer; }
 .nd.faded { opacity:.10; }
-svg.nolabels .nd text { display:none; }
+#cv.nolabels .nd text { display:none; }
 .nd.lit rect { stroke-width:3.5; }
 .ed { fill:none; stroke-width:1.1; opacity:.38; }
 .ed.faded { opacity:.05; }
@@ -628,8 +632,8 @@ svg.nolabels .nd text { display:none; }
   .tree .fl .go, .tree .fl .edit { opacity:1; }
   .tree .fl .go { margin-left:0; }
   .key { left:auto; right:10px; top:auto; bottom:96px; }
-  /* Bigger than 30px, because on a phone this is a thumb target rather than a mouse one. */
-  .tmode { width:36px; height:36px; font-size:16px; }
+  /* Taller than 30px, because on a phone this is a thumb target rather than a mouse one. */
+  .tmode { height:36px; font-size:12.5px; }
 
   /* The canvas can be panned out from under the floating chrome; a scrolling panel
      cannot. So the panel is given exactly the room the chrome occupies, measured at
@@ -996,8 +1000,8 @@ function applyTheme() {
   const mode = themes[themeAt];
   if (mode === "auto") document.documentElement.removeAttribute("data-theme");
   else document.documentElement.setAttribute("data-theme", mode);
-  tmode.textContent = mode === "dark" ? "\u25cf" : mode === "light" ? "\u25cb" : "\u25d1";
-  tmode.title = "Theme: " + mode;
+  tmode.textContent = mode === "auto" ? "Auto" : mode === "dark" ? "Dark" : "Light";
+  tmode.title = "Theme: " + mode + " \u2014 tap to change";
 }
 tmode.addEventListener("click", () => {
   themeAt = (themeAt + 1) % themes.length;
