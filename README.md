@@ -148,14 +148,21 @@ Five looks, if you care. Aurora is the default.
 
 ## Does it work with my stack?
 
-No configuration — it works out which one you are using.
+**Django, today, from the command line.** No configuration — it finds your project and
+reads it.
 
-**Backends** — Django · FastAPI · Flask · Express · Fastify · NestJS · Next.js
+**FastAPI · Flask · Express · Fastify · NestJS · Next.js** — the readers for these are
+built and tested against real repositories, and they find 2,435 routes across the 20
+open-source projects in the corpus. But `seamcheck` still needs a Django project to start
+from, so on the command line they are **not reachable yet**. They work through the Python
+API. Removing that gate is the next thing I am doing, and until it lands I would rather say
+so here than let the list imply otherwise.
+
 **Frontends** — plain JavaScript · TypeScript · Django templates · CSS and design tokens
-**Also reaches** — Stripe webhooks · Celery tasks and beat schedules · GraphQL schemas
+**Also reads** — Stripe webhooks · Celery tasks and beat schedules · GraphQL schemas
 
-Tried against 20 open-source projects so far: 53,361 files, 9.5M lines, 2,435 routes. If
-yours does not work, I would genuinely like to know.
+Tried against 20 open-source projects so far: 53,361 files, 9.5M lines. If yours does not
+work, I would genuinely like to know.
 
 ## Four words, and it never says more than it can prove
 
