@@ -836,7 +836,11 @@ syncStatusKey();
 // Theme: follow the system until a reader says otherwise, then remember it. The map is
 // read on a phone in a light OS as often as on a dark desktop, and a graph of hairlines
 // is a different document on each.
-const themes = ["auto", "dark", "light"];
+// Dark first, because that is the design the map was drawn for and the ground the status
+// colours were chosen against - and because a reader on a light phone was getting the pale
+// variant with no idea a better one existed. The system setting is still reachable, it is
+// just no longer the thing that decides.
+const themes = ["dark", "light", "auto"];
 const tmode = document.getElementById("tmode");
 let themeAt = 0;
 try {
@@ -1045,6 +1049,20 @@ function reportEmpty(count) {
   }
   box.hidden = count > 0;
   if (count > 0) return;
+  // A commit filter empties the canvas far more often than the others, because most
+  // commits touch documentation, config or tests - none of which the scan reads. The
+  // header note said so and the header is 11px tall on a phone; the empty canvas is where
+  // a reader is actually looking.
+  if (only) {
+    const chosen = COMMITS[Number(picker.value)];
+    box.innerHTML = chosen
+      ? `<b>This commit changed nothing the scan reads.</b>
+         <span>${esc(chosen.sha.slice(0, 8))} · ${esc(chosen.subject)}</span>
+         <span>Documentation, config and tests are not in the graph. Pick a commit
+         marked "changed", or go back to everything.</span>`
+      : "<b>Nothing changed here.</b><span>Go back to everything in this scan.</span>";
+    return;
+  }
   const bits = [];
   if (layer) bits.push((LAYERS.find(([k]) => k === layer) || [, layer])[1]);
   if (statusFilter.size) bits.push([...statusFilter].join(" or "));
@@ -1484,6 +1502,19 @@ const release = e => {
 window.addEventListener("pointerup", release);
 window.addEventListener("pointercancel", release);
 
+// WebKit's own pinch. `touch-action:none` stops Chrome and Firefox from zooming the
+// document, and iOS Safari ignores both that and `user-scalable=no` - it fires these
+// non-standard gesture events instead, and the only way to keep a two-finger pinch on the
+// map from zooming the whole PAGE is to refuse them here. Scoped to the canvas on purpose:
+// pinching the panel to read a listing is a reasonable thing to want, and still works.
+["gesturestart", "gesturechange", "gestureend"].forEach(name => {
+  svg.addEventListener(name, e => e.preventDefault());
+});
+// A double-tap on iOS zooms the document as well, and the canvas has its own meaning for
+// it. Belt and braces with the pointerdown handler above, which cannot preventDefault a
+// gesture the browser synthesises after the fact.
+svg.addEventListener("dblclick", e => e.preventDefault());
+
 svg.addEventListener("wheel", e => {
   e.preventDefault();
   // A Mac trackpad fires a stream of high-resolution wheel events, so a fixed 1.1x per
@@ -1516,22 +1547,30 @@ const gone = document.getElementById("gone");
 // commits made the same afternoon, which is most of them.
 const when = iso => String(iso || "").replace("T", " ").slice(0, 16);
 
+function countsFor(changed) {
+  const n = {added: 0, removed: 0, status: 0};
+  Object.values(changed).forEach(kind => { n[kind] = (n[kind] || 0) + 1; });
+  return n;
+}
+
 function fillPicker() {
   const opts = [`<option value="">Everything in this scan</option>`];
-  COMMITS.forEach((c, i) => opts.push(
-    `<option value="${i}">${c.head ? "HEAD · " : ""}${esc(c.sha.slice(0, 8))} · ` +
-    `${esc(when(c.date))} · ${esc(c.subject)}</option>`));
+  // A commit that touched only docs or config changed no scanned symbol, and picking it
+  // draws an empty canvas that reads as a broken filter. The count belongs in the list, so
+  // the choice is informed before it is made rather than explained afterwards.
+  COMMITS.forEach((c, i) => {
+    const n = countsFor(c.changed || {});
+    const total = n.added + n.removed + n.status;
+    const tail = !c.baseline ? " · earliest scan" : total ? ` · ${total} changed` : " · no change";
+    opts.push(
+      `<option value="${i}">${c.head ? "HEAD · " : ""}${esc(c.sha.slice(0, 8))} · ` +
+      `${esc(when(c.date))}${esc(tail)} · ${esc(c.subject)}</option>`);
+  });
   picker.innerHTML = opts.join("");
   if (!COMMITS.length) {
     picker.disabled = true;
     note.textContent = "Only this commit has been scanned. Run --backfill to build history.";
   }
-}
-
-function countsFor(changed) {
-  const n = {added: 0, removed: 0, status: 0};
-  Object.values(changed).forEach(kind => { n[kind] = (n[kind] || 0) + 1; });
-  return n;
 }
 
 function selectCommit(index) {

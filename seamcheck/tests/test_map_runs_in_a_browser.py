@@ -280,17 +280,22 @@ class ThemeControl(MapRunsInABrowser):
             browser.close()
         return stamped
 
-    def test_it_follows_the_system_until_told_otherwise(self):
-        self.assertIsNone(self._cycle(0), "nothing is stamped before a reader chooses")
+    def test_dark_is_the_default(self):
+        """Dark is the ground the status colours were chosen against.
 
-    def test_one_press_forces_dark(self):
-        self.assertEqual(self._cycle(1), "dark")
+        Following the system meant a reader on a light phone got the pale variant with no
+        idea a better one existed - and the map is read on a phone as often as anywhere.
+        """
+        self.assertEqual(self._cycle(0), "dark")
 
-    def test_two_presses_force_light(self):
-        self.assertEqual(self._cycle(2), "light")
+    def test_one_press_gives_light(self):
+        self.assertEqual(self._cycle(1), "light")
 
-    def test_three_presses_return_to_the_system(self):
-        self.assertIsNone(self._cycle(3))
+    def test_two_presses_hand_it_back_to_the_system(self):
+        self.assertIsNone(self._cycle(2), "the system setting is still reachable")
+
+    def test_three_presses_return_to_dark(self):
+        self.assertEqual(self._cycle(3), "dark")
 
 
 class DirectionAOnAPhone(MapRunsInABrowser):
@@ -690,3 +695,42 @@ class ThePhoneCanvas(DirectionAOnAPhone):
         self.assertIn("unresolved", state["note"])
         self.assertFalse(state["clearedNote"], "clear did not remove the notice")
         self.assertFalse(state["clearedFiltering"])
+
+
+class GesturesAndCommits(DirectionAOnAPhone):
+    """Two phone reports: a pinch zoomed the PAGE, and a commit drew a blank canvas."""
+
+    def test_webkit_pinch_over_the_canvas_is_refused(self):
+        """iOS ignores touch-action AND user-scalable, and fires its own gesture events.
+
+        Without refusing those, two fingers on the map zoom the whole document - which is
+        what the screenshot showed: the header at three times its size and the canvas
+        untouched underneath.
+        """
+        from seamcheck.renderers.map_html import render
+
+        out = render(self._map_for_source())
+        for event in ("gesturestart", "gesturechange", "gestureend"):
+            self.assertIn(event, out, f"{event} is not refused, so iOS will zoom the page")
+        self.assertIn('svg.addEventListener("dblclick"', out)
+
+    @staticmethod
+    def _map_for_source():
+        from seamcheck.mapdata import build_map
+        graph = GesturesAndCommits._phone_graph()
+        return build_map(graph, {"orders-main": {s.id for s in graph.symbols}}, git_sha="0" * 12)
+
+    def test_a_commit_that_changed_nothing_says_so_in_the_list(self):
+        """Most commits touch docs, config or tests - none of which the scan reads."""
+        from seamcheck.renderers.map_html import render
+
+        out = render(self._map_for_source())
+        self.assertIn('" · no change"', out)
+        self.assertIn('changed`', out)
+
+    def test_an_empty_commit_explains_itself_on_the_canvas(self):
+        from seamcheck.renderers.map_html import render
+
+        out = render(self._map_for_source())
+        self.assertIn("This commit changed nothing the scan reads", out)
+        self.assertIn("Documentation, config and tests are not in the graph", out)
