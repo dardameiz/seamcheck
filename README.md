@@ -10,6 +10,9 @@ It reads your source. It never runs your code.
 
 ![The map](docs/images/map.png)
 
+<sub>A small Express shop, scanned. Read it downwards: **the browser** at the top, **the
+seam** where requests cross the network, **the server** underneath.</sub>
+
 ## Why I made it
 
 I was building a game — a fairly large Django app with a lot of hand-written JavaScript —
@@ -129,10 +132,15 @@ seamcheck --version
 
 ## What it looks like
 
-Click any node and it lights the chain that reaches it — hop by hop, with the file and line
-for each.
+**Click a red one.** The chain that reaches it lights up and everything else recedes, so
+you can see where the request came from and where it stopped — with the file and line for
+every hop, and a sentence saying what it means and what to check.
 
-![A chain lit through the map](docs/images/chain.png)
+![A broken request, clicked, with its chain lit](docs/images/chain.png)
+
+<sub>`checkout.js` asks for `/api/shipping/quotes`. The server serves
+`/api/shipping/quote`. One character, valid on both sides, and nothing else would have
+told you.</sub>
 
 Everything it is willing to claim, each one explained in a sentence, worst first.
 

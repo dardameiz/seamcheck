@@ -55,7 +55,9 @@ _STATUS: dict[str, tuple[str, str]] = {
 _SPECIFIC: dict[str, tuple[str, str]] = {
     # ---- the frontend/backend seam ------------------------------------------------
     "fetch_target|unresolved": (
-        "The frontend fetches this path and no URL pattern in the URLconf matches it.",
+        # "URLconf" is Django's word for it, and this sentence is shown for Express, Flask,
+        # FastAPI, NestJS and Next.js too - where it names a thing the reader does not have.
+        "The frontend fetches this path and no route on the server matches it.",
         "Either the route was renamed or removed (a real 404 waiting to happen), or the "
         "path is assembled at runtime - `/api/user/${id}/` cannot be matched statically.",
     ),

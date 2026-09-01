@@ -394,9 +394,33 @@ def _page_files(repo_root: str) -> dict[str, set[str]]:
 
     roots, _ = _js_roots(_config(), repo_root)
     return {
-        os.path.splitext(os.path.basename(root))[0]: set(discover_js_files([root], repo_root))
+        os.path.splitext(os.path.basename(root))[0]: {
+            _norm(path, repo_root) for path in discover_js_files([root], repo_root)
+        }
         for root in roots
     }
+
+
+def _norm(path: str, repo_root: str) -> str:
+    """One spelling of a path, so page membership can be compared against symbol.file.
+
+    A symbol's file is ALWAYS repo-relative (see relativise). The page's file set was
+    neither reliably: `discover_js_files` echoes the entry it was handed and resolves
+    imports itself, so the same file arrived as "./public/js/cart.js" when the root was
+    "." and as an absolute path when it was not, while the scan recorded
+    "public/js/cart.js" both times.
+
+    Nothing matched, so every page's seeds missed, and build_map dropped each page as
+    empty - the map showed nothing but the "not reached from any page" buckets. Only the
+    one page that happened to be reached through an import survived, which is what made it
+    look like a layout problem rather than a path problem.
+    """
+    try:
+        return os.path.relpath(os.path.abspath(path), os.path.abspath(repo_root)).replace(
+            os.sep, "/"
+        )
+    except ValueError:  # different drive on Windows
+        return os.path.normpath(path).replace(os.sep, "/")
 
 
 # The files the last rendered map named. The viewer fetches source over the same server

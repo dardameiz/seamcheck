@@ -315,7 +315,15 @@ def _js_entries(root: pathlib.Path, config: dict) -> list[str]:
             # symbol twice.
             if path.name.endswith((".min.js", ".bundle.js")):
                 continue
-            found.append(str(path))
+            # RELATIVE to the repo, because that is how the scan records a symbol's file
+            # (see relativise). Absolute entries match no symbol, every page ends up with
+            # no seeds, and build_map drops all of them - the map then shows nothing but
+            # the "not reached from any page" buckets.
+            # relative_to, not relpath: `_rel` goes through os.path.relpath, and when the
+            # root itself arrives with a "." in it that comes back as "./public/js/x.js"
+            # while the scan records "public/js/x.js". One leading dot and the page matches
+            # nothing.
+            found.append(path.resolve().relative_to(root).as_posix())
             if len(found) >= 400:
                 return sorted(dict.fromkeys(found))
     return sorted(dict.fromkeys(found))
