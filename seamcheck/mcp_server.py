@@ -1,12 +1,30 @@
-"""MCP surface. Thin wrappers over seamcheck.api - the same code the CLI runs."""
+"""MCP surface. Thin wrappers over seamcheck.api - the same code the CLI runs.
+
+Kept deliberately thin: an agent asking `check` must get the answer the terminal would give,
+because the moment the two disagree neither can be trusted. Every tool here is one call into
+`api`.
+"""
 
 from __future__ import annotations
 
-from mcp.server.fastmcp import FastMCP
+# The class was renamed between major versions of the MCP SDK - `FastMCP` in 1.x,
+# `MCPServer` in 2.x - and `mcp>=1.0` in the packaging resolved to 2.x, so a fresh
+# `pip install seamcheck[mcp]` produced a server that crashed on IMPORT. Nobody would see
+# that until an agent tried to use it, and then the failure is a dead stdio pipe rather
+# than a message. Both names are tried.
+try:  # mcp 1.x
+    from mcp.server.fastmcp import FastMCP as _Server
+except ModuleNotFoundError:  # pragma: no cover - depends which SDK is installed
+    try:  # mcp 2.x
+        from mcp.server.mcpserver import MCPServer as _Server
+    except ModuleNotFoundError as error:  # pragma: no cover
+        raise ModuleNotFoundError(
+            "seamcheck-mcp needs the MCP SDK: pip install 'seamcheck[mcp]'"
+        ) from error
 
 from seamcheck import api
 
-mcp = FastMCP("seamcheck")
+mcp = _Server("seamcheck")
 
 
 @mcp.tool()
@@ -33,37 +51,60 @@ def seamcheck_report(fmt: str = "markdown", repo_root: str = ".") -> str:
     return api.report(repo_root, fmt)
 
 
-def main() -> None:
-    """Entry point for the `seamcheck-mcp` command.
+def _setup_django_if_present() -> None:
+    """Bootstrap Django only when this actually is a Django project.
 
-    An agent launches this and talks to it over stdin/stdout - there is no port and no
-    daemon. Django has to be set up first, because every tool below reads a real project
-    through its URLconf and settings, and the agent's working directory is the project.
+    It used to REFUSE anything else, which was the same gate the CLI had: an agent pointed
+    at an Express, Supabase or Firebase repository got "no Django project here" and exit 2,
+    for a scan that needs no Django at all. Six of the seven backends are read from source.
     """
     import os
     import pathlib
     import sys
 
-    import django
-
     from seamcheck.cli import find_project
 
     found = find_project(pathlib.Path.cwd())
+    settings_module = None
     if found:
         settings_module, root = found
         sys.path.insert(0, str(root))
         os.chdir(root)
         os.environ.setdefault("DJANGO_SETTINGS_MODULE", settings_module)
-    elif not os.environ.get("DJANGO_SETTINGS_MODULE"):
+    settings_module = settings_module or os.environ.get("DJANGO_SETTINGS_MODULE")
+    if not settings_module:
+        return  # not a Django project, and that is fine
+
+    try:
+        import django
+    except ModuleNotFoundError:
         # stderr, never stdout: stdout is the protocol channel and a stray line on it
         # corrupts the session rather than producing a readable error.
         print(
-            "seamcheck-mcp: no Django project here. Set the MCP server's working "
-            "directory to a project root, or set DJANGO_SETTINGS_MODULE.",
+            "seamcheck-mcp: this looks like a Django project but Django is not installed "
+            "here. Run the server from the project's own virtualenv.",
             file=sys.stderr,
         )
-        raise SystemExit(2)
-    django.setup()
+        raise SystemExit(2) from None
+    try:
+        django.setup()
+    except ModuleNotFoundError as error:
+        print(
+            f"seamcheck-mcp: this project imports {error.name!r}, which is not installed "
+            "here. Seamcheck reads a Django project by importing it, so run the server "
+            "from the project's own virtualenv rather than from a global install.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2) from None
+
+
+def main() -> None:
+    """Entry point for the `seamcheck-mcp` command.
+
+    An agent launches this and talks to it over stdin/stdout - there is no port and no
+    daemon. The agent's working directory is the project.
+    """
+    _setup_django_if_present()
     mcp.run()
 
 

@@ -20,11 +20,23 @@ from __future__ import annotations
 import ast
 import os
 import pathlib
+import re
 
 from seamcheck.adapters.base import ServerScan
 from seamcheck.adapters.discovery import SKIP_DIRS
 from seamcheck.graph import Edge, Status, Symbol
 from seamcheck.nodetools import report
+
+# A real import statement and a real route decorator, each ANCHORED to the start of its
+# own line rather than found anywhere inside one. As bare substrings both appear in this
+# very file - it is the reader for Flask, so it necessarily quotes them - and seamcheck
+# detected ITSELF as a Flask app at 0.9 confidence.
+_IMPORT_RE = re.compile(r"^\s*(?:from\s+flask(?:\.\w+)*\s+import|import\s+flask)\b", re.M)
+_ROUTE_RE = re.compile(
+    r"^\s*@\s*\w+(?:\.\w+)*\.(?:route|get|post|put|patch|delete)\s*\(|"
+    r"^\s*\w+\s*=\s*Blueprint\s*\(",
+    re.M,
+)
 
 _SKIP = SKIP_DIRS
 _SHORTCUTS = ("get", "post", "put", "delete", "patch", "options", "head")
@@ -193,9 +205,15 @@ class FlaskAdapter:
                 continue
             if "flask" not in text.lower():
                 continue
-            if "from flask import" in text or "import flask" in text:
+            # ANCHORED to the start of a line. As a bare substring, `"from flask import"`
+            # and `".route("` both appear in this very file - it is the reader for Flask,
+            # so it necessarily quotes them - and seamcheck detected ITSELF as a Flask app
+            # at 0.9 confidence, then reported every fixture's fetch call as unresolved.
+            # Any repository that documents, vendors or lints these patterns hits the same
+            # thing.
+            if _IMPORT_RE.search(text):
                 imports = True
-            if ".route(" in text or "Blueprint(" in text:
+            if _ROUTE_RE.search(text):
                 routes = True
             if imports and routes:
                 return 0.9

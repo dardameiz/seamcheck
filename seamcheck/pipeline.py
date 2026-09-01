@@ -196,11 +196,26 @@ def run_scan(
         # Silence here would be the worst possible failure: with no routes, every fetch
         # target resolves to nothing and is reported unresolved - actively wrong on 100%
         # of endpoints rather than merely unknown.
-        report(
-            "no-routes",
-            "the %s adapter found no routes, so every fetch target will be reported "
-            "unresolved. The frontend half of the graph is still built.", adapter.name,
-        )
+        #
+        # But NAME the adapter only if one was actually detected. select() deliberately
+        # returns its best candidate even at zero confidence, so on a repository with no
+        # backend at all this said "the fastapi adapter found no routes" about a project
+        # with no Python in it - which reads as a broken reader rather than as an absent
+        # framework.
+        confident = chosen and chosen[0][1] > 0
+        if confident:
+            report(
+                "no-routes",
+                "the %s adapter found no routes, so every fetch target will be reported "
+                "unresolved. The frontend half of the graph is still built.", adapter.name,
+            )
+        else:
+            report(
+                "no-backend",
+                "no backend framework detected here, so any fetch target will be reported "
+                "unresolved. Everything that does not need one - the DOM, CSS, and any "
+                "data layer found - is still read.",
+            )
 
     progress.step("JavaScript modules")
     js_symbols, js_edges = extract_js(js_entry_files, js_project_root)
@@ -243,6 +258,33 @@ def run_scan(
     known = {symbol.id for symbol in graphql_symbols}
     graphql_symbols += [s for s in stripe_symbols if s.id not in known]
     graphql_edges += stripe_edges
+
+    progress.step("Supabase")
+    # A Supabase app has no routes of its own: the browser talks to Postgres directly, so
+    # the seam is a STRING against a schema rather than a fetch against a URLconf. Same
+    # disease, different boundary.
+    from seamcheck.extractors.supabase_extractor import extract_supabase
+
+    supabase_symbols, supabase_edges = extract_supabase(repo_root)
+    known = {symbol.id for symbol in graphql_symbols}
+    graphql_symbols += [s for s in supabase_symbols if s.id not in known]
+    graphql_edges += supabase_edges
+
+    progress.step("Firebase")
+    from seamcheck.extractors.firebase_extractor import extract_firebase
+
+    firebase_symbols, firebase_edges = extract_firebase(repo_root)
+    known = {symbol.id for symbol in graphql_symbols}
+    graphql_symbols += [s for s in firebase_symbols if s.id not in known]
+    graphql_edges += firebase_edges
+
+    progress.step("Redis")
+    from seamcheck.extractors.redis_extractor import extract_redis
+
+    redis_symbols, redis_edges = extract_redis(repo_root)
+    known = {symbol.id for symbol in graphql_symbols}
+    graphql_symbols += [s for s in redis_symbols if s.id not in known]
+    graphql_edges += redis_edges
 
     progress.step("Python entry points")
     entry_point_symbols = extract_entry_points(entry_point_files or set())

@@ -27,6 +27,24 @@ _GROUP_TITLES = {
     "js_call": "JavaScript calls",
     "url": "URLs",
     "view": "Views",
+    # The data layer. Named for what a reader is looking at rather than for the symbol
+    # kind: "Db table use" is an enum with a space in it, not a heading.
+    "db_table": "Tables nothing reads",
+    "db_table_use": "Tables the code reads that the schema has not got",
+    "db_column": "Columns no select() names",
+    "db_column_use": "Columns the code selects that the table has not got",
+    "db_function": "Database functions nothing calls",
+    "db_function_use": "rpc() calls with no such function",
+    "db_policy": "Row level security",
+    "edge_function": "Edge functions nothing invokes",
+    "edge_function_use": "Edge functions that do not exist",
+    "storage_bucket": "Storage buckets",
+    "cloud_function": "Cloud functions nothing calls",
+    "cloud_function_use": "Callables with no such function",
+    "firestore_collection": "Collections and the rules that cover them",
+    "firestore_rule": "Rules guarding nothing",
+    "redis_key": "Redis keys",
+    "redis_ttl": "Cache keys written with no expiry",
 }
 
 # A caveat for a kind with a known recall gap in the extractor that produces it - shown

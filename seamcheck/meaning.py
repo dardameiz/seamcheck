@@ -53,6 +53,69 @@ _STATUS: dict[str, tuple[str, str]] = {
 
 # kind|status -> (means, check). Falls back to the status-only text above.
 _SPECIFIC: dict[str, tuple[str, str]] = {
+    # ---- the data layer -----------------------------------------------------------
+    "db_table_use|unresolved": (
+        "The client reads a table with this name and no migration in this repo declares "
+        "one.",
+        "A rename that the client did not follow, or a table created outside the "
+        "migrations. PostgREST answers with an error the client usually swallows.",
+    ),
+    "db_column_use|unresolved": (
+        "The client selects this column and the table it belongs to has not got it.",
+        "This is the quiet one: PostgREST returns the rows WITHOUT the column, the client "
+        "reads undefined, and a blank field ships. Nothing raises.",
+    ),
+    "db_table|unused": (
+        "The schema declares this table and no client code in the repo reads or writes it.",
+        "Fine if something outside this repo uses it - a worker, an admin tool, a report. "
+        "Otherwise it is a table nobody has needed since it was added.",
+    ),
+    "db_function_use|unresolved": (
+        "An rpc() call names a function no migration declares.",
+        "Check the spelling and check that the function was actually committed; a function "
+        "created by hand in the dashboard is not in the repo.",
+    ),
+    "db_policy|unresolved": (
+        "Client code reads this table, and row level security on it is not set up.",
+        "The anon key ships in the browser bundle, so 'only our app calls it' is not a "
+        "control. Either enable RLS with a policy, or move the read behind a function.",
+    ),
+    "edge_function_use|unresolved": (
+        "functions.invoke() names an edge function with no directory in supabase/functions.",
+        "A rename, or a function deployed by hand and never committed.",
+    ),
+    "cloud_function_use|unresolved": (
+        "httpsCallable() names a function the functions directory does not export.",
+        "Check the export name. A callable is matched by the exported symbol, not by the "
+        "file it lives in.",
+    ),
+    "firestore_collection|unresolved": (
+        "No match block in firestore.rules covers this collection.",
+        "Firestore denies by default, so these reads fail in production and usually fail "
+        "silently - the promise rejects and the UI shows nothing.",
+    ),
+    "firestore_rule|unused": (
+        "A rules block guards a collection no client code in this repo touches.",
+        "Usually a collection that was renamed and left its rule behind. A stale rule is "
+        "not harmless: it is one more path someone can reach.",
+    ),
+    "redis_key|unresolved": (
+        "This key is read here and written nowhere in the repo.",
+        "It can only ever miss. That fails silently - the read returns None, the code "
+        "falls through to the slow path, and the only symptom is a value that never "
+        "updates. Check the spelling against the writer.",
+    ),
+    "redis_key|unused": (
+        "This key is written here and read nowhere in the repo.",
+        "Either the reader was deleted and the write outlived it, or the reader spells the "
+        "key differently. Both are worth a look before deleting.",
+    ),
+    "redis_ttl|unresolved": (
+        "A key whose name says it is a cache, written with no expiry.",
+        "Redis keeps it forever. Pass `ex=` (or use setex) - this is the leak nobody "
+        "notices until the instance is full.",
+    ),
+
     # ---- the frontend/backend seam ------------------------------------------------
     "fetch_target|unresolved": (
         # "URLconf" is Django's word for it, and this sentence is shown for Express, Flask,

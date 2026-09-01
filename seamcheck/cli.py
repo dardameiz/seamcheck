@@ -448,59 +448,138 @@ def _run_without_django(arguments, verbose: bool) -> int:
     this path goes to the API directly and skips the management layer entirely.
     """
     from seamcheck import api
-    from seamcheck.adapters import select
 
     root = str(pathlib.Path.cwd())
-    adapter, confidence = select(root, {})
-    if confidence <= 0:
+    if not _worth_scanning(root):
         print(
             "seamcheck: nothing here that this knows how to read.\n\n"
-            "It looks for a Django project (manage.py), or one of: FastAPI, Flask,\n"
-            "Express, Fastify, NestJS, Next.js. Run it from the root of one of those.",
+            "It looks for a backend it recognises - Django, FastAPI, Flask, Express,\n"
+            "Fastify, NestJS, Next.js - or a data layer it recognises: Supabase\n"
+            "migrations, Firebase functions and rules, or Redis keys. Failing all of\n"
+            "those, some JavaScript to read. Run it from the root of a project.",
             file=sys.stderr,
         )
         return 2
 
-    fmt, out, serve, checking = _plain_args(arguments)
+    options = _plain_args(arguments)
     with quiet(not verbose):
-        if checking:
-            # The CI gate. api.check() returns the counts; the exit code is what a build
-            # reads, and the digest is what a person reads.
+        if options["check"]:
+            # The CI gate. The exit code is what a build reads; the digest is for a person.
             result = api.check(repo_root=root)
             print(api.report(repo_root=root, fmt="terminal"))
             return 1 if result.get("findings") else 0
-        rendered = api.report(repo_root=root, fmt=fmt)
-    return _emit(rendered, fmt, out, serve, root)
+        rendered = api.report(repo_root=root, fmt=options["fmt"])
 
-
-def _plain_args(arguments) -> tuple[str, str | None, bool, bool]:
-    """The handful of flags this path understands, read without Django's parser."""
-    fmt, out, serve, checking = "terminal", None, False, False
-    items = list(arguments)
-    for i, item in enumerate(items):
-        if item == "--format" and i + 1 < len(items):
-            fmt = items[i + 1]
-        elif item == "--out" and i + 1 < len(items):
-            out = items[i + 1]
-        elif item == "--serve":
-            serve = True
-        elif item == "--check":
-            checking = True
-    return fmt, out, serve, checking
-
-
-def _emit(rendered: str, fmt: str, out: str | None, serve: bool, root: str) -> int:
-    if out:
-        pathlib.Path(out).write_text(rendered, encoding="utf-8")
-        print(f"seamcheck: wrote {out}", file=sys.stderr)
+    if options["out"]:
+        pathlib.Path(options["out"]).write_text(rendered, encoding="utf-8")
+        print(f"seamcheck: wrote {options['out']}", file=sys.stderr)
         return 0
-    if fmt == "map" and serve:
-        from seamcheck import api as _api
-        from seamcheck.serve import serve_forever
-
-        return serve_forever(rendered, sources=set(_api.LAST_MAP_FILES), repo_root=root)
+    if options["serve"]:
+        return _serve_plain(rendered, root, options)
     print(rendered)
     return 0
+
+
+def _worth_scanning(root: str) -> bool:
+    """Whether there is anything here at all.
+
+    A backend adapter is not the only reason to run. A Supabase project has no routes of
+    its own - the browser talks to Postgres - and refusing it because no adapter fit was
+    the same mistake as refusing an Express repo because it had no manage.py, one layer
+    further out.
+    """
+    from seamcheck.adapters import select
+    from seamcheck.extractors.firebase_extractor import detected as firebase_here
+    from seamcheck.extractors.supabase_extractor import detected as supabase_here
+
+    if select(root, {})[1] > 0:
+        return True
+    if supabase_here(root) or firebase_here(root):
+        return True
+    # Failing everything else: is there any first-party JavaScript? The frontend half of
+    # the graph - selectors against elements, rules against markup - stands on its own.
+    from seamcheck.adapters.discovery import SKIP_DIRS
+
+    for _here, subdirectories, names in os.walk(root):
+        subdirectories[:] = [
+            d for d in subdirectories if d not in SKIP_DIRS and not d.startswith(".")
+        ]
+        if any(name.endswith((".js", ".mjs", ".ts", ".jsx", ".tsx")) for name in names):
+            return True
+    return False
+
+
+def _serve_plain(rendered: str, root: str, options: dict) -> int:
+    """The same serving the Django path does, named the same way."""
+    from seamcheck import api
+    from seamcheck.serve import public_tunnel, serve_addresses
+
+    server, addresses = serve_addresses(
+        rendered,
+        host="127.0.0.1" if options["local_only"] else "0.0.0.0",
+        sources=set(api.LAST_MAP_FILES), repo_root=root,
+    )
+    print("")
+    print(f"  open   {addresses['local']}")
+    if "lan" in addresses:
+        print(f"  phone  {addresses['lan']}")
+    proxy = None
+    if options["tunnel"]:
+        try:
+            proxy, public = public_tunnel(server.server_port)
+        except RuntimeError as error:
+            # A tunnel that will not open must not take the local server down with it.
+            print(str(error), file=sys.stderr)
+        else:
+            path = addresses["local"][addresses["local"].index("/", 8):]
+            print(f"  public {public}{path}")
+    print("")
+    print("  Ctrl-C to stop.")
+    if options["open"]:
+        import webbrowser
+
+        webbrowser.open(addresses["local"])
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("")
+    finally:
+        server.shutdown()
+        if proxy:
+            proxy.terminate()
+    return 0
+
+
+def _plain_args(arguments) -> dict:
+    """The flags this path understands, read without Django's parser.
+
+    Deliberately the same names the management command uses. A flag that works on a Django
+    project and is silently ignored on an Express one is worse than one that does not exist.
+    """
+    options = {
+        "fmt": "terminal", "out": None, "serve": False, "check": False,
+        "tunnel": False, "local_only": False, "open": False,
+    }
+    items = list(arguments)
+    for index, item in enumerate(items):
+        following = items[index + 1] if index + 1 < len(items) else None
+        if item == "--format" and following:
+            options["fmt"] = following
+        elif item == "--out" and following:
+            options["out"] = following
+        elif item == "--serve":
+            options["serve"] = True
+        elif item == "--no-serve":
+            options["serve"] = False
+        elif item == "--check":
+            options["check"] = True
+        elif item == "--tunnel":
+            options["tunnel"] = True
+        elif item == "--local-only":
+            options["local_only"] = True
+        elif item == "--open":
+            options["open"] = True
+    return options
 
 
 def main(argv: list[str] | None = None) -> int:

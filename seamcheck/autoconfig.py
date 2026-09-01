@@ -24,6 +24,8 @@ from __future__ import annotations
 import os
 import pathlib
 
+from seamcheck.adapters.discovery import SKIP_DIRS
+
 # Never scanned. Built output, other people's code, and the virtualenv - all of which
 # contain enormous amounts of CSS and JS that is not this project's to answer for.
 # `dist` matters most: a bundler's output is a COPY of the source, so scanning it doubles
@@ -290,10 +292,11 @@ def _detect_without_django(root, put, config, why):
     return config, why
 
 
-# Built output, not source. Reading these finds the same code twice and calls the second
-# copy unused.
-_JS_SKIP = ("node_modules", ".git", "dist", "build", "out", ".next", "coverage",
-            "vendor", "__pycache__", ".venv", "venv")
+# The SHARED list, not a second one written here. A private copy missed `fixtures`, so a
+# project's test fixtures were read as application code and their deliberately-broken fetch
+# calls were reported as real findings - which is exactly what running this on its own
+# repository turned up.
+_JS_SKIP = SKIP_DIRS
 
 
 def _js_entries(root: pathlib.Path, config: dict) -> list[str]:
@@ -309,7 +312,15 @@ def _js_entries(root: pathlib.Path, config: dict) -> list[str]:
     found: list[str] = []
     for base in bases:
         for path in base.rglob("*.js"):
-            if any(part in _JS_SKIP for part in path.parts):
+            # Only the parts INSIDE the repo. Checking the absolute path means where the
+            # project happens to live on disk decides what gets scanned - a checkout under
+            # /private/tmp matched "tmp", under ~/build matched "build", and every file in
+            # the project was skipped. The skip list describes a project's own layout.
+            try:
+                inside = path.resolve().relative_to(root).parts
+            except ValueError:
+                inside = path.parts
+            if any(part in _JS_SKIP for part in inside):
                 continue
             # A minified sibling is the same code compiled; reading both reports every
             # symbol twice.
