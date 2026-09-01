@@ -156,21 +156,38 @@ Five looks, if you care. Aurora is the default.
 
 ## Does it work with my stack?
 
-**Django, today, from the command line.** No configuration — it finds your project and
-reads it.
+No configuration. It works out which one you are using from what is in the repo.
 
-**FastAPI · Flask · Express · Fastify · NestJS · Next.js** — the readers for these are
-built and tested against real repositories, and they find 2,435 routes across the 20
-open-source projects in the corpus. But `seamcheck` still needs a Django project to start
-from, so on the command line they are **not reachable yet**. They work through the Python
-API. Removing that gate is the next thing I am doing, and until it lands I would rather say
-so here than let the list imply otherwise.
+| | detected by | reads |
+|---|---|---|
+| **Django** | `manage.py` | the URLconf, imported |
+| **Flask** | `@app.route` | decorators, from source |
+| **FastAPI** | `@app.get` | decorators, from source |
+| **Express** | `app.get(...)` | call sites, from source |
+| **Fastify** | `fastify.get(...)` | call sites, from source |
+| **NestJS** | `@Controller` | decorators, composed with the controller prefix |
+| **Next.js** | `pages/api`, `app/**/route.ts` | the file tree |
+
+Each one is checked against a small app written for the purpose, with a deliberately
+mistyped endpoint in it, and each one finds it:
+
+```
+flask     /api/orders            → the route is /api/order
+fastapi   /api/sign-up           → the route is /api/signup
+express   /api/does-not-exist    → there is no such route
+fastify   /api/comments          → the route is /api/comment
+nestjs    /api/orders/check-out  → the route is /api/orders/checkout
+nextjs    /api/account/profil    → the file is pages/api/account/profile.js
+```
+
+Only Django is imported; the rest are read from source, so nothing has to run and none of
+their dependencies have to be installed.
 
 **Frontends** — plain JavaScript · TypeScript · Django templates · CSS and design tokens
 **Also reads** — Stripe webhooks · Celery tasks and beat schedules · GraphQL schemas
 
-Tried against 20 open-source projects so far: 53,361 files, 9.5M lines. If yours does not
-work, I would genuinely like to know.
+Also tried against 20 open-source projects: 53,361 files, 9.5M lines, 2,435 routes. If
+yours does not work, I would genuinely like to know.
 
 ## Four words, and it never says more than it can prove
 
