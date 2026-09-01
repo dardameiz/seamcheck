@@ -194,6 +194,20 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overf
 .hud.br { bottom:14px; right:14px; flex-direction:column; }
 
 .menuwrap { position:relative; }
+/* The page picker, on the glass beside the menu, so moving from one page to the next is
+   one tap instead of three. Same shape as the menu button: the two read as one strip. */
+.pagepick { flex:none; max-width:38vw; min-width:0; }
+.pagepick select {
+  max-width:100%; height:36px; padding:0 30px 0 13px; cursor:pointer;
+  border:1.2px solid var(--line-2); background:var(--panel); color:var(--ink);
+  border-radius:var(--r-pill); font-family:var(--mono); font-size:12.5px;
+  box-shadow:var(--shadow); appearance:none; text-overflow:ellipsis;
+  background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),
+                   linear-gradient(135deg,var(--muted) 50%,transparent 50%);
+  background-position:calc(100% - 15px) 16px, calc(100% - 11px) 16px;
+  background-size:5px 5px, 5px 5px; background-repeat:no-repeat;
+}
+.pagepick select:hover, .pagepick select:focus { border-color:var(--sig); outline:none; }
 .menubtn {
   display:flex; align-items:center; gap:9px; cursor:pointer; padding:8px 15px 8px 12px;
   border:1.2px solid var(--line-2); background:var(--panel); color:var(--ink);
@@ -250,7 +264,9 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overf
              border-color var(--dur) var(--ease);
 }
 .iconbtn:hover { color:var(--sig); border-color:var(--sig); }
-.iconbtn.wide { font-size:12px; padding:0 13px; }
+.iconbtn.wide { font-size:12px; padding:0 13px; gap:6px; display:inline-flex;
+                align-items:center; }
+.iconbtn .swap { opacity:.75; font-size:13px; }
 
 /* What you are looking at. Empty and invisible the rest of the time. */
 .readout {
@@ -359,7 +375,18 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overf
 .seg button[data-status=""][aria-pressed="true"] { background:var(--sunk); color:var(--muted); }
 .pill.filtering, .legendbar.filtering .seg { border-color:var(--sig); }
 .pill.filtering { box-shadow:0 0 0 1px var(--sig), 0 10px 30px -12px rgba(0,0,0,.6); }
-.fnote { grid-column:1 / -1; font-size:11px; color:var(--sig); display:flex; gap:8px;
+/* On the glass with the status pills, because that is where a reader is looking when a
+   filter empties the map. */
+.fnote { display:flex; align-items:center; gap:9px; flex:none;
+         font-family:var(--mono); font-size:12px; color:var(--sig);
+         background:var(--sig-fill); border:1.2px solid var(--sig);
+         border-radius:var(--r-pill); padding:6px 6px 6px 14px; box-shadow:var(--shadow);
+         max-width:100%; min-width:0; }
+.fnote > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.fnote button { flex:none; background:var(--sig); color:var(--bg); border:0; cursor:pointer;
+                border-radius:var(--r-pill); padding:5px 12px; font-family:var(--mono);
+                font-size:11.5px; font-weight:600; }
+.fnote-legacy { grid-column:1 / -1; font-size:11px; color:var(--sig); display:flex; gap:8px;
   align-items:center; justify-content:space-between; }
 .fnote button { background:none; border:0; color:var(--sig); font:inherit; font-size:11px;
   text-decoration:underline; cursor:pointer; padding:0; }
@@ -514,6 +541,7 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
 #cv { position:absolute; inset:0; width:100%; height:100%; display:block;
       cursor:grab; touch-action:none; }
 #cv.drag { cursor:grabbing; }
+#cv * { touch-action:none; }
 .nd rect { stroke-width:1.5; }
 .nd text { font-size:10.5px; fill:var(--ink); pointer-events:none; letter-spacing:-.1px;
            font-family:var(--mono); }
@@ -919,11 +947,21 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
   .hud.tl { top:12px; left:12px; }
   .hud.tr { top:12px; right:12px; gap:6px; }
   .menubtn { max-width:44vw; }
-  .readout { top:auto; bottom:calc(var(--chrome-bottom, 62px) + 56px);
-             max-width:calc(100vw - 24px); font-size:11px; }
+  /* The page picker on the glass now says which page this is, so the readout was the
+     same sentence twice - and the second copy floated over a band heading. */
+  .readout { display:none; }
   .hud.bl { bottom:12px; left:12px; right:12px; gap:7px; }
   #colourkey .seg { gap:7px; }
   #colourkey .seg button { padding:6px 12px; font-size:12px; }
+  /* A menu row is a thumb target, not a line of text. */
+  .mapsheet { width:min(340px, calc(100vw - 24px)); }
+  .mapsheet .nv { padding:13px 12px; font-size:16px; border-radius:12px; }
+  .mapsheet .nv .c { font-size:13px; }
+  .mapsheet .mlab { font-size:11px; padding:13px 12px 7px; }
+  .mapsheet .mfilters select, .mapsheet .msearch input { padding:12px 12px; font-size:15px; }
+  .mapsheet .mfilters label > span { font-size:11px; }
+  .pagepick { max-width:44vw; }
+  .pagepick select { height:36px; font-size:12px; }
   .zoom { left:auto; right:12px; top:auto;
           bottom:calc(var(--chrome-bottom, 62px) + 108px);
           flex-direction:column; width:44px; height:auto; gap:6px; }
@@ -931,8 +969,7 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
   /* The colour key joins the zoom stack rather than sitting under it in the pills' way. */
   .key { right:12px; bottom:calc(var(--chrome-bottom, 62px) + 58px); }
   /* "Show as list" is a phrase on a desktop and an icon on a phone. */
-  .iconbtn.wide { font-size:0; padding:0; min-width:30px; }
-  .iconbtn.wide::after { content:"\2630"; font-size:13px; }
+  .iconbtn.wide { font-size:11.5px; padding:0 11px; }
   /* A file row does not fit on one phone line: name, coverage bar, ratio, up to four
      status badges and an editor link. Unwrapped, the name lost - which is the one part
      of the row a reader is looking for. It takes its own line; the rest follows under. */
@@ -1081,6 +1118,10 @@ let current = 0, focus = null, view = {x:0, y:0, k:1}, query = "";
 // draws 1,366 symbols; the one question a click asks is "what is this joined to", and
 // answering it by colour beats answering it by making the reader trace a line by eye.
 let lit = null, isolate = false, fileFilter = null;
+// Which aggregate card a reader has opened, if any. One at a time: opening a second while
+// the first is out would put 18,000 cards on the canvas. Declared with the other filters
+// because the filter notice reads it, and that runs long before the canvas does.
+let expandedKind = null;
 
 // A section is a lens on the same canvas, not a different page. The list of rows is the
 // CLI's answer; on screen the answer is the shape.
@@ -1279,38 +1320,38 @@ function markFiltered() {
   if (pill) pill.classList.toggle("filtering", on);
   colourkey.classList.toggle("filtering", statusFilter.size > 0);
 
-  let note = document.getElementById("fnote");
-  if (!on) { if (note) note.remove(); return; }
-  // On a phone the summary line already names every filter, so a second notice saying the
-  // same thing is a row of the map spent twice. The outline on the pill carries the signal.
-  if (pill && pill.querySelector(".pillbar")) { if (note) note.remove(); return; }
-  const holder = pill || colourkey.parentElement;
-  if (!note) {
-    note = document.createElement("div");
-    note.id = "fnote";
-    note.className = "fnote";
-    holder.appendChild(note);
-    note.addEventListener("click", event => {
-      if (!event.target.closest("button")) return;
-      statusFilter.clear();
-      layer = "";
-      const picker = document.getElementById("ly");
-      if (picker) picker.value = "";
-      const wrap = document.getElementById("pgwrap");
-      if (wrap) wrap.hidden = false;
-      syncStatusKey();
-      focus = null;
-      fillPages();
-      draw();
-    });
-  } else if (note.parentElement !== holder) {
-    holder.appendChild(note);
-  }
+  const note = document.getElementById("fnote");
+  if (!note) return;
   const bits = [];
   if (layer) bits.push((LAYERS.find(([k]) => k === layer) || [, layer])[1]);
   if (statusFilter.size) bits.push([...statusFilter].join(" + "));
-  note.innerHTML = `<span>Filtered: ${esc(bits.join(" · "))}</span><button type="button">clear</button>`;
+  if (fileFilter) bits.push(fileFilter.split("/").pop());
+  if (expandedKind) bits.push("opened " + expandedKind.replace(/_/g, " "));
+  note.hidden = bits.length === 0;
+  if (!bits.length) return;
+  note.innerHTML = `<span>${esc(bits.join(" \u00b7 "))}</span>` +
+    `<button type="button">clear</button>`;
+  note.onclick = event => {
+    if (!event.target.closest("button")) return;
+    // Everything a filter could be, cleared at once. Half-clearing leaves the reader in
+    // the same hole, one step shallower.
+    statusFilter.clear();
+    layer = "";
+    fileFilter = null;
+    expandedKind = null;
+    const picker = document.getElementById("ly");
+    if (picker) picker.value = "";
+    const wrap = document.getElementById("pgwrap");
+    if (wrap) wrap.hidden = false;
+    focus = null;
+    syncStatusKey();
+    if (window.syncChrome) syncChrome();
+    fillPages();
+    _layout.key = null;
+    draw();
+  };
 }
+
 syncStatusKey();
 
 // Theme: follow the system until a reader says otherwise, then remember it. The map is
@@ -1532,9 +1573,6 @@ const KIND_WORD = {
   template_tag: "template tag", graphql_field: "graphql field",
   graphql_selection: "graphql query",
 };
-// Which aggregate a reader has opened, if any. One at a time: opening a
-// second while the first is out would put 18,000 cards on the canvas.
-let expandedKind = null;
 
 // Read once per draw from the pack, not per edge: getComputedStyle in a loop over four
 // thousand edges is the difference between a map that pans and one that stutters.
@@ -3381,7 +3419,11 @@ function switchTo(next) {
   document.getElementById("q").hidden = false;
   pgwrap.hidden = !drawable;
   listToggle.hidden = !hasLens;
-  listToggle.textContent = asList ? "Show as map" : "Show as list";
+  // Says what you will GET, with a swap sign. It was the trigram U+2630, which a mono
+  // face at 13px draws as something that reads like a small 3 beside a 0.
+  listToggle.innerHTML = asList
+    ? '<span class="swap">\u21c4</span>Map' : '<span class="swap">\u21c4</span>List';
+  listToggle.title = asList ? "Show it as a map" : "Show it as a list";
   const label = document.getElementById("menulabel");
   if (label) {
     const item = rail.querySelector(`.nv[data-key="${mode}"] span`);
@@ -3748,7 +3790,6 @@ def render(connectivity_map: ConnectivityMap, console=None, files=None,
         '<div class="mlab">Narrow it down</div>'
         '<div class="mfilters">'
         '<label><span>Commit</span><select id="cm"></select></label>'
-        '<label id="pgwrap"><span>Page</span><select id="pg"></select></label>'
         '<label id="lywrap"><span>Emphasis</span><select id="ly"></select></label>'
         '</div>'
         '<div class="msep"></div>'
@@ -3757,12 +3798,16 @@ def render(connectivity_map: ConnectivityMap, console=None, files=None,
         'route or element"><span id="qn" class="qn"></span></div>'
         # Kept because switchTo() writes to it; the nav above is what a reader touches.
         '<select id="vw" hidden></select>'
-        '</div></div></div>',
+        '</div></div>'
+        # Choosing WHICH page you are looking at is the thing a reader does most often, and
+        # it was two taps deep inside a dropdown. It sits on the glass, next to the view.
+        '<label id="pgwrap" class="pagepick"><select id="pg"></select></label>'
+        "</div>",
 
         # ── appearance, top right ─────────────────────────────────────────────
         '<div class="hud tr">'
         '<button type="button" class="iconbtn" id="up" hidden aria-label="Back">\u2190</button>'
-        '<button type="button" class="iconbtn wide" id="aslist" hidden>Show as list</button>'
+        '<button type="button" class="iconbtn wide" id="aslist" hidden>List</button>'
         '<span class="packwrap">'
         '<button type="button" class="tmode" id="tmode" aria-label="Appearance">Aurora</button>'
         '<div class="packmenu" id="packmenu"></div></span>'
@@ -3772,7 +3817,8 @@ def render(connectivity_map: ConnectivityMap, console=None, files=None,
         '<div class="readout" id="readout"><span id="crumb"></span></div>',
 
         # ── the four words the whole tool is built on ─────────────────────────
-        '<div class="hud bl" id="colourkey">'
+        '<div class="hud bl">'
+        '<div id="colourkey">'
         '<div class="seg" role="group" aria-label="Show only these statuses">'
         '<button type="button" class="s-connected" data-status="connected" '
         'title="Something reaches it, evidence attached">'
@@ -3787,7 +3833,13 @@ def render(connectivity_map: ConnectivityMap, console=None, files=None,
         'title="No evidence either way \u2014 not a claim it is dead">'
         '<i></i>uncertain<b></b></button>'
         '<button type="button" data-status="" class="allbtn" hidden>all</button>'
-        "</div></div>",
+        "</div></div>"
+        # A filter that empties the canvas has to offer its own way out, WHERE THE READER
+        # IS LOOKING. This used to live in the header; the header is gone and the button
+        # went with it, so choosing Stripe on a page that has none stranded you with an
+        # empty map and no visible control that would undo it.
+        '<div class="fnote" id="fnote" hidden></div>'
+        "</div>",
 
         # Every element the script still writes to, kept in the tree and out of the way.
         '<div class="offstage">'
