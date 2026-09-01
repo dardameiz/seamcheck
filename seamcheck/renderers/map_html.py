@@ -620,6 +620,35 @@ function layersPresent() {
 }
 let layer = "";
 
+// A structural layer narrows the page you are on. A SERVICE does not live on a page at
+// all: a Stripe webhook is reached by Stripe and a Celery task by a worker, so neither
+// hangs off any page entry - which is why picking Stripe while "Base · base.html" was
+// selected drew an empty canvas and looked broken. A service layer is global, so it gets
+// a synthetic page unioned across every page in the map.
+const SERVICE_LAYERS = new Set(["stripe", "celery", "graphql"]);
+let _servicePage = null, _servicePageFor = null;
+
+function currentPage() {
+  if (!SERVICE_LAYERS.has(layer)) return PAGES[current];
+  if (_servicePageFor === layer) return _servicePage;
+  const want = LAYER_KINDS[layer];
+  const ids = new Set(), nodes = [];
+  PAGES.forEach(p => p.nodes.forEach(n => {
+    if (want.has(n.kind) && !ids.has(n.id)) { ids.add(n.id); nodes.push(n); }
+  }));
+  const seen = new Set(), edges = [];
+  PAGES.forEach(p => p.edges.forEach(e => {
+    const key = e.source + "\u0000" + e.target;
+    if (ids.has(e.source) && ids.has(e.target) && !seen.has(key)) {
+      seen.add(key); edges.push(e);
+    }
+  }));
+  const title = (LAYERS.find(([k]) => k === layer) || [, layer])[1];
+  _servicePage = {page: layer, title: title, where: "", nodes: nodes, edges: edges};
+  _servicePageFor = layer;
+  return _servicePage;
+}
+
 // Empty means "every status". A Set rather than a single value because "show me the
 // unresolved AND the unused" - the two that are actionable - is the common ask.
 const statusFilter = new Set();
@@ -911,7 +940,12 @@ function reportMatches(drawn, matched) {
 let _layout = {key: null, keep: null, value: null};
 
 function layoutKey() {
-  return [current, mode, focus, fileFilter, only, isolate ? lit : "", asList].join("\u0000");
+  // Every input to `visible()` has to be in this key. The layer and the status filter were
+  // missing, so choosing "Stripe" or "unresolved" recomputed the page COUNT and reused the
+  // cached layout - the dropdown said 35 nodes over a canvas still drawing all 392. A
+  // cache keyed on less than its function reads is a cache that lies.
+  return [current, mode, focus, fileFilter, only, isolate ? lit : "", asList,
+          layer, [...statusFilter].sort().join(",")].join("\u0000");
 }
 
 function layoutFor(p) {
@@ -926,7 +960,7 @@ function layoutFor(p) {
 }
 
 function draw() {
-  const p = PAGES[current];
+  const p = currentPage();
   if (!p) return;
   pages.value = String(current);
   const here = p.where ? `${p.title} · ${p.where}` : p.title;
@@ -1051,7 +1085,7 @@ function closeSheet() { sheet.hidden = true; }
 // "this exists"; the question a reader actually has is where the browser started and
 // where it ended up, so the sheet reconstructs that walk from the edges.
 function routes(id) {
-  const p = PAGES[current];
+  const p = currentPage();
   const back = new Map(), fwd = new Map();
   p.edges.forEach(e => {
     if (!back.has(e.target)) back.set(e.target, []);
@@ -1981,6 +2015,11 @@ const ly = document.getElementById("ly");
 ly.onchange = e => {
   layer = e.target.value;
   focus = null;
+  // Choosing a page inside "Stripe" is a question with no answer, so the control goes
+  // away rather than sitting there offering counts of zero.
+  const global = SERVICE_LAYERS.has(layer);
+  const wrap = document.getElementById("pgwrap");
+  if (wrap) wrap.hidden = global;
   fillPages();
   draw();
 };

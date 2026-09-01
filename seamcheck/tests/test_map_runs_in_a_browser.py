@@ -403,3 +403,121 @@ class DirectionAOnAPhone(MapRunsInABrowser):
     def test_the_desktop_keeps_its_header(self):
         state = self._open(width=1200)
         self.assertFalse(state["pill"], "the pill is a phone layout, not a redesign of both")
+
+
+class FiltersReachTheCanvas(DirectionAOnAPhone):
+    """A filter has to change the picture, not only the number beside it.
+
+    The layout is memoised because it is the most expensive thing on the page, and its key
+    listed every input to visible() EXCEPT the two newest: the layer and the status filter.
+    So choosing "Stripe" or "unresolved" recomputed the page count and reused the cached
+    drawing - the dropdown said 35 nodes over a canvas still showing all 392. Nothing threw,
+    nothing looked broken in isolation, and the tool was lying about its own view.
+    """
+
+    def _drive(self, steps, width=390):
+        from playwright.sync_api import sync_playwright
+
+        from seamcheck.console import build_console
+        from seamcheck.mapdata import build_map
+        from seamcheck.renderers.map_html import render
+        from seamcheck.report import build_report
+
+        graph = self._phone_graph()
+        html = render(
+            build_map(graph, {"orders-main": {s.id for s in graph.symbols}}, git_sha="0" * 12),
+            console=build_console(graph, build_report(
+                graph=graph, diff=None, entries=[], git_sha="0" * 12)))
+        path = pathlib.Path(tempfile.mkdtemp()) / "m.html"
+        path.write_text(html, encoding="utf-8")
+
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch()
+            except Exception as error:  # pragma: no cover
+                raise unittest.SkipTest(f"no chromium: {error}") from None
+            page = browser.new_page(viewport={"width": width, "height": 780})
+            page.goto(path.as_uri(), wait_until="load")
+            page.wait_for_timeout(250)
+            page.select_option("#vw", "map") if width <= 720 else page.click(
+                '#nav .nv[data-key="map"]')
+            page.wait_for_timeout(300)
+            counts = []
+            for step in steps:
+                step(page)
+                page.wait_for_timeout(300)
+                counts.append(page.evaluate(
+                    "() => document.querySelectorAll('#cv g[data-id]').length"
+                    " || document.querySelectorAll('#cv rect').length"))
+            browser.close()
+        return counts
+
+    def test_a_status_filter_redraws_the_canvas(self):
+        base, filtered, restored = self._drive([
+            lambda p: None,
+            lambda p: p.click('#colourkey .seg button[data-status="unresolved"]'),
+            lambda p: p.click('#colourkey .seg button[data-status=""]'),
+        ])
+        self.assertLess(filtered, base, "the canvas kept drawing everything")
+        self.assertEqual(restored, base)
+
+    def test_a_layer_redraws_the_canvas(self):
+        """Asserted on WHAT is drawn, not how much.
+
+        A count alone cannot tell a redrawn canvas from a stale one that happens to hold
+        the same number of nodes - which is exactly what a small fixture produces.
+        """
+        labels = self._labels([
+            lambda p: None,
+            lambda p: p.select_option("#ly", "stripe"),
+            lambda p: p.select_option("#ly", ""),
+        ])
+        base, stripe, restored = labels
+        self.assertIn("api/orders/", " ".join(base), "the full map should hold the route")
+        self.assertNotIn("api/orders/", " ".join(stripe), "the layer kept drawing everything")
+        self.assertTrue(any("webhook" in text or "charge" in text for text in stripe),
+                        f"the Stripe layer drew none of Stripe: {stripe}")
+        self.assertIn("api/orders/", " ".join(restored), "resetting did not restore the map")
+
+    def _labels(self, steps, width=390):
+        """The text actually on the canvas after each step."""
+        from playwright.sync_api import sync_playwright
+
+        from seamcheck.console import build_console
+        from seamcheck.mapdata import build_map
+        from seamcheck.renderers.map_html import render
+        from seamcheck.report import build_report
+
+        graph = self._phone_graph()
+        html = render(
+            build_map(graph, {"orders-main": {s.id for s in graph.symbols}}, git_sha="0" * 12),
+            console=build_console(graph, build_report(
+                graph=graph, diff=None, entries=[], git_sha="0" * 12)))
+        path = pathlib.Path(tempfile.mkdtemp()) / "m.html"
+        path.write_text(html, encoding="utf-8")
+        out = []
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch()
+            except Exception as error:  # pragma: no cover
+                raise unittest.SkipTest(f"no chromium: {error}") from None
+            page = browser.new_page(viewport={"width": width, "height": 780})
+            page.goto(path.as_uri(), wait_until="load")
+            page.wait_for_timeout(250)
+            page.select_option("#vw", "map")
+            page.wait_for_timeout(300)
+            for step in steps:
+                step(page)
+                page.wait_for_timeout(300)
+                out.append(page.evaluate(
+                    "() => [...document.querySelectorAll('#cv text')].map(t => t.textContent)"))
+            browser.close()
+        return out
+
+    def test_a_service_layer_is_not_scoped_to_the_open_page(self):
+        """A Stripe webhook hangs off no page entry - it is reached by Stripe."""
+        base, stripe = self._drive([
+            lambda p: None,
+            lambda p: p.select_option("#ly", "stripe"),
+        ])
+        self.assertGreater(stripe, 0, "picking a service drew an empty canvas")
