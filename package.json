@@ -9,6 +9,6 @@
     "@babel/parser": "^7.29.8",
     "acorn": "8.16.0",
     "esbuild": "0.28.1",
-    "postcss": "8.5.23"
+    "postcss": "8.5.26"
   }
 }
