@@ -75,6 +75,19 @@ def match_dom_selectors(dom_attrs: list[Symbol], dom_selectors: list[Symbol]) ->
             for attr in matched:
                 reached.add(attr.id)
                 edges.append(Edge(from_id=selector.id, to_id=attr.id, status=Status.CONNECTED))
+        elif ":write" in selector.sub:
+            # A WRITE is a claim even from a file outside the entry graph, and this is the
+            # single most valuable finding this tool has produced. Reading a selector is
+            # ambiguous - the element may be created later, or the read may be defensive -
+            # but code that WRITES a value into an element asserts that the element exists.
+            # If no template has it, that write goes nowhere, silently, forever.
+            #
+            # Measured: `#bandwidthValue` and `#bandwidthUnit` were written every five
+            # seconds by a per-user poll, from a file the bundler entry never reaches. That
+            # was ~10,000 requests per second of waste at the target concurrency, and it
+            # threw nothing. Suppressing it because its FILE is only evidence confuses two
+            # different questions: reachability of the file, and existence of the element.
+            edges.append(Edge(from_id=selector.id, to_id=selector.id, status=Status.UNRESOLVED))
         elif not selector.sub.endswith(":evidence"):
             edges.append(Edge(from_id=selector.id, to_id=selector.id, status=Status.UNRESOLVED))
 
