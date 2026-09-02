@@ -1,19 +1,42 @@
-# Seamcheck
+# Seamcheck — find the bugs between your frontend and your backend
+
+**Cross-language static analysis for Django, Express, FastAPI, Flask, NestJS, Next.js and
+Fastify.** Finds dead CSS classes, unused template attributes, `fetch()` calls to routes
+that do not exist, Redis keys written under one name and read under another, and Stripe
+events nothing handles. Reads your source; never runs your code; no API key, no network.
 
 [![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-ea4aaa?logo=github&logoColor=white)](https://github.com/sponsors/dardameiz)
 [![PyPI](https://img.shields.io/pypi/v/seamcheck?color=7c6cff)](https://pypi.org/project/seamcheck/)
 [![Python](https://img.shields.io/pypi/pyversions/seamcheck?color=7c6cff)](https://pypi.org/project/seamcheck/)
 [![License](https://img.shields.io/badge/license-MIT-informational)](LICENSE)
 
-A small tool that looks for the bugs that sit **between** things — your frontend and your
-backend, your code and your database schema, one file and another. It reads your source. It
-never runs your code.
+```bash
+pip install seamcheck && seamcheck map
+```
 
-![The map](docs/images/map.png)
+![Seamcheck's map of a scanned project: browser, seam, server and store bands with broken connections in red](docs/images/map.png)
 
 <sub>A small Express shop, scanned. Read it downwards: **the browser** at the top, **the
 seam** where requests cross the network, **the server** underneath, and **the store** where
-it talks to its data.</sub>
+it talks to its data. **Red is a request with nothing at the other end.**</sub>
+
+## The bugs it is looking for
+
+None of these throw. Nothing fails a test. That is exactly why they survive:
+
+| | |
+|---|---|
+| **A `fetch()` to a route that does not exist** | someone renamed `/api/orders` to `/api/order` and the caller is one character behind |
+| **A CSS class nothing defines** | the rule was deleted; three templates still ask for it, and the element renders unstyled |
+| **A template attribute nothing writes** | `data-modal-level-name` sits in the HTML, the function that filled it is gone, and the value has been frozen since it shipped |
+| **Two writers for one element** | two managers set the same counter to different values, so it flickers between them |
+| **A Redis key with a typo** | written as `user:{id}:stats`, read as `user:{id}:stat`, and the read just returns nothing, quietly, for a year |
+| **A Stripe event nothing handles** | your code calls an API that makes Stripe send `invoice.paid`, and no handler exists |
+
+![A broken request selected in the map, with its whole call chain highlighted in red](docs/images/findings.png)
+
+<sub>**The red list is the point.** Every finding names the file and line on both sides of
+the seam, and says which evidence it has.</sub>
 
 ## Why I made it
 
@@ -142,6 +165,23 @@ seamcheck --version
 ```
 </details>
 
+## How it compares to Knip, depcheck and ESLint
+
+Worth being clear, because it is the first thing a JavaScript developer will ask. **Knip
+and its neighbours work inside one language's module graph** — unused files, unused
+exports, unused dependencies — and they do it very well. Frontend or backend does not come
+into it; if your server is TypeScript, Knip already covers it.
+
+**Seamcheck looks at the boundaries between languages instead.** A template referencing a
+CSS class no stylesheet defines. A `fetch()` naming a route the Python never registered. A
+Redis key written under one name and read under another. A Stripe event dispatched on that
+Stripe will never send. Those are invisible to a module graph, because each side is
+individually valid.
+
+They are not competitors, and on a TypeScript codebase running both is reasonable. If what
+you actually want is unused JavaScript exports, use Knip — it is better at that than this
+will be.
+
 ## What it looks like
 
 **Click a red one.** The chain that reaches it lights up and everything else recedes, so
@@ -182,9 +222,9 @@ One menu, and the counts are the current page's.
 <sub>Views on top, then the lenses: the whole scan, or just the database, Redis,
 configuration or background jobs.</sub>
 
-Everything it is willing to claim, each one explained in a sentence, worst first.
-
-![Findings](docs/images/findings.png)
+The findings list at the top of this page is the other half of the same view: everything
+it is willing to claim, each one explained in a sentence, worst first, with the file and
+line on both sides.
 
 It reads on a phone, because that is where you end up looking at it.
 
@@ -198,9 +238,19 @@ Five looks, if you care. Aurora is the default.
 
 No configuration. It works out which one you are using from what is in the repo.
 
-**How well, though, is a fair question — and the honest answer is that it varies a lot.**
-So here is where each one actually stands, by how much real code it has been run against
-rather than by how much of it is written.
+**How well, though, is a fair question, and the honest answer is that it varies enormously
+— so the table below reports it as a number rather than a claim.**
+
+*Coverage* is the share of the things it found that it was actually able to judge. The
+remainder come back `uncertain`, which means "no evidence either way" and not "fine". A
+backend with low coverage is not lying to you; it is mostly declining to answer, and that
+is worth knowing before you install it.
+
+**Django is the one being made good first, deliberately.** It is where the tool is used
+every day against a large production codebase, so it is the only place a wrong finding gets
+noticed the same afternoon. Every other backend is real, kept working and improving in the
+background — none of them are going away — but I would rather say plainly which one is
+finished than imply all seven are equal.
 
 | | | detected by | reads |
 |---|---|---|---|
@@ -226,6 +276,29 @@ is living with it.
 🟠 **read, barely used** — the reader exists and its demo passes; almost no real-world
 exposure.
 🔴 **not yet** — measured as worth doing, not built.
+
+### The order I am working in
+
+One backend at a time, and one repository at a time inside it. The method is dull on
+purpose: scan a real project, hand-check what it claims, fix the rule the mistake belongs
+to, then move to the next project. Coverage and precision both have to move before a
+backend is called finished — a tool that judges everything and is wrong half the time is
+worse than one that stays quiet.
+
+1. **Django — now.** Getting coverage and precision high enough that a finding can be
+   trusted without checking it. This is the one with a large private codebase behind it and
+   a growing set of open-source Django projects beside it.
+2. **The Python web backends next** — FastAPI and Flask, which share the extractors and the
+   template story, so most of what Django buys carries over.
+3. **The JavaScript backends after that** — Express, Fastify, NestJS, Next.js. The gap here
+   is well understood and measured: seamcheck reads `fetch()` and little else, so callers
+   written as React Query hooks, `router.push`, `<Link href>` or a generated API client are
+   invisible and their routes come back `uncertain`. That is one body of work, not seven.
+4. **The data layers throughout** — Redis is the most valuable of them, because no compiler
+   or ORM checks a key name and a typo is silent.
+
+Nothing gets removed while it waits its turn. Everything in the table works today; the
+question is only how much of your project it can speak to.
 
 ### This is where I could use help
 
@@ -273,9 +346,20 @@ the workspace manifests, project files and Dockerfiles, tells the deployables ap
 the libraries, and can say which service owns a file (`seamcheck share`, or the `services`
 MCP tool). A large monorepo commonly declares a hundred packages and deploys a handful.
 
-Also run against 32 open-source projects — 9.4M lines across all seven backends — as a
-standing check that it works on code I did not write. Aggregate only: I do not publish
-findings against a project by name. If yours does not work, I would genuinely like to know.
+**The corpus.** It runs against a standing set of open-source projects on every change, so
+"it works on code I did not write" is measured rather than hoped. Reading a lot of lines is
+not the same as understanding them, though, which is why the number reported above is
+coverage per backend and not a line count. Aggregate only: I do not publish findings
+against a project by name — at these precision levels a wrong finding published against
+someone's working code is a public accusation, and some of them will be wrong.
+
+Reproduce any of it yourself:
+
+```bash
+python tools/corpus.py clone && python tools/coverage.py   # coverage, per backend
+python tools/precision.py                                  # precision, against hand labels
+python tools/recall.py                                     # planted bugs, does it find them
+```
 
 ## It reads your data layer too
 
@@ -343,6 +427,45 @@ reader.
 cannot be known by reading the source, and I would rather it admitted that than pretended
 otherwise. It is also why the other three can be trusted.
 
+### How the four fit together, and the two numbers that measure them
+
+Every symbol gets exactly one of the four. Nothing is counted twice, and nothing is
+dropped:
+
+```
+every symbol found
+│
+├─ a verdict was reached ─────────────────────────── COVERAGE
+│  ├─ connected    something reaches it, evidence attached
+│  ├─ unresolved   reaches for a name that is not there  ─┐
+│  └─ unused       both ends visible, nothing connects   ─┴─ these two are CLAIMS
+│
+└─ uncertain  ── no evidence either way. NOT a claim that it is dead.
+   ├─ no oracle  the evidence is not in this repository, so nothing that
+   │             reads source can ever settle it. Not a gap - the shape of
+   │             the project. A CDN <link>, or Bootstrap in an uncommitted
+   │             node_modules.
+   └─ fixable    the evidence IS in the repository and Seamcheck cannot
+                 read it yet. This half is the to-do list.
+```
+
+**Two numbers, two different denominators.** Quoting either one alone is misleading, and
+quoting one as though it were the other is worse:
+
+| | | answers |
+|---|---|---|
+| **Coverage** | verdicts ÷ symbols | *"how much of my project can it speak to at all?"* |
+| **Precision** | true claims ÷ claims | *"when it does say something is broken, is it right?"* |
+
+**Precision says nothing about `uncertain`, because `uncertain` is not a claim.** A backend
+that answered `uncertain` for every single symbol would have flawless precision and be
+completely useless — which is exactly why coverage is reported per backend below, and why
+it is reported next to its ceiling.
+
+**And `uncertain` is never "probably dead".** It is the scan naming the evidence it does
+not have. If that reads as an accusation against working code, the wording is wrong and I
+would like to know.
+
 ## The commands
 
 ```bash
@@ -400,14 +523,54 @@ it. Every other backend is read from source, so anywhere works.
 The tools are thin wrappers over the same functions the CLI runs. If the agent and your
 terminal ever disagreed, neither would be worth trusting.
 
-## In CI, if you want it there
+## In CI — no token, no network, no model
+
+This is the part worth knowing before you try it anywhere else: **seamcheck is static
+analysis.** It reads files and exits. There is no API key, no account, no service to sign
+up for, no model call, and no network request of any kind — so there is no per-run cost, no
+rate limit, and nothing about your source leaves the machine it runs on. That last point is
+usually the one that decides whether a tool is allowed near a private repository at all.
 
 ```bash
 seamcheck check --since $BASE_SHA
 ```
 
-Exit 1 on new findings, 2 if there is no baseline yet, 0 when clean. It also writes a
-markdown digest you can post as a PR comment with `--format markdown`.
+Exit `1` on new findings, `2` if there is no baseline yet, `0` when clean. Add
+`--format markdown` for a digest you can post as a PR comment.
+
+**`--since` is the part that makes it adoptable.** Pointed at an existing codebase, any
+tool like this finds hundreds of things, and the usual outcome is that nobody fixes any of
+them and it gets switched off within a week. `--since` compares against a baseline and
+fails **only on what your branch added**, so the backlog stays where it is and the diff
+stays clean. You can turn it on today on a codebase with three thousand open findings and
+it will pass.
+
+```yaml
+# .github/workflows/seamcheck.yml
+name: seamcheck
+on: pull_request
+jobs:
+  seams:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }          # needs history for --since
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install seamcheck
+      - run: seamcheck check --since ${{ github.event.pull_request.base.sha }}
+```
+
+That is the whole integration. It runs on a stock runner in seconds to a couple of minutes
+depending on repository size, needs no secrets, and works the same on GitLab CI, CircleCI
+or a pre-push hook — it is one command with an exit code.
+
+**What it catches there that a test suite does not:** a renamed route whose caller was
+missed, a template attribute nothing writes any more, a CSS class deleted from one file and
+still referenced in three, a Redis key written under one name and read under another, a
+Stripe event your code dispatches on that Stripe will never send. None of these fail a
+test, because nothing throws — the value is just quietly wrong, or the element is quietly
+dead, and it ships.
 
 ## If it gets your project wrong, I would like to know
 

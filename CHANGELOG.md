@@ -2,7 +2,48 @@
 
 What changed, per release. Dates are when it went to PyPI.
 
+Each release carries the numbers it was measured at, so the trend is visible rather than
+asserted. All four are reproducible from a clean checkout — see the commands under
+[the corpus](README.md#does-it-work-with-my-stack).
+
+| | what it means | why both are needed |
+|---|---|---|
+| **coverage** | verdicts ÷ symbols | how much of a project it can speak to at all |
+| **precision** | true claims ÷ claims, hand-labelled | whether a finding can be trusted |
+| **recall** | planted bugs found ÷ planted | whether it still catches what it used to |
+| **render** | corpus repos whose map is a valid document | whether the output survives real input |
+
+Coverage and precision have **different denominators** and neither is meaningful alone: a
+backend that answered `uncertain` everywhere would score 100% precision and be useless.
+`uncertain` is not counted as a claim in precision, because it is not a claim.
+
+## Unreleased
+
+Coverage became a number this project actually reports, and reporting it found four bugs.
+
+- **Added** — `tools/coverage.py`. Precision alone could never answer "is this useful on my
+  stack"; a backend that says `uncertain` to everything scores perfectly and helps nobody.
+  Coverage is reported per backend, and split so it is honest in both directions: evidence
+  carriers excluded, *no oracle* (the evidence is not in the repository, so nothing can
+  settle it) separated from *fixable* (the to-do list).
+- **Added** — Sass, SCSS and Less read for the class names they define. Django projects
+  compile their styles at deploy, so the `.css` scan saw almost nothing. pretix 83% → 87%.
+- **Added** — 14 full-stack repositories, Django first, on a written rule: a repository
+  earns a place by containing **both sides** of a seam. An API-only service measures the
+  route reader and nothing else.
+- **Fixed** — an `uncertain` that could not say what evidence was missing. 91% of NetBox's
+  printed as "(no note recorded)", because `Edge` had no note field at all.
+- **Fixed** — HTML reads an id without any JavaScript. `<a href="#create">`, `<label for>`,
+  `data-bs-target` and the ARIA relations are all reads, and none of them counted. Sentry
+  had the anchor four lines above the element, in the same file, and the id was still
+  reported unused.
+- **Fixed** — the evidence exemption existed in the DOM matcher and not the CSS matcher,
+  which reaches the same symbols by a different route: 58 findings against correct markup.
+
 ## 0.8.1 — 2 Sep 2026
+
+**Measured:** precision **45%** (166 hand-labelled claims, up from 42%) · recall **6/6** ·
+render **32/32** repos, 137,273 nodes, 352 emitted scripts pass `node --check`.
 
 Five false-positive patterns, each found by someone running 0.8.0 on a real project and
 checking the findings by hand.
