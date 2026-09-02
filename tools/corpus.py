@@ -172,6 +172,61 @@ REPOS = [
         "why": "small, and its whole product IS templates plus CSS plus JS - dense seams"
                " per line of code",
     },
+    # --- queued: full-stack projects for the backends after Django ----------------
+    # Listed, not yet cloned. Django is being finished first; these are chosen already so
+    # the next backend starts with a corpus rather than a search.
+    {
+        "name": "searxng",
+        "url": "https://github.com/searxng/searxng",
+        "adapter": "flask",
+        "why": "Flask rendering Jinja templates with its own CSS and JS - the Flask"
+               " equivalent of the Django projects above",
+    },
+    {
+        "name": "indico",
+        "url": "https://github.com/indico/indico",
+        "adapter": "flask",
+        "why": "large Flask, templates plus a big hand-written frontend in the same tree",
+    },
+    {
+        "name": "etherpad-lite",
+        "url": "https://github.com/ether/etherpad-lite",
+        "adapter": "express",
+        "why": "Express serving its own frontend - both halves in one repository, which is"
+               " rare enough among Node projects to be worth having",
+    },
+    {
+        "name": "plane",
+        "url": "https://github.com/makeplane/plane",
+        "adapter": "nextjs",
+        "why": "Next.js frontend with a Django backend in the same repository - the"
+               " cross-LANGUAGE seam, which is the case this tool exists for",
+    },
+    {
+        "name": "formbricks",
+        "url": "https://github.com/formbricks/formbricks",
+        "adapter": "nextjs",
+        "why": "Next.js full-stack: routes and the pages calling them in one tree",
+    },
+    {
+        "name": "openstatus",
+        "url": "https://github.com/openstatusHQ/openstatus",
+        "adapter": "nextjs",
+        "why": "Next.js monorepo, small enough to hand-check completely",
+    },
+    {
+        "name": "twenty",
+        "url": "https://github.com/twentyhq/twenty",
+        "adapter": "nestjs",
+        "why": "NestJS server and a React client in one repository - NestJS is the weakest"
+               " backend here and has no full-stack project in the corpus at all",
+    },
+    {
+        "name": "vendure",
+        "url": "https://github.com/vendure-ecommerce/vendure",
+        "adapter": "nestjs",
+        "why": "NestJS with an admin UI in-tree - a second shape for the weakest reader",
+    },
     # --- deliberately large, to find what only shows up at scale -------------------
     {
         "name": "sentry",
