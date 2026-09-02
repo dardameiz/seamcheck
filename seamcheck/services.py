@@ -135,6 +135,8 @@ def _is_deployable(directory: pathlib.Path, rel: str, evidence: list[str]) -> bo
 
 
 def _language_of(directory: pathlib.Path) -> str:
+    if (directory / "manage.py").is_file():
+        return "Python"
     if (directory / "package.json").is_file():
         return "JavaScript"
     if any((directory / n).is_file() for n in ("pyproject.toml", "setup.py", "requirements.txt")):
@@ -164,7 +166,13 @@ def _walk_manifests(root: pathlib.Path) -> dict[str, list[str]]:
         ]
         names = [
             f for f in files
-            if f in ("package.json", "pyproject.toml", "go.mod", "Cargo.toml", "pom.xml")
+            if f in ("package.json", "pyproject.toml", "go.mod", "Cargo.toml", "pom.xml",
+                     # A Django service in a monorepo often carries no packaging manifest
+                     # at all - the dependencies live at the repository root. manage.py is
+                     # the marker it always has, and without it the Python half of a
+                     # polyglot repo is invisible: every one of its files was being
+                     # attributed to the Node service beside it.
+                     "manage.py")
             or f.startswith("Dockerfile")
         ]
         if names:
@@ -248,7 +256,12 @@ def detect_services(repo_root: str) -> list[Service]:
         if not rel:
             continue
         has_project = any(
-            n in ("pyproject.toml", "go.mod", "Cargo.toml", "pom.xml") for n in names
+            # manage.py counts: a Django service inside a monorepo frequently declares
+            # its dependencies at the repository root and carries no manifest of its own,
+            # and without this the entire Python half of a polyglot repository is not a
+            # service at all - it is unattributed files sitting beside the Node one.
+            n in ("pyproject.toml", "go.mod", "Cargo.toml", "pom.xml", "manage.py")
+            for n in names
         )
         has_docker = any(n.startswith("Dockerfile") for n in names)
         if not (has_project or has_docker):
@@ -295,8 +308,16 @@ class ServiceMap:
         self.single = len(services) <= 1
 
     def of(self, repo_relative_file: str) -> str:
-        if self.single or not repo_relative_file:
-            return self.services[0].name if self.services else ""
+        if not self.services:
+            return ""
+        # One service rooted at "" IS the repository, and every file belongs to it. One
+        # service rooted at `services/api` does NOT own `services/web` - answering with
+        # its name labelled a whole Django application as the Node service next to it,
+        # which is worse than admitting the file belongs to no detected service.
+        if self.single and not self.services[0].root:
+            return self.services[0].name
+        if not repo_relative_file:
+            return ""
         path = repo_relative_file.replace(os.sep, "/")
         for service in self.services:
             if service.contains(path):

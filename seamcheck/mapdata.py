@@ -115,6 +115,12 @@ class MapNode:
     # A few lines around it, for the kinds that carry the frontend-to-backend story. One
     # line tells you a call happened; the lines around it are where you learn how.
     context: str = ""
+    # What language this node IS, and which deployable it belongs to. Read from the file
+    # rather than from the service, because they disagree and the file is the truth: a
+    # Django service happily contains TypeScript, and labelling that node "Python"
+    # because of the directory it sits in is the mistake this is meant to prevent.
+    lang: str = ""
+    service: str = ""
 
 
 @dataclass
@@ -148,7 +154,31 @@ class ConnectivityMap:
     changed: dict[str, str] = field(default_factory=dict)
 
 
-def _node(symbol: Symbol, context: bool = True, snippet_limit: int = 400) -> MapNode:
+# Extension -> the name a person would use for it. Deliberately the language, not the
+# file type: a reader scanning a map for "where is the TypeScript" is asking about a
+# language boundary, and `.tsx` and `.ts` are the same side of it.
+_LANGS = {
+    ".py": "Python", ".pyi": "Python",
+    ".ts": "TypeScript", ".tsx": "TypeScript", ".mts": "TypeScript", ".cts": "TypeScript",
+    ".js": "JavaScript", ".jsx": "JavaScript", ".mjs": "JavaScript", ".cjs": "JavaScript",
+    ".vue": "Vue", ".svelte": "Svelte",
+    ".css": "CSS", ".scss": "Sass", ".sass": "Sass", ".less": "Less",
+    ".html": "Template", ".htm": "Template", ".jinja": "Template", ".jinja2": "Template",
+    ".j2": "Template", ".twig": "Template", ".erb": "Template",
+    ".sql": "SQL", ".go": "Go", ".rs": "Rust", ".rb": "Ruby", ".php": "PHP",
+    ".java": "Java", ".kt": "Kotlin", ".cs": "C#",
+}
+
+
+def language_of(path: str) -> str:
+    """The language of a FILE. Empty when it is not a language this names."""
+    if not path:
+        return ""
+    return _LANGS.get(os.path.splitext(path)[1].lower(), "")
+
+
+def _node(symbol: Symbol, context: bool = True, snippet_limit: int = 400,
+          services=None) -> MapNode:
     # The site root is path("", index): a genuinely empty label that must still be
     # nameable on screen.
     label = symbol.label if (symbol.label or "").strip() else "/"
@@ -158,6 +188,8 @@ def _node(symbol: Symbol, context: bool = True, snippet_limit: int = 400) -> Map
         context=_context(symbol.file, symbol.line)
                 if context and symbol.kind in _CONTEXT_KINDS else "",
         file=symbol.file, line=symbol.line, note=symbol.note,
+        lang=language_of(symbol.file),
+        service=services.of(symbol.file) if services and symbol.file else "",
     )
 
 
@@ -169,7 +201,7 @@ def _module_node_id(path: str) -> str:
     return f"module:{path}"
 
 
-def build_page_map(page: str, files: set[str], graph: Graph, adjacency: dict[str, list]) -> PageMap:
+def build_page_map(page: str, files: set[str], graph: Graph, adjacency: dict[str, list], services=None) -> PageMap:
     by_id = {symbol.id: symbol for symbol in graph.symbols}
     nodes: dict[str, MapNode] = {_page_node_id(page): MapNode(_page_node_id(page), page, "page", "connected")}
     edges: list[MapEdge] = []
@@ -193,10 +225,12 @@ def build_page_map(page: str, files: set[str], graph: Graph, adjacency: dict[str
     frontier: list[tuple[str, Symbol]] = []
     for path, seeds in sorted(seeds_by_module.items()):
         module_id = _module_node_id(path)
-        nodes[module_id] = MapNode(module_id, os.path.basename(path), "module", "connected", file=path)
+        nodes[module_id] = MapNode(module_id, os.path.basename(path), "module", "connected",
+                                  file=path, lang=language_of(path),
+                                  service=services.of(path) if services else "")
         _add_edge(_page_node_id(page), module_id, Status.CONNECTED.value)
         for symbol in seeds:
-            nodes[symbol.id] = _node(symbol)
+            nodes[symbol.id] = _node(symbol, services=services)
             _add_edge(module_id, symbol.id, symbol.status.value)
             frontier.append((symbol.id, symbol))
 
@@ -224,7 +258,9 @@ def build_page_map(page: str, files: set[str], graph: Graph, adjacency: dict[str
                 writer_id = _module_node_id(writer)
                 if writer_id not in nodes:
                     nodes[writer_id] = MapNode(
-                        writer_id, os.path.basename(writer), "module", "connected", file=writer)
+                        writer_id, os.path.basename(writer), "module", "connected",
+                        file=writer, lang=language_of(writer),
+                        service=services.of(writer) if services else "")
                     _add_edge(_page_node_id(page), writer_id, Status.CONNECTED.value)
                 _add_edge(writer_id, symbol.id, symbol.status.value)
 
@@ -242,7 +278,7 @@ def build_page_map(page: str, files: set[str], graph: Graph, adjacency: dict[str
                     continue
                 _add_edge(symbol_id, neighbour_id, status)
                 if neighbour_id not in nodes:
-                    nodes[neighbour_id] = _node(neighbour)
+                    nodes[neighbour_id] = _node(neighbour, services=services)
                     if neighbour.kind in _EXPANDABLE_KINDS:
                         next_frontier.append((neighbour_id, neighbour))
         frontier = next_frontier
@@ -282,7 +318,7 @@ def _unreached_group(kind: str) -> tuple[str, str]:
     return UNREACHED_OTHER
 
 
-def build_unreached_pages(graph: Graph, covered: set[str]) -> list[PageMap]:
+def build_unreached_pages(graph: Graph, covered: set[str], services=None) -> list[PageMap]:
     """One page per family of symbols that no page entry reaches."""
     buckets: dict[str, list[Symbol]] = {}
     blurbs: dict[str, str] = {}
@@ -304,7 +340,8 @@ def build_unreached_pages(graph: Graph, covered: set[str]) -> list[PageMap]:
         # sit on no chain (there is no path to read them along), and the full text of
         # 32,301 source lines is megabytes nobody opens. The label, the file and the line
         # are what a reader needs here, and file:line opens the real thing.
-        nodes = [_node(symbol, context=False, snippet_limit=120) for symbol in symbols]
+        nodes = [_node(symbol, context=False, snippet_limit=120, services=services)
+                 for symbol in symbols]
         edges = [
             MapEdge(edge.from_id, edge.to_id, edge.status.value)
             for edge in graph.edges
@@ -335,11 +372,12 @@ def build_map(
     now: str | None = None,
     names: dict[str, PageName] | None = None,
     commits: list[dict] | None = None,
+    services=None,
 ) -> ConnectivityMap:
     adjacency = build_adjacency(graph)
     page_maps = []
     for page, files in sorted(pages.items()):
-        page_map = build_page_map(page, files, graph, adjacency)
+        page_map = build_page_map(page, files, graph, adjacency, services=services)
         name = (names or {}).get(page)
         page_map.title = name.title if name else page
         page_map.where = name.where if name else ""
@@ -351,7 +389,7 @@ def build_map(
     # ...and last, everything the page graph does not reach, so "where did the other 90%
     # go" has an answer on the same picker rather than being absent from the map.
     covered = {node.id for page_map in page_maps for node in page_map.nodes}
-    page_maps += build_unreached_pages(graph, covered)
+    page_maps += build_unreached_pages(graph, covered, services=services)
 
     changed: dict[str, str] = {}
     if baseline is not None:

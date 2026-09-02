@@ -770,7 +770,11 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
 .nd.agg { cursor:pointer; }
 .nd.agg rect { stroke-width:2; }
 /* The bands sit behind everything and are barely there - a region marker, not a panel. */
-#cv .band { fill:var(--panel); opacity:.30; stroke:var(--line); stroke-width:1; }
+#cv .band { fill:var(--panel); opacity:.30; stroke:var(--text); stroke-width:2.5;
+            stroke-opacity:.55; }
+/* Named languages, sitting on the band's own top line. */
+#cv .bandlang { fill:var(--text); font-size:15px; font-weight:600; letter-spacing:.04em;
+                text-anchor:end; opacity:.72; font-family:var(--mono); }
 #cv .band.seam { fill:var(--sig-fill); opacity:.55; stroke:var(--sig);
                  stroke-dasharray:5 4; }
 /* A lane heading inside a band. Bigger than the kind headings under it, because the
@@ -1225,6 +1229,7 @@ const BANDS = [
 ];
 const PAGES = (() => {
   const F = MAPDATA.fields, K = MAPDATA.kinds, S_ = MAPDATA.statuses, FI = MAPDATA.files;
+  const LA = MAPDATA.langs || [], SV = MAPDATA.services || [];
   const inflate = row => {
     const n = {};
     F.forEach((field, i) => {
@@ -1232,6 +1237,8 @@ const PAGES = (() => {
       n[field] = field === "kind" ? K[v]
         : field === "status" ? S_[v]
         : field === "file" ? (FI[v] || "")
+        : field === "lang" ? (LA[v] || "")
+        : field === "service" ? (SV[v] || "")
         : (v == null ? (field === "line" ? null : "") : v);
     });
     return n;
@@ -1723,7 +1730,7 @@ function fit(text, max) {
 const NODE_W = 150, LANE = 160, ROW = 30;
 // The second line of a card, in a reader's words rather than the extractor's.
 const KIND_WORD = {
-  page: "page", module: "javascript file", js_call: "fetch call",
+  page: "page", module: "source file", js_call: "fetch call",
   fetch_target: "request", url: "route", view: "handler", model: "model",
   dom_selector: "selector in js", dom_attr: "element in a template",
   multi_writer_element: "written by more than one file",
@@ -1836,6 +1843,7 @@ function place(buckets, used, perRow) {
 
   [...groups.keys()].sort((m, n) => m - n).forEach(at => {
     let x = 44, rowTop = y + BAND_TOP, tallest = 0;
+    const bandLangs = new Set();
     const bandDef = BANDS[at];
     // A band with lanes orders its columns by store and heads each run with the store's
     // name and its oracle badge. Everything else keeps the flat kind order.
@@ -1873,6 +1881,11 @@ function place(buckets, used, perRow) {
         }
       }
       columns.push({x, y: rowTop - 9, kind, label, count: items.length});
+      // Which languages this band actually contains. A reader zoomed out wants to know
+      // that the browser strip is JavaScript AND TypeScript AND CSS before they can read
+      // a single card, and that the server strip is a different language again - that
+      // crossing is the whole subject and the map never said it.
+      items.forEach(n => { if (n.lang) bandLangs.add(n.lang); });
 
       if (items.length > AGGREGATE_OVER && !expandedKind) {
         // One card for the whole kind, sized up because it stands for more.
@@ -1903,7 +1916,7 @@ function place(buckets, used, perRow) {
     const band = BANDS[at] || {id: "other", label: "EVERYTHING ELSE THE SCAN FOUND",
                                short: "EVERYTHING ELSE"};
     bands.push({id: band.id, label: band.label, short: band.short || band.label,
-                y, h, first: bands.length === 0});
+                langs: [...bandLangs].sort(), y, h, first: bands.length === 0});
     y += h + BAND_GAP;
   });
   bands.forEach(band => { band.w = Math.max(width - 26, 300); });
@@ -2184,6 +2197,14 @@ function draw() {
     if (rest.length) {
       out.push(`<text class="bandlbl" x="44" y="${band.y + 62}">${esc(rest.join(" \u2014 "))}</text>`);
     }
+    // The languages in this strip, named on the strip. Right-aligned so it reads as a
+    // property of the region rather than part of its title, and large enough to survive
+    // being zoomed out - which is the only view in which "what is this repository made
+    // of" is the question being asked.
+    if (band.langs && band.langs.length) {
+      out.push(`<text class="bandlang" x="${26 + band.w - 18}" y="${band.y + 42}">`
+        + esc(band.langs.join("  \u00b7  ")) + `</text>`);
+    }
   });
   columns.forEach(c => out.push(
     `<text class="col" x="${c.x}" y="${c.y}">${esc(c.label)} ${c.count}</text>`));
@@ -2293,7 +2314,12 @@ function draw() {
     // Two lines: what it is called, and what it IS. One truncated line was the whole
     // reason nothing on this canvas could be read.
     const label = fit(n.label, 24);
-    const sub = fit(KIND_WORD[n.kind] || n.kind.replace(/_/g, " "), 26);
+    // A module's second line names its LANGUAGE, because that is the thing a reader is
+    // actually scanning for on a polyglot map - "javascript file" under a card called
+    // totals.ts was wrong on its face, and wrong in the one way this map exists to fix.
+    const sub = fit(
+      n.kind === "module" && n.lang ? n.lang.toLowerCase() + " file"
+        : (KIND_WORD[n.kind] || n.kind.replace(/_/g, " ")), 26);
     out.push(`<g class="nd${shown ? "" : " faded"}${n.id === lit ? " lit" : ""}" data-id="${n.id}">
       <rect x="${q.x}" y="${q.y}" width="${q.w}" height="${q.h}" rx="${NODE_R}"
             fill="${alone ? (F[n.status] || "var(--panel)") : "var(--panel)"}"
@@ -4057,7 +4083,8 @@ def _esc(value) -> str:
 # So nodes travel as arrays in a fixed order against three string tables, and the page
 # expands them back into exactly the objects the rest of the script already reads. The
 # decode is one pass at load; nothing downstream knows the difference.
-_NODE_FIELDS = ("id", "label", "kind", "status", "file", "line", "note", "snippet", "context")
+_NODE_FIELDS = ("id", "label", "kind", "status", "file", "line", "note", "snippet",
+                "context", "lang", "service")
 
 
 class _Table:
@@ -4076,6 +4103,9 @@ class _Table:
 
 def _payload(connectivity_map: ConnectivityMap) -> str:
     kinds, statuses, files = _Table(), _Table(), _Table()
+    # Interned like the others: a repository has a handful of languages and services, and
+    # every node repeats one of each.
+    langs, services = _Table(), _Table()
 
     def _row(node):
         # Trailing empties are dropped, not sent as "": most nodes carry no note and the
@@ -4083,6 +4113,7 @@ def _payload(connectivity_map: ConnectivityMap) -> str:
         row = [
             node.id, node.label, kinds(node.kind), statuses(node.status),
             files(node.file or ""), node.line, node.note, node.snippet, node.context,
+            langs(node.lang or ""), services(node.service or ""),
         ]
         while len(row) > 4 and not row[-1]:
             row.pop()
@@ -4106,6 +4137,8 @@ def _payload(connectivity_map: ConnectivityMap) -> str:
         "kinds": kinds.values,
         "statuses": statuses.values,
         "files": files.values,
+        "langs": langs.values,
+        "services": services.values,
         "pages": pages,
     }
     # </script> inside JSON would close the tag early; escaping the slash is the
