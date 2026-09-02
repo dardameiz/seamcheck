@@ -165,7 +165,12 @@ def match_css_selectors(
     `page-item` and friends - every one of them styled perfectly well, by a stylesheet the
     scan was never shown.
     """
-    css_by_key = {(symbol.sub, symbol.label): symbol for symbol in css_selectors}
+    # A project's own rule outranks a vendor rule of the same name, so project rules are
+    # written last. The vendor prefix is stripped from the key: `("class", "form-row")` is
+    # what the DOM side asks for, whoever defined it.
+    css_by_key: dict[tuple[str, str], Symbol] = {}
+    for symbol in sorted(css_selectors, key=lambda s: not s.sub.startswith("vendor:")):
+        css_by_key[(symbol.sub.removeprefix("vendor:"), symbol.label)] = symbol
     used_keys: set[tuple[str, str]] = set()
 
     edges: list[Edge] = []
@@ -214,6 +219,12 @@ def match_css_selectors(
 
     for key, symbol in css_by_key.items():
         if key in used_keys:
+            continue
+        # A framework's own stylesheet - Django admin's base.css, shipped in site-packages
+        # - is read so the classes it defines resolve, and is never judged: a vendor rule
+        # this project does not happen to use is not this project's dead code.
+        if symbol.sub.startswith("vendor:"):
+            edges.append(Edge(from_id=symbol.id, to_id=symbol.id, status=Status.UNCERTAIN))
             continue
         # A rule nothing references, where the name could still be built at runtime, is not
         # evidence of anything. Marked UNCERTAIN here rather than downgraded later, because

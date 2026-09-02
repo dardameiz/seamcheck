@@ -44,10 +44,16 @@ CORPUS = pathlib.Path(
 CLAIMS = ("unresolved", "unused")
 
 
+def _root(repo: str) -> str:
+    """Where the repository is. Corpus by default; a label file may say otherwise."""
+    override = _labels(repo).get("_root")
+    return override if isinstance(override, str) and override else str(CORPUS / repo)
+
+
 def _claims(repo: str) -> list:
     from seamcheck import api
 
-    graph = api.scan(str(CORPUS / repo))
+    graph = api.scan(_root(repo))
     return [s for s in graph.symbols if s.status.value in CLAIMS]
 
 

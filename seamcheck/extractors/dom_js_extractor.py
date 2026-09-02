@@ -444,11 +444,42 @@ def extract_js_class_usages(
     units += list(parse_inline_blocks(template_files or []))
 
     for path, ast_root, line_offset in units:
+        # CSS Modules: `import styles from "./X.module.css"` makes every `styles.foo` and
+        # `styles["foo"]` an application of the class `foo`. Nothing here read that, and
+        # on a React codebase that is nearly every class there is: one project scored 0 of
+        # 12 sampled "unused CSS" claims true, with 729 rules reported dead because the
+        # only thing that referenced them was `className={styles.sectionLink}`.
+        module_bindings = _css_module_bindings(ast_root)
+
         for node, enclosing in _walk(ast_root):
             raw_line = ((node.get("loc") or {}).get("start") or {}).get("line")
             line = (raw_line + line_offset) if raw_line else raw_line
             node_type = node.get("type")
             sources: list[tuple[str, str]] = []
+
+            # JSX: <div className="a b"> and <div className={cond ? "a" : "b"}>. The
+            # attribute form, which is how React applies classes, as opposed to the
+            # `el.className = ...` assignment the branch below already reads.
+            if node_type == "JSXAttribute":
+                attr_name = (node.get("name") or {}).get("name")
+                if attr_name in ("className", "class"):
+                    value = node.get("value") or {}
+                    if value.get("type") == "JSXExpressionContainer":
+                        value = value.get("expression") or {}
+                    for text in _literal_strings(value):
+                        sources += [(token, f'{attr_name}="..."') for token in _class_tokens(text)]
+
+            elif node_type == "MemberExpression" and module_bindings:
+                obj = node.get("object") or {}
+                if obj.get("type") == "Identifier" and obj.get("name") in module_bindings:
+                    prop = node.get("property") or {}
+                    name = None
+                    if not node.get("computed") and prop.get("type") == "Identifier":
+                        name = prop.get("name")
+                    elif prop.get("type") == "Literal" and isinstance(prop.get("value"), str):
+                        name = prop.get("value")
+                    if name:
+                        sources.append((name, f"{obj['name']}.{name} (CSS module)"))
 
             if node_type == "AssignmentExpression":
                 target = node.get("left") or {}
@@ -510,6 +541,27 @@ def extract_js_class_usages(
                 )
 
     return symbols
+
+
+_CSS_MODULE_SUFFIXES = (".module.css", ".module.scss", ".module.sass", ".module.less",
+                        ".module.styl")
+
+
+def _css_module_bindings(ast_root: dict) -> set[str]:
+    """Local names bound to a CSS-module import: `styles` in `import styles from "./x.module.css"`."""
+    names: set[str] = set()
+    for node in (ast_root.get("body") or []) if isinstance(ast_root, dict) else []:
+        if not isinstance(node, dict) or node.get("type") != "ImportDeclaration":
+            continue
+        source = ((node.get("source") or {}).get("value") or "")
+        if not isinstance(source, str) or not source.endswith(_CSS_MODULE_SUFFIXES):
+            continue
+        for spec in node.get("specifiers") or []:
+            if spec.get("type") in ("ImportDefaultSpecifier", "ImportNamespaceSpecifier"):
+                local = (spec.get("local") or {}).get("name")
+                if local:
+                    names.add(local)
+    return names
 
 
 def _definition(kind_sub: str, name: str, path: str, line, enclosing: str, snippet: str) -> Symbol:

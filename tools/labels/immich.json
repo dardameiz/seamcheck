@@ -1,0 +1,75 @@
+{
+ "_why": "immich monorepo (NestJS server + SvelteKit web + FastAPI ML + Dart mobile): 543 symbols, 18 claims (17 env_var unused, 1 fetch_target unresolved), all 18 judged, all 18 FALSE. 502/525 uncertain symbols (307 view + 195 url) are uncertain because the web frontend reaches every route only through the generated oazapfts SDK (packages/sdk/src/fetch-client.ts, imported as @immich/sdk 348 times in web/src) whose fetchJson(\"/server/features\") calls carry no /api prefix and no fetch() literal, and the other client is the Dart mobile app the scanner cannot read \u2014 so 'uncertain' is the honest status there.",
+ "fetch:data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI2NHB4IiBoZWlnaHQ9IjY0cHgiIHZpZXdCb3g9IjAgMCA2NCA2NCIgdmVyc2lvbj0iMS4xIj48cmVjdCBmaWxsPSIjMzc3YjM3IiBjeD0iMzIiIGN5PSIzMiIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByPSIzMiIvPjx0ZXh0IHg9IjUwJSIgeT0iNTAlIiBzdHlsZT0iY29sb3I6ICNmZmY7IGxpbmUtaGVpZ2h0OiAxOyBmb250LWZhbWlseTogJ1JlZEhhdFRleHQnLCdPdmVycGFzcycsb3ZlcnBhc3MsaGVsdmV0aWNhLGFyaWFsLHNhbnMtc2VyaWY7ICIgZmlsbD0iI2ZmZiIgYWxpZ25tZW50LWJhc2VsaW5lPSJtaWRkbGUiIGRvbWluYW50LWJhc2VsaW5lPSJtaWRkbGUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMjgiIGZvbnQtd2VpZ2h0PSI0MDAiIGR5PSIuMWVtIj5BQTwvdGV4dD48L3N2Zz4=": {
+  "verdict": "false",
+  "why": "data: URI passed to fetch() in a test (server/src/repositories/media.repository.spec.ts:329) \u2014 the URL IS the content, there is no endpoint to resolve; nothing is 'not there'"
+ },
+ "env_var:BUILD_ID": {
+  "verdict": "false",
+  "why": "Dockerfile ARG->ENV rename bridge: compose build-arg -> server/Dockerfile ARG -> re-exported as IMMICH_* ENV (e.g. ENV IMMICH_BUILD=${BUILD_ID}) which IS read via the zod env schema; tool did not follow the Dockerfile rename"
+ },
+ "env_var:BUILD_IMAGE": {
+  "verdict": "false",
+  "why": "Dockerfile ARG->ENV rename bridge: compose build-arg -> server/Dockerfile ARG -> re-exported as IMMICH_* ENV (e.g. ENV IMMICH_BUILD=${BUILD_ID}) which IS read via the zod env schema; tool did not follow the Dockerfile rename"
+ },
+ "env_var:BUILD_SOURCE_COMMIT": {
+  "verdict": "false",
+  "why": "Dockerfile ARG->ENV rename bridge: compose build-arg -> server/Dockerfile ARG -> re-exported as IMMICH_* ENV (e.g. ENV IMMICH_BUILD=${BUILD_ID}) which IS read via the zod env schema; tool did not follow the Dockerfile rename"
+ },
+ "env_var:BUILD_SOURCE_REF": {
+  "verdict": "false",
+  "why": "Dockerfile ARG->ENV rename bridge: compose build-arg -> server/Dockerfile ARG -> re-exported as IMMICH_* ENV (e.g. ENV IMMICH_BUILD=${BUILD_ID}) which IS read via the zod env schema; tool did not follow the Dockerfile rename"
+ },
+ "env_var:CLOUDFLARE_ACCOUNT_ID": {
+  "verdict": "false",
+  "why": "reader exists in-repo but in Terragrunt HCL: deployment/state.hcl get_env(\"<NAME>\") reads the export from deployment/.env (a shell script, not dotenv); the tool does not parse .hcl"
+ },
+ "env_var:CLOUDFLARE_API_TOKEN": {
+  "verdict": "false",
+  "why": "reader exists in-repo but in Terragrunt HCL: deployment/state.hcl get_env(\"<NAME>\") reads the export from deployment/.env (a shell script, not dotenv); the tool does not parse .hcl"
+ },
+ "env_var:DB_DATABASE_NAME": {
+  "verdict": "false",
+  "why": "zod env-schema indirection: read via EnvSchema.safeParse(process.env) in server/src/dtos/env.dto.ts and consumed in server/src/repositories/config.repository.ts \u2014 no literal process.env.<NAME>, so the tool missed the reader (env.dto.ts declares DB_DATABASE_NAME)"
+ },
+ "env_var:DB_PASSWORD": {
+  "verdict": "false",
+  "why": "zod env-schema indirection: read via EnvSchema.safeParse(process.env) in server/src/dtos/env.dto.ts and consumed in server/src/repositories/config.repository.ts \u2014 no literal process.env.<NAME>, so the tool missed the reader (env.dto.ts declares DB_PASSWORD)"
+ },
+ "env_var:DB_USERNAME": {
+  "verdict": "false",
+  "why": "zod env-schema indirection: read via EnvSchema.safeParse(process.env) in server/src/dtos/env.dto.ts and consumed in server/src/repositories/config.repository.ts \u2014 no literal process.env.<NAME>, so the tool missed the reader (env.dto.ts declares DB_USERNAME)"
+ },
+ "env_var:IMMICH_ENV": {
+  "verdict": "false",
+  "why": "zod env-schema indirection: read via EnvSchema.safeParse(process.env) in server/src/dtos/env.dto.ts and consumed in server/src/repositories/config.repository.ts \u2014 no literal process.env.<NAME>, so the tool missed the reader (env.dto.ts declares IMMICH_ENV)"
+ },
+ "env_var:IMMICH_IGNORE_MOUNT_CHECK_ERRORS": {
+  "verdict": "false",
+  "why": "zod env-schema indirection: read via EnvSchema.safeParse(process.env) in server/src/dtos/env.dto.ts and consumed in server/src/repositories/config.repository.ts \u2014 no literal process.env.<NAME>, so the tool missed the reader (env.dto.ts declares IMMICH_IGNORE_MOUNT_CHECK_ERRORS)"
+ },
+ "env_var:IMMICH_TELEMETRY_INCLUDE": {
+  "verdict": "false",
+  "why": "zod env-schema indirection: read via EnvSchema.safeParse(process.env) in server/src/dtos/env.dto.ts and consumed in server/src/repositories/config.repository.ts \u2014 no literal process.env.<NAME>, so the tool missed the reader (env.dto.ts declares IMMICH_TELEMETRY_INCLUDE)"
+ },
+ "env_var:POSTGRES_DB": {
+  "verdict": "false",
+  "why": "third-party image env contract: set on the official postgres container in the same compose file; consumed by the image entrypoint outside the repo \u2014 'unused' is not evidenceable (the tool's own note admits the consumer may be a base image), correct status is uncertain; deleting it breaks the database"
+ },
+ "env_var:POSTGRES_INITDB_ARGS": {
+  "verdict": "false",
+  "why": "third-party image env contract: set on the official postgres container in the same compose file; consumed by the image entrypoint outside the repo \u2014 'unused' is not evidenceable (the tool's own note admits the consumer may be a base image), correct status is uncertain; deleting it breaks the database"
+ },
+ "env_var:POSTGRES_PASSWORD": {
+  "verdict": "false",
+  "why": "third-party image env contract: set on the official postgres container in the same compose file; consumed by the image entrypoint outside the repo \u2014 'unused' is not evidenceable (the tool's own note admits the consumer may be a base image), correct status is uncertain; deleting it breaks the database"
+ },
+ "env_var:POSTGRES_USER": {
+  "verdict": "false",
+  "why": "third-party image env contract: set on the official postgres container in the same compose file; consumed by the image entrypoint outside the repo \u2014 'unused' is not evidenceable (the tool's own note admits the consumer may be a base image), correct status is uncertain; deleting it breaks the database"
+ },
+ "env_var:TF_STATE_POSTGRES_CONN_STR": {
+  "verdict": "false",
+  "why": "reader exists in-repo but in Terragrunt HCL: deployment/state.hcl get_env(\"<NAME>\") reads the export from deployment/.env (a shell script, not dotenv); the tool does not parse .hcl"
+ }
+}

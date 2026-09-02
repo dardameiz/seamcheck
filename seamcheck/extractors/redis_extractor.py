@@ -42,16 +42,22 @@ from seamcheck.graph import Edge, Status, Symbol
 # and Maps (`get`, `set`, `keys`) are the reason a receiver check matters below.
 _READS = frozenset({
     "get", "mget", "getdel", "hget", "hmget", "hgetall", "hkeys", "hvals", "exists",
+    # A pop CONSUMES: it is the reading half of a queue that a push fills. Listing it as a
+    # write reported the one line that drains `import:csv:*:rows` as proof nothing read it.
+    "lpop", "rpop", "blpop", "brpop", "lindex", "rpoplpush",
     "smembers", "sismember", "scard", "zrange", "zrevrange", "zscore", "zcard",
     "lrange", "llen", "ttl", "pttl", "getrange", "sscan", "hscan", "type",
 })
 _WRITES = frozenset({
     "set", "setex", "setnx", "psetex", "mset", "getset", "hset", "hmset", "hsetnx",
     "hincrby", "incr", "incrby", "decr", "decrby", "expire", "pexpire", "delete", "del",
-    "unlink", "sadd", "srem", "zadd", "zrem", "zincrby", "lpush", "rpush", "lpop", "rpop",
+    "unlink", "sadd", "srem", "zadd", "zrem", "zincrby", "lpush", "rpush",
     "append", "setbit", "publish",
 })
 _ALL = _READS | _WRITES
+# Writes that REMOVE or merely touch, and so can never need an expiry.
+_NOT_STORES = frozenset({"delete", "del", "unlink", "expire", "pexpire", "publish",
+                         "srem", "zrem", "lpop", "rpop"})
 
 # A receiver that says "this is Redis" rather than a dict. Without it, every `d.get(k)` in
 # a Python codebase becomes a Redis key and the finding list is noise.
@@ -63,7 +69,10 @@ _CACHE_ISH = re.compile(r"^(cache|tmp|temp|session|otp|rate_?limit|lock|throttle
 
 _TTL_KWARGS = ("ex", "px", "exat", "pxat", "expire", "ttl", "timeout", "nx", "keepttl")
 
-_PY_SKIP = SKIP_DIRS
+# Tests too. A key a test writes with a Lua script and reads back is a fact about the
+# harness; three of one project's "read, never written" keys were exactly that, and a
+# fourth was the Django test client being mistaken for a Redis one.
+_PY_SKIP = SKIP_DIRS | {"test", "tests", "__tests__", "e2e", "spec", "specs", "testing"}
 # A minified bundle is the same code already read from source, and megabytes of it.
 _MAX_BYTES = 400_000
 # A minified bundle is source already read, and megabytes of it.
@@ -115,14 +124,25 @@ def _looks_like_key(pattern: str) -> bool:
     """
     if not pattern or len(pattern) > 200:
         return False
+    # A path is not a key. `self.client.get("/api/x?status:inactive")` in a Django test
+    # has a colon in the query string and a receiver named `client`, and was reported as a
+    # Redis key nothing writes - seven times in one project.
+    if pattern.startswith(("/", "http://", "https://")):
+        return False
     return ":" in pattern or pattern.startswith("*")
 
 
 class _Hit:
-    __slots__ = ("key", "raw", "file", "line", "write", "ttl", "receiver")
+    __slots__ = ("key", "raw", "file", "line", "write", "ttl", "receiver", "method", "nx")
 
-    def __init__(self, key, raw, file, line, write, ttl, receiver):
+    def __init__(self, key, raw, file, line, write, ttl, receiver, method="", nx=False):
         self.key, self.raw, self.file, self.line = key, raw, file, line
+        self.nx = nx
+        # The op itself, not just whether it writes. `delete` is in _WRITES because it
+        # changes the store, and the TTL check read that as "stored with no expiry" - so
+        # every cache.delete() in one project was reported as a key kept forever. 0 of 8
+        # true. A verdict about expiry needs to know the verb.
+        self.method = method
         self.write, self.ttl, self.receiver = write, ttl, receiver
 
 
@@ -192,14 +212,28 @@ def _scan_python(root: str) -> list[_Hit]:
                     continue
                 ttl = any(k.arg in _TTL_KWARGS for k in node.keywords if k.arg) or \
                     method in ("setex", "psetex", "expire", "pexpire")
+                # `set(key, v, nx=True)` or setnx(): a lock, whose return value is the read.
+                nx = method == "setnx" or any(k.arg == "nx" for k in node.keywords)
                 hits.append(_Hit(
                     _normalise(pattern), pattern, rel, node.lineno,
-                    method in _WRITES, ttl, receiver,
+                    method in _WRITES, ttl, receiver, method, nx,
                 ))
     return hits
 
 
 # ── JavaScript ────────────────────────────────────────────────────────────
+def _has_nx_option(node) -> bool:
+    """`{nx: true}` or `{NX: true}` as an options object argument."""
+    if not isinstance(node, dict) or node.get("type") != "ObjectExpression":
+        return False
+    for prop in node.get("properties") or []:
+        key = prop.get("key") or {}
+        name = key.get("name") or key.get("value")
+        if isinstance(name, str) and name.lower() == "nx":
+            return True
+    return False
+
+
 def _js_pattern(node) -> str | None:
     if not isinstance(node, dict):
         return None
@@ -254,10 +288,14 @@ def _scan_js(root: str) -> list[_Hit]:
             ttl = lowered in ("setex", "psetex", "expire", "pexpire") or any(
                 _js_pattern(a) in ("EX", "PX") for a in args[1:]
             )
+            # ioredis: set(key, v, 'NX') · upstash/node-redis: set(key, v, {nx: true})
+            nx = lowered == "setnx" or any(
+                _js_pattern(a) == "NX" or _has_nx_option(a) for a in args[1:]
+            )
             line = ((node.get("loc") or {}).get("start") or {}).get("line") or 0
             hits.append(_Hit(
                 _normalise(pattern), pattern, rel, line,
-                lowered in _WRITES, ttl, receiver,
+                lowered in _WRITES, ttl, receiver, lowered, nx,
             ))
     return hits
 
@@ -279,9 +317,17 @@ def extract_redis(root: str) -> tuple[list[Symbol], list[Edge]]:
         readers = [h for h in group if not h.write]
         where = writers[0] if writers else readers[0]
 
+        # A `set(key, …, nx=True)` is a lock or a dedupe guard: the RETURN VALUE is the read
+        # (`if not acquired: return`), and nothing will ever call get() on it. Four of one
+        # project's nine "written, never read" keys were exactly this pattern, by design.
+        locks = [h for h in writers if h.nx]
         if writers and readers:
             status = Status.CONNECTED
             note = ""
+        elif locks and not readers:
+            status = Status.CONNECTED
+            note = ("Set with NX - a lock or dedupe guard. Its return value is the read, "
+                    "so no get() is expected.")
         elif readers:
             status = Status.UNRESOLVED
             note = ("Read here and written nowhere in this repo, so this lookup can only "
@@ -317,7 +363,8 @@ def extract_redis(root: str) -> tuple[list[Symbol], list[Edge]]:
         # no expiry is correct, and flagging those would bury the ones that matter.
         leaking = [
             h for h in writers
-            if not h.ttl and _CACHE_ISH.match(h.raw) and h.key.split(":")[0] != "*"
+            if (not h.ttl and _CACHE_ISH.match(h.raw) and h.key.split(":")[0] != "*"
+                    and h.method not in _NOT_STORES)
         ]
         for hit in leaking:
             symbols.append(Symbol(

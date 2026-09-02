@@ -77,6 +77,7 @@ class DjangoAdapter:
 
         first_party = config.get("first_party_prefixes")
         progress.step("URLs and views")
+        static_used = bool(config.get("static_urls"))
         if config.get("static_urls"):
             symbols, edges, names = extract_urls_views_static(repo_root, urlconf, first_party)
         else:
@@ -105,6 +106,7 @@ class DjangoAdapter:
                 symbols, edges, names = extract_urls_views_static(
                     repo_root, urlconf, first_party
                 )
+                static_used = True
 
         progress.step("ASGI routes")
         asgi_file = config.get("asgi_file")
@@ -119,4 +121,18 @@ class DjangoAdapter:
             with contextlib.suppress(Exception):
                 symbols = symbols + extract_django_models(app_labels)
 
-        return ServerScan(symbols=symbols, edges=edges, route_names=names)
+        from seamcheck.extractors.django_static_extractor import LAST_COVERAGE
+
+        # Source reading - by request or by fallback - never sees the routes Django builds
+        # at runtime (the admin's `<model>_changelist` and friends), and may not reach
+        # every urls.py either. Either way the table is incomplete and must say so.
+        complete = not static_used and not LAST_COVERAGE["partial"]
+        note = ""
+        if static_used:
+            note = ("routes were read from source, which cannot see the ones Django builds "
+                    "at runtime such as the admin's")
+        if LAST_COVERAGE["partial"]:
+            note = (f"only {LAST_COVERAGE['read']} of {LAST_COVERAGE['total']} urls.py "
+                    "files were reachable from ROOT_URLCONF by reading text")
+        return ServerScan(symbols=symbols, edges=edges, route_names=names,
+                          complete=complete, coverage_note=note)

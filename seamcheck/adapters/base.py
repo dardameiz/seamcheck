@@ -35,6 +35,14 @@ class ServerScan:
     symbols: list[Symbol] = field(default_factory=list)
     edges: list[Edge] = field(default_factory=list)
     route_names: dict[str, str] = field(default_factory=dict)
+    # Whether the route table above is the WHOLE route table. An adapter that fell back to
+    # reading source, or that could see it reached only some of the URLconf files, sets
+    # this False - and then nothing downstream may call a route missing, because the
+    # reader has just said it did not look everywhere. The Django static reader used to
+    # print exactly that warning and the classifier reported `unresolved` regardless: 127
+    # runtime-built admin URLs on one project, 12 of 12 sampled false.
+    complete: bool = True
+    coverage_note: str = ""
 
 
 @runtime_checkable

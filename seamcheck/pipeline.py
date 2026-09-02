@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import dataclasses
+import os
 import pathlib
 
 from seamcheck.adapters import select_all
@@ -149,6 +150,32 @@ def _field_symbols(
     return fields
 
 
+# The kinds whose `unresolved` means "no route serves this". Every one of them is a claim
+# about the route table, and is only a claim when the table is complete.
+_ROUTE_CLAIM_KINDS = frozenset({"fetch_target", "js_call", "url_reference"})
+
+
+def _withhold_route_claims(symbols: list[Symbol], why: str) -> list[Symbol]:
+    """Downgrade every route-based `unresolved` to `uncertain` when the table is partial.
+
+    The reader has just said it did not see every route. Reporting a call as reaching
+    nothing is then a guess dressed as a finding - and it was made 127 times on one
+    project, in the exact blind spot the warning named, with 12 of 12 sampled false.
+    """
+    note = (
+        "Not claimed missing: " + (why or "the route table is known to be incomplete") +
+        ", so a route this reaches may exist unread. Run from the project's own virtualenv "
+        "for the complete table."
+    )
+    out = []
+    for symbol in symbols:
+        if symbol.kind in _ROUTE_CLAIM_KINDS and symbol.status is Status.UNRESOLVED:
+            out.append(dataclasses.replace(symbol, status=Status.UNCERTAIN, note=note))
+        else:
+            out.append(symbol)
+    return out
+
+
 def run_scan(
     urlconf_module: str,
     js_entry_files: list[str],
@@ -192,8 +219,14 @@ def run_scan(
     routing_edges: list = []
     route_names: dict[str, str] = {}
     seen_ids: set[str] = set()
+    # Whether EVERY adapter saw its whole route table. One that did not taints every
+    # route-based verdict below, because "no route serves this" is only a finding when
+    # the reader looked at all the routes.
+    routes_complete, coverage_note = True, ""
     for one, _confidence in chosen:
         part = one.scan(repo_root, adapter_config, progress)
+        if not getattr(part, "complete", True):
+            routes_complete, coverage_note = False, getattr(part, "coverage_note", "")
         for symbol in part.symbols:
             if symbol.id not in seen_ids:
                 seen_ids.add(symbol.id)
@@ -341,14 +374,36 @@ def run_scan(
     progress.step("template elements")
     dom_attrs = scan_templates(template_files or [])
     progress.step("selectors used by JavaScript")
-    js_files = discover_js_files(js_entry_files, js_project_root) if template_files else []
+    # NOT gated on templates any more. It was - `if template_files else []` - which meant a
+    # React or Vue project with no server-rendered templates had NO JavaScript read for
+    # className, classList, querySelector or CSS tokens. Every stylesheet rule in such a
+    # project then looked unused, because the only thing that could reference it was never
+    # opened. Measured on a Flask+React repo: 8 of 15 "unused CSS" claims were classes sitting
+    # in a className= one directory away. JSX is markup; it is read as markup.
+    #
+    # And the whole first-party tree, not just the import graph, for the same reason the
+    # call reader takes it: a page routed to by the filesystem is imported by nothing.
+    js_files = discover_js_files(js_entry_files, js_project_root)
+    # Two file sets, on purpose, and the distinction is claims versus evidence.
+    #
+    # The entry graph - what the pages actually load - is where DOM CLAIMS may come from:
+    # "this script queries an element no template has" is only a finding when the script
+    # is one the page runs. The whole first-party tree is read for EVIDENCE only: a class
+    # applied, a data attribute set, a token defined. Evidence can only ever connect
+    # things; it cannot invent a failure.
+    #
+    # Reading the whole tree for claims as well was tried and measured on one project:
+    # claims went from 3,862 to 17,417, with 14,439 of them `dom_selector` findings from
+    # button files, test plugins and admin tooling querying elements they build at
+    # runtime. Every one a fresh accusation, none of them true.
+    js_evidence_files = sorted(dict.fromkeys(js_files + list(js_extra_files or [])))
     # Classes applied at runtime are evidence a CSS rule is live; without them the
     # scan reported 5,318 selectors with no evidence either way.
     # template_files too: the JavaScript a template writes inline queries the DOM like any
     # other JavaScript, and reading only .js files made 202 KB of it invisible.
     dom_selectors = (
         extract_dom_selectors(js_files, template_files or [])
-        + extract_js_class_usages(js_files, template_files or [])
+        + extract_js_class_usages(js_evidence_files, template_files or [])
     )
     progress.step("reading stylesheets")
     css_symbols = extract_css(css_files or [])
@@ -359,11 +414,24 @@ def run_scan(
     by_id = {symbol.id: symbol for symbol in extract_template_css(template_files or [])}
     by_id.update({symbol.id: symbol for symbol in css_symbols})
     css_symbols = list(by_id.values())
+    # Framework-shipped stylesheets, as an oracle. Their rules make the classes in a
+    # project's admin templates resolve; the rules themselves are never reported.
+    from seamcheck.roots import framework_stylesheets
+
+    vendor_dir = os.path.dirname(template_files[0]) if template_files else None
+    while vendor_dir and os.path.basename(vendor_dir) != "templates" and os.sep in vendor_dir:
+        parent = os.path.dirname(vendor_dir)
+        if parent == vendor_dir:
+            break
+        vendor_dir = parent
+    for symbol in extract_css(framework_stylesheets(vendor_dir)):
+        if symbol.id not in by_id:
+            css_symbols.append(dataclasses.replace(symbol, sub=f"vendor:{symbol.sub}"))
 
     # Elements the JavaScript brings into existence. Half of what a modern page renders is
     # never in a template, and reading definitions from templates alone made every query
     # for one of those look like a query for nothing.
-    js_dom_attrs = extract_js_dom_definitions(js_files, template_files or [])
+    js_dom_attrs = extract_js_dom_definitions(js_evidence_files, template_files or [])
     # A stylesheet asking for [data-x] is asking for the same thing a script does.
     dom_selectors += extract_css_attribute_selectors(css_files or [])
 
@@ -395,7 +463,7 @@ def run_scan(
         )
         # Tokens JavaScript sets at runtime are real definitions; without them half of
         # this project's "undefined var()" findings were false.
-        js_tokens = extract_js_css_tokens(js_files, template_files or [])
+        js_tokens = extract_js_css_tokens(js_evidence_files, template_files or [])
         symbols += js_tokens
         edges += match_css_tokens(
             [s for s in css_symbols + js_tokens if s.kind == "css_token_def"],
@@ -403,7 +471,10 @@ def run_scan(
         )
 
     progress.step("classifying")
-    graph = Graph(symbols=classify(symbols, edges), edges=edges)
+    classified = classify(symbols, edges)
+    if not routes_complete:
+        classified = _withhold_route_claims(classified, coverage_note)
+    graph = Graph(symbols=classified, edges=edges)
     return _with_feature_labels(graph, dom_attrs)
 
 

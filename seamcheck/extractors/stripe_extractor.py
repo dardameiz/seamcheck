@@ -236,15 +236,21 @@ def _dispatched_events(parsed: dict) -> list[tuple[str, int]]:
 # is the one that pays for the rest: a project that creates checkout sessions and handles
 # no `checkout.session.completed` is taking money and never recording it. Kept small and
 # certain - one entry per call whose consequence is not in dispute.
+# Each entry lists EVERY event that would satisfy the call, because Stripe fires several
+# for one action and a codebase picks one. `paymentIntents.create` was listed as satisfied
+# only by payment_intent.succeeded and was wrong on both projects it was checked against:
+# one handles `charge.succeeded` for the same payment, the other subscribes to an explicit
+# `enabled_events` list that excludes it and consumes the intent's id synchronously. Two
+# false accusations about working payment code, so the intent entry is gone - a project
+# that creates intents and handles their completion has too many correct shapes to enumerate.
 _CAUSES = {
-    "checkout.sessions.create": ("checkout.session.completed",),
-    "subscriptions.create": ("customer.subscription.created",),
+    "checkout.sessions.create": ("checkout.session.completed",
+                                 "checkout.session.async_payment_succeeded"),
+    "subscriptions.create": ("customer.subscription.created", "customer.subscription.updated"),
     "subscriptions.update": ("customer.subscription.updated",),
-    "subscriptions.cancel": ("customer.subscription.deleted",),
-    "subscriptions.del": ("customer.subscription.deleted",),
-    "paymentIntents.create": ("payment_intent.succeeded",),
-    "refunds.create": ("charge.refunded",),
-    "invoices.create": ("invoice.created",),
+    "subscriptions.cancel": ("customer.subscription.deleted", "customer.subscription.updated"),
+    "subscriptions.del": ("customer.subscription.deleted", "customer.subscription.updated"),
+    "refunds.create": ("charge.refunded", "refund.created", "charge.refund.updated"),
 }
 _UNREADABLE_DISPATCH_NOTE = (
     "This code makes Stripe send this event, and no handler for ANY event could be found "
@@ -470,9 +476,11 @@ def extract_stripe(root: str) -> tuple[list[Symbol], list[Edge]]:
     if webhooks:
         readable = bool(events)
         for call, (file, line, _name) in sorted(causes.items()):
-            for event in _CAUSES[call]:
-                if event in events:
-                    continue
+            alternatives = _CAUSES[call]
+            if any(event in events for event in alternatives):
+                continue
+            # Report the first alternative as the thing to handle; the note carries the rest.
+            for event in alternatives[:1]:
                 symbols.append(Symbol(
                     id=f"stripe_event_unhandled:{event}", kind="stripe_event",
                     label=event,

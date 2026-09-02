@@ -65,8 +65,10 @@ _UNDECLARED_NOTE_TEMPLATE = (
     "because a missing key usually turns a feature off rather than raising."
 )
 _UNREAD_NOTE = (
-    "Declared and read nowhere in this repository. Either it is consumed by something "
-    "outside the repo - a base image, a sidecar, a deploy script - or it is left over."
+    "Declared, and no source file in this repository reads it by name. Not a claim that "
+    "it is unused: configuration is also consumed by container images, shell scripts, "
+    "schema parsers, CI and deployment tooling, none of which this scan reads. Worth a "
+    "look only if you already suspect it is left over."
 )
 
 
@@ -202,7 +204,15 @@ def extract_env(root: str) -> tuple[list[Symbol], list[Edge]]:
         symbols.append(Symbol(
             id=f"env_var:{key}", kind="env_var", label=key, sub="declared",
             file=file, line=line,
-            status=Status.CONNECTED if used else Status.UNUSED,
+            # UNCERTAIN, never unused. This was `unused`, and hand-verification across
+            # three real repositories scored it 0 for 20: a variable is consumed by the
+            # official postgres image's entrypoint, by a Zod schema parsed against
+            # process.env, by a Dockerfile ARG renamed to ENV, by an extensionless shell
+            # script, by Terragrunt, by CI yaml, by Prisma reading .env on its own. The
+            # list of things that read configuration without a `process.env.X` in a
+            # source file is the list of everything in a deployment, and "nothing reads
+            # this" is not a claim source can earn.
+            status=Status.CONNECTED if used else Status.UNCERTAIN,
             snippet=f"{key}=", chain=[key],
             note="" if used else _UNREAD_NOTE,
         ))

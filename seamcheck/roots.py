@@ -26,6 +26,57 @@ _STATIC_JS_RE = re.compile(
 )
 
 
+# The stylesheet analogue, which did not exist. JavaScript was discovered from what the
+# templates load; CSS was discovered only by walking a configured directory - and on the
+# reference project that directory was auto-detected as `src` while the stylesheets live
+# in `pointless/static`. One admin stylesheet, linked from `templates/admin/base.html`
+# and never opened, accounted for 87% of the project's 3,862 claims: every class it
+# defines was reported as an element nothing styles. A template that says
+# `<link rel="stylesheet" href="{% static 'x.css' %}">` has declared where its CSS is,
+# and that declaration outranks any guess about directory layout.
+_STATIC_CSS_RE = re.compile(
+    r"""\{%\s*static\s+['"]([^'"]+\.css)['"]"""
+    r"""|<link[^>]*\bhref\s*=\s*['"]/?static/([^'"?]+\.css)"""
+)
+
+
+def static_css_references(templates_root: str) -> set[str]:
+    """Every stylesheet the templates link by `{% static %}` or a /static/ href."""
+    root = pathlib.Path(templates_root)
+    if not root.is_dir():
+        return set()
+    found: set[str] = set()
+    for template in root.rglob("*.html"):
+        try:
+            source = template.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for groups in _STATIC_CSS_RE.findall(source):
+            reference = next((g for g in groups if g), None)
+            if reference:
+                found.add(reference)
+    return found
+
+
+def framework_stylesheets(templates_root: str | None) -> list[str]:
+    """Stylesheets a framework ships and a project's templates rely on, from site-packages.
+
+    A Django project's `templates/admin/*.html` extend Django's own admin templates, which
+    load `admin/css/base.css`, `forms.css`, `widgets.css` from the django package. Every
+    class those files define - form-row, submit-row, aligned, module - then appears in the
+    project's templates with no stylesheet in the repository defining it. On the reference
+    project that was 1,430 elements reported unstyled. The oracle is one import away.
+    """
+    if not templates_root or not (pathlib.Path(templates_root) / "admin").is_dir():
+        return []
+    try:
+        import django
+    except ImportError:
+        return []
+    base = pathlib.Path(django.__file__).parent / "contrib" / "admin" / "static" / "admin" / "css"
+    return sorted(str(p) for p in base.glob("*.css")) if base.is_dir() else []
+
+
 def vite_entry_map(vite_config: str) -> dict[str, str]:
     """Entry name -> file. The name is what a template asks for by `{% vite_asset %}`,
     so it is the only handle that connects a bundle back to the page that loads it."""
@@ -101,8 +152,13 @@ def _is_project_stylesheet(path: pathlib.Path, tailwind_output: str | None) -> b
     return not (tailwind_output and path.resolve() == pathlib.Path(tailwind_output).resolve())
 
 
-def discover_css_files(css_source_root: str, tailwind_output: str | None = None) -> list[str]:
-    """Every stylesheet the PROJECT wrote under the CSS root, plus whatever they @import.
+def discover_css_files(
+    css_source_root: str, tailwind_output: str | None = None,
+    templates_root: str | None = None, static_roots: list[str] | None = None,
+    extra_roots: list[str] | None = None,
+) -> list[str]:
+    """Every stylesheet the PROJECT wrote under the CSS root, plus whatever they @import,
+    plus every stylesheet a template links - wherever that happens to live.
 
     The @import walk mirrors the Python and JS reachability walks: a file list, not an
     allow-list, so a stylesheet pulled in only by an @import chain is still scanned.
@@ -112,7 +168,26 @@ def discover_css_files(css_source_root: str, tailwind_output: str | None = None)
     found = [
         str(path) for path in pathlib.Path(css_source_root).rglob("*.css")
         if _is_project_stylesheet(path, tailwind_output)
-    ]
+    ] if css_source_root and pathlib.Path(css_source_root).is_dir() else []
+    # Every other static directory the project serves from. _is_project_stylesheet still
+    # applies, so vendor bundles, built output and generated utility CSS stay out.
+    for extra in extra_roots or []:
+        base = pathlib.Path(extra)
+        if base.is_dir():
+            found += [
+                str(path) for path in base.rglob("*.css")
+                if _is_project_stylesheet(path, tailwind_output)
+            ]
+    # Linked from a template: the project's own statement of which CSS applies, and the
+    # only discovery that survives a wrong guess about the directory layout.
+    if templates_root and static_roots:
+        for reference in sorted(static_css_references(templates_root)):
+            for base in static_roots:
+                candidate = pathlib.Path(base) / reference
+                if candidate.is_file() and _is_project_stylesheet(candidate, tailwind_output):
+                    found.append(str(candidate))
+                    break
+    found = list(dict.fromkeys(found))
     seen = set(found)
     queue = list(found)
     while queue:

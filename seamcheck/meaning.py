@@ -78,10 +78,11 @@ _SPECIFIC: dict[str, tuple[str, str]] = {
         "own. It matters when a new environment is set up: a missing key usually turns a "
         "feature off silently rather than raising, which is why it is found by a customer.",
     ),
-    "env_var|unused": (
-        "Declared in an example or compose file and read nowhere in this repository.",
-        "Either something outside the repo consumes it - a base image, a sidecar, a deploy "
-        "script - or it is left over from a feature that is gone.",
+    "env_var|uncertain": (
+        "Declared in an example or compose file, and no source file here reads it by name.",
+        "Not evidence that it is unused. Container images, shell scripts, schema parsers "
+        "and CI all consume configuration without a process.env in a source file, and the "
+        "scan reads none of those.",
     ),
     # ---- the data layer -----------------------------------------------------------
     "db_table_use|unresolved": (

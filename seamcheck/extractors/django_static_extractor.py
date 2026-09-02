@@ -34,6 +34,10 @@ import pathlib
 from seamcheck.graph import Edge, Status, Symbol
 from seamcheck.nodetools import report
 
+# Filled by the last extract_urls_views_static: how much of the URLconf it reached. Read
+# by the adapter so a partial table is never presented downstream as a complete one.
+LAST_COVERAGE: dict = {"partial": False, "read": 0, "total": 0}
+
 _PATH_CALLS = frozenset({"path", "re_path", "url"})
 _INCLUDE_CALLS = frozenset({"include"})
 # Calls that WRAP a list of patterns rather than declaring one. Their arguments are patterns.
@@ -348,7 +352,9 @@ def extract_urls_views_static(
     }
     reached = {module_file(root, dotted) for dotted in visited}
     missed = len(on_disk - {path for path in reached if path is not None})
-    if missed and len(on_disk) > 2 and missed >= len(on_disk) / 2:
+    LAST_COVERAGE["partial"] = bool(missed and len(on_disk) > 2 and missed >= len(on_disk) / 2)
+    LAST_COVERAGE["read"], LAST_COVERAGE["total"] = len(on_disk) - missed, len(on_disk)
+    if LAST_COVERAGE["partial"]:
         report(
             "django-partial-urlconf",
             "read %s of %s urls.py files: the rest are not reachable from ROOT_URLCONF by "

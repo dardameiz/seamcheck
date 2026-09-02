@@ -58,7 +58,7 @@ def _is_external(target: str) -> bool:
     A protocol-relative `//cdn.example.com/x` counts too: it is the same request to the
     same third party, written without the scheme.
     """
-    return target.startswith(("http://", "https://", "//"))
+    return target.startswith(("http://", "https://", "//", "data:", "blob:", "mailto:", "tel:"))
 _PREFIX_NOTE = (
     "Only the part of this URL before the first runtime value is known. The route it "
     "reaches is not proven -- never read this as evidence that an endpoint is unused."

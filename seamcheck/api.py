@@ -57,6 +57,28 @@ def _static_root(config: dict, repo_root: str) -> str:
     return os.path.join(repo_root, config.get("static_root", "static"))
 
 
+def _static_candidates(config: dict, repo_root: str) -> list[str]:
+    """Every directory a `{% static 'x' %}` reference might resolve under, best first.
+
+    One root is a guess; when Django cannot be imported the guess is a directory NAME, and
+    on the reference project it picked `src` while the stylesheets live under
+    `pointless/static`. A template reference is evidence that the file exists somewhere,
+    so resolution tries the configured root first and then every `static/` directory in
+    the first two levels of the tree - which is also exactly where Django's own
+    app-directories finder looks. Whichever root the file is actually under wins.
+    """
+    roots = [_static_root(config, repo_root)]
+    base = pathlib.Path(repo_root)
+    for pattern in ("static", "*/static", "*/*/static", "assets", "*/assets", "public"):
+        for candidate in sorted(base.glob(pattern)):
+            if candidate.is_dir() and not any(
+                part in ("node_modules", "venv", ".venv", "dist", "build", "staticfiles")
+                for part in candidate.parts
+            ):
+                roots.append(str(candidate))
+    return list(dict.fromkeys(roots))
+
+
 def _discover_roots(config: dict, repo_root: str) -> list[str]:
     return discover_js_roots(
         vite_config=os.path.join(repo_root, config.get("vite_config", "vite.config.js")),
@@ -167,8 +189,17 @@ def scan(
     build_output = config.get("tailwind_build_output")
     tailwind_path = os.path.join(repo_root, build_output) if build_output else None
 
-    css_files = (
-        discover_css_files(_css_root_dir, tailwind_path) if _css_root_dir else []
+    # The configured CSS root, if it exists, and every static candidate too. A wrong
+    # guess at the CSS directory - `src` on a project whose stylesheets live under
+    # `pointless/static` - found 4 stylesheets in 511k lines and reported every class in
+    # every admin template as unstyled. The static candidates are where Django's own
+    # finders look, so a stylesheet there is one the project serves.
+    static_candidates = _static_candidates(config, repo_root)
+    css_files = discover_css_files(
+        _css_root_dir or "", tailwind_path,
+        templates_root=os.path.join(repo_root, templates_root) if templates_root else None,
+        static_roots=static_candidates,
+        extra_roots=[c for c in static_candidates if c != _css_root_dir],
     )
 
     scanned = relativise(run_scan(
@@ -357,11 +388,20 @@ def report(
         # The review sections live inside the map now: one document, one link, one render
         # of the same scan. Kept as an alias so an existing caller does not break.
         return _render_map(repo_root, ref, progress)
-    if fmt not in renderers and fmt not in ("map", "console"):
+    if fmt not in renderers and fmt not in ("map", "console", "json"):
         raise ValueError(f"Unknown format {fmt!r}. Use one of: {', '.join(sorted(renderers))}.")
 
     if graph is None:
         graph = scan(repo_root, progress)
+    if fmt == "json":
+        # The whole graph, for a script or an agent. Used to live only in the Django
+        # management command, so `seamcheck json` on any other backend printed the
+        # terminal report instead - and the agent-facing format was the one that broke.
+        import json as _json
+
+        from seamcheck.graph import graph_to_dict
+
+        return _json.dumps(graph_to_dict(graph), indent=2)
     diff, baseline_sha, message = diff_against(graph, ref, repo_root)
     try:
         sha = current_git_sha(repo_root)

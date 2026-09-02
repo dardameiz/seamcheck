@@ -130,13 +130,20 @@ def extract_celery(root: str) -> tuple[list[Symbol], list[Edge]]:
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 for name, call in _decorator_names(node):
-                    if name not in _TASK_DECORATORS:
-                        continue
                     explicit = None
                     if call is not None:
                         for keyword in call.keywords:
                             if keyword.arg == "name":
                                 explicit = _string(keyword.value)
+                    # A task decorator is one of the three canonical names, OR any decorator
+                    # with "task" in its name, OR any decorator carrying a dotted `name=`.
+                    # Large projects wrap Celery - sentry's `@instrumented_task(name=
+                    # "sentry.tasks.check_auth")` - and matching the three names alone
+                    # reported every one of its 67 scheduled tasks as undefined. Twelve
+                    # sampled, twelve false.
+                    if not (name in _TASK_DECORATORS or "task" in name.lower()
+                            or (explicit and "." in explicit)):
+                        continue
                     tasks[node.name] = (relative, node.lineno, explicit or f"{module}.{node.name}")
                     dotted_tasks[explicit or f"{module}.{node.name}"] = node.name
                     if explicit:
@@ -192,7 +199,12 @@ def extract_celery(root: str) -> tuple[list[Symbol], list[Edge]]:
         if named in seen:
             continue
         seen.add(named)
-        known = named in dotted_tasks or named.rsplit(".", 1)[-1] in tasks
+        # `selfhosted:sentry.tasks.send_beacon` - a queue or namespace prefix ahead of the
+        # task name, which sentry's taskworker scheduler uses. The task is registered
+        # without it, so the prefix is dropped before matching.
+        bare = named.rsplit(":", 1)[-1] if ":" in named and "." in named.rsplit(":", 1)[-1] else named
+        known = (named in dotted_tasks or bare in dotted_tasks
+                 or bare.rsplit(".", 1)[-1] in tasks)
         symbol_id = f"celery_schedule:{named}"
         symbols.append(Symbol(
             id=symbol_id, kind="celery_schedule", label=named, sub="scheduled",
@@ -202,7 +214,7 @@ def extract_celery(root: str) -> tuple[list[Symbol], list[Edge]]:
             note="" if known else _MISSING_TASK_NOTE,
         ))
         if known:
-            short = dotted_tasks.get(named) or named.rsplit(".", 1)[-1]
+            short = dotted_tasks.get(named) or dotted_tasks.get(bare) or bare.rsplit(".", 1)[-1]
             dotted = tasks[short][2] if short in tasks else named
             edges.append(Edge(from_id=symbol_id, to_id=f"celery_task:{dotted}",
                               status=Status.CONNECTED))

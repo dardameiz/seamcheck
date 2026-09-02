@@ -490,7 +490,17 @@ def _run_without_django(arguments, verbose: bool) -> int:
         return 2
 
     options = _plain_args(arguments)
+    if options["show_config"]:
+        return _show_config_plain(root)
     with quiet(not verbose):
+        if options["triage"]:
+            result = api.triage(options["triage"], options["status"] or "approved",
+                                root, options["reason"])
+            print(result["message"])
+            return 0 if result.get("ok") else 2
+        if options["explain"]:
+            print(api.explain(api.scan(root), options["explain"]))
+            return 0
         if options["check"]:
             # The CI gate. The exit code is what a build reads; the digest is for a person.
             result = api.check(repo_root=root)
@@ -587,11 +597,32 @@ def _plain_args(arguments) -> dict:
     options = {
         "fmt": "terminal", "out": None, "serve": False, "check": False,
         "tunnel": False, "local_only": False, "open": False,
+        # The four that were missing. Each has a branch in the management command and
+        # none had one here, so on an Express or Next repository `seamcheck explain X`,
+        # `seamcheck config`, `seamcheck triage X` and `seamcheck json` all printed the
+        # default report and exited 0 - byte-identical to `check`, with no warning. The
+        # docstring above promised exactly that would not happen, and cli.py names
+        # `json` and `explain` as the agent-facing interface. The MCP server got them
+        # right, so the two surfaces disagreed, which is the one thing they must never do.
+        "explain": None, "show_config": False, "triage": None, "status": None,
+        "reason": "",
     }
     items = list(arguments)
     for index, item in enumerate(items):
         following = items[index + 1] if index + 1 < len(items) else None
-        if item == "--format" and following:
+        if item == "--json":
+            options["fmt"] = "json"
+        elif item == "--show-config":
+            options["show_config"] = True
+        elif item == "--explain" and following:
+            options["explain"] = following
+        elif item == "--triage" and following:
+            options["triage"] = following
+        elif item == "--status" and following:
+            options["status"] = following
+        elif item == "--reason" and following:
+            options["reason"] = following
+        elif item == "--format" and following:
             options["fmt"] = following
         elif item == "--out" and following:
             options["out"] = following
@@ -608,6 +639,25 @@ def _plain_args(arguments) -> dict:
         elif item == "--open":
             options["open"] = True
     return options
+
+
+def _show_config_plain(root: str) -> int:
+    """What the scan will use and why - the same answer the Django path gives."""
+    from seamcheck.autoconfig import effective
+
+    config, why = effective(root)
+    if not config:
+        print("No config, and nothing detected.")
+        return 0
+    width = max(len(key) for key in config)
+    print("The config this scan will use:\n")
+    for key in sorted(config):
+        value = config[key]
+        if isinstance(value, list) and len(value) > 3:
+            value = f"[{len(value)} items] {value[:3]} ..."
+        print(f"  {key:<{width}}  {value}")
+        print(f"  {'':<{width}}  \u2514\u2500 {why.get(key, 'default')}")
+    return 0
 
 
 def _share(rest: list[str]) -> int:
