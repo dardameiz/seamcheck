@@ -627,6 +627,16 @@ def _share_payload(repo_root: str, graph: Graph) -> dict:
         return {}
 
 
+def _service_map(repo_root: str):
+    """Which deployable owns each file, so the map can say so on the node."""
+    from seamcheck.services import ServiceMap, detect_services
+
+    try:
+        return ServiceMap(detect_services(repo_root))
+    except Exception:  # noqa: BLE001 - a map without service labels beats no map
+        return None
+
+
 def _render_map(repo_root: str, ref: str, progress: Progress | None = None) -> str:
     progress = progress or null()
     js_entry_files, _, _extra = _js_roots(_config(), repo_root)
@@ -682,7 +692,7 @@ def _render_map(repo_root: str, ref: str, progress: Progress | None = None) -> s
         symbol.file for symbol in graph.symbols if symbol.file
     )
     return map_html.render(
-        build_map(graph, page_files, git_sha=sha,
+        build_map(graph, page_files, git_sha=sha, services=_service_map(repo_root),
                   baseline=baseline, baseline_sha=baseline_sha if baseline else None,
                   names=page_names(repo_root, _config(), graph),
                   commits=[
