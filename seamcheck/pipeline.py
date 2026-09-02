@@ -177,6 +177,52 @@ def _withhold_route_claims(symbols: list[Symbol], why: str) -> list[Symbol]:
     return out
 
 
+# What a handler DOES: touches a store, queues a job, reads a table.
+_STORE_USE_KINDS = frozenset({"redis_key_use", "db_table_use", "job_enqueue", "stripe_event"})
+
+
+def _handler_to_store(symbols: list) -> list:
+    """Link each view to the store work written inside it.
+
+    By file and line, and deliberately nothing cleverer. A store call belongs to the view
+    whose definition is the nearest one ABOVE it in the same file - which is exactly how
+    Django views and Express handlers are written, and is the only attribution that can be
+    made without a call graph.
+
+    So it links what it can see and stays silent otherwise: a handler that delegates to a
+    cache module three files away is not guessed at. Every edge here is CONNECTED, because
+    "this handler touches this key" is a fact about where the code sits, not a verdict -
+    the verdict stays on the key, where both halves are known.
+    """
+    from collections import defaultdict
+
+    views = defaultdict(list)
+    uses = defaultdict(list)
+    for symbol in symbols:
+        if not symbol.file or not symbol.line:
+            continue
+        if symbol.kind == "view":
+            views[symbol.file].append(symbol)
+        elif symbol.kind in _STORE_USE_KINDS:
+            uses[symbol.file].append(symbol)
+
+    out = []
+    for path, in_file in uses.items():
+        here = sorted(views.get(path, []), key=lambda s: s.line)
+        if not here:
+            continue
+        for use in in_file:
+            owner = None
+            for view in here:
+                if view.line <= use.line:
+                    owner = view
+                else:
+                    break
+            if owner is not None:
+                out.append(Edge(owner.id, use.id, Status.CONNECTED))
+    return out
+
+
 def run_scan(
     urlconf_module: str,
     js_entry_files: list[str],
@@ -506,6 +552,12 @@ def run_scan(
             [s for s in css_symbols + js_tokens if s.kind == "css_token_def"],
             [s for s in css_symbols + js_tokens if s.kind == "css_token_use"],
         )
+
+    # What the handler does after the request lands. Without this a chain stops at the
+    # view: the map draws browser -> seam -> server and then nothing, though the server
+    # plainly talks to a store, queues a job and reads a cache. The second seam was
+    # rendered as a separate island nobody could reach by following anything.
+    edges += _handler_to_store(symbols)
 
     progress.step("classifying")
     classified = classify(symbols, edges)

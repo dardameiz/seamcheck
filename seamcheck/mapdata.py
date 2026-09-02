@@ -94,10 +94,16 @@ _SEED_EXCLUDED_SUBS = ("class:apply",)
 # Only these expand further. Stopping elsewhere keeps DOM and CSS as leaves: walking
 # INTO a css_selector pulls in every template element sharing that class, which is how
 # one page reached 13,458 nodes.
-_EXPANDABLE_KINDS = frozenset({"js_call", "fetch_target", "url", "view"})
+_EXPANDABLE_KINDS = frozenset({"js_call", "fetch_target", "url", "view",
+                               # A handler's store call is a hop, not a leaf:
+                               # stopping here drew the server talking to
+                               # nothing.
+                               "redis_key_use", "db_table_use"})
 # How far to follow edges out of a seed. Three hops reaches fetch -> url -> view -> field,
 # which is the whole frontend-to-backend story; further out is noise.
-_MAX_HOPS = 3
+# Four, not three. fetch -> url -> view was the whole story until a handler could reach
+# its store; now the fourth hop is the store itself, which is the point of the second seam.
+_MAX_HOPS = 4
 
 
 @dataclass

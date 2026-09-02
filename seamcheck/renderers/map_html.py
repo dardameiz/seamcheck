@@ -56,6 +56,7 @@ _COLUMNS = [
     ("db_column_use", "Selects column"),
     ("db_function_use", "Calls rpc()"),
     ("redis_key", "Redis key"),
+    ("redis_key_use", "Touches key"),
     ("redis_ttl", "No expiry"),
     ("firestore_rule", "Rule"),
     ("firestore_collection", "Collection"),
@@ -1204,7 +1205,7 @@ const BANDS = [
    short: "THE STORE",
    kinds: ["db_table", "db_column", "db_function", "db_policy",
            "db_table_use", "db_column_use", "db_function_use",
-           "redis_key", "redis_ttl",
+           "redis_key", "redis_key_use", "redis_ttl",
            "firestore_rule", "firestore_collection",
            "cloud_function", "cloud_function_use",
            "storage_bucket", "edge_function", "edge_function_use"],
@@ -1316,7 +1317,7 @@ const LAYER_KINDS = {
                      "edge_function", "edge_function_use", "storage_bucket",
                      "firestore_collection", "firestore_rule",
                      "cloud_function", "cloud_function_use"]),
-  redis: new Set(["redis_key", "redis_ttl"]),
+  redis: new Set(["redis_key", "redis_key_use", "redis_ttl"]),
   graphql: new Set(["graphql_field", "graphql_selection"]),
 };
 // A layer only offers itself when the scan actually found that service.
@@ -1736,6 +1737,7 @@ const HOP_WORD = {
   url: "the route", view: "the handler", dom_selector: "looks for",
   dom_attr: "the element", css_selector: "styled by",
   multi_writer_element: "all write", redis_key: "the key", db_table_use: "reads",
+  redis_key_use: "touches", 
   db_table: "the table", job_enqueue: "queues", job: "the worker",
 };
 // The second line of a card, in a reader's words rather than the extractor's.

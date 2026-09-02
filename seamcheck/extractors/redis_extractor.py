@@ -359,6 +359,30 @@ def extract_redis(root: str) -> tuple[list[Symbol], list[Edge]]:
             snippet=where.raw, chain=sorted({h.file for h in group})[:4], note=note,
         ))
 
+        # Where each touch of this key actually happens. The key symbol above is one per
+        # NAME - which is right for pairing a write against a read, and wrong for saying
+        # which handler does it: a key is written in a cache module and read in another,
+        # and the symbol lands on whichever site was seen first.
+        #
+        # Without a per-site anchor a chain stops dead at the handler, so the map can draw
+        # browser -> seam -> server and then nothing, even though the server plainly talks
+        # to a store. `db_table_use` has always worked this way; Redis simply never did.
+        #
+        # Evidence, never a claim: this says a line touches a key, which is not a verdict
+        # about anything. The verdict stays on the key symbol, where both halves are known.
+        for hit in group:
+            use_id = f"redis_key_use:{key}:{hit.file}:{hit.line}"
+            symbols.append(Symbol(
+                id=use_id, kind="redis_key_use", label=key,
+                sub="writes" if hit.write else "reads",
+                file=hit.file, line=hit.line, status=Status.CONNECTED,
+                snippet=hit.raw, chain=[key],
+                note=("This line " + ("writes" if hit.write else "reads") +
+                      " the key. Whether the two halves agree is decided on the key "
+                      "itself, not here."),
+            ))
+            edges.append(Edge(use_id, f"redis_key:{key}", Status.CONNECTED))
+
         # The TTL check, and only where the key says it is disposable: a permanent key with
         # no expiry is correct, and flagging those would bury the ones that matter.
         leaking = [
