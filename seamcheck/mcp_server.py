@@ -40,9 +40,22 @@ def seamcheck_explain(symbol_id: str, repo_root: str = ".") -> str:
 
 
 @mcp.tool()
-def seamcheck_triage(symbol_id: str, status: str, repo_root: str = ".", reason: str = "") -> dict:
-    """Record a human disposition (approved/confirmed/deferred) against a finding."""
-    return api.triage(symbol_id, status, repo_root, reason)
+def seamcheck_triage(symbol_id: str, status: str, repo_root: str = ".", reason: str = "",
+                     why: str = "") -> dict:
+    """Record a human disposition (approved/confirmed/deferred) against a finding.
+
+    `reason` is prose and stays local. `why` is one of a fixed set - see
+    seamcheck_why_wrong - and is the only part `seamcheck share` can pass on.
+    """
+    return api.triage(symbol_id, status, repo_root, reason, why)
+
+
+@mcp.tool()
+def seamcheck_why_wrong() -> dict:
+    """The fixed reasons a finding can be wrong, for the `why` argument of triage."""
+    from seamcheck.triage import WHY_HELP
+
+    return {"reasons": WHY_HELP}
 
 
 @mcp.tool()
@@ -52,7 +65,7 @@ def seamcheck_report(fmt: str = "markdown", repo_root: str = ".") -> str:
 
 
 @mcp.tool()
-def seamcheck_share(repo_root: str = ".") -> str:
+def seamcheck_share(repo_root: str = ".", with_deps: bool = False) -> str:
     """Build a report about the scan that contains none of the scanned code.
 
     Counts and fixed words only - no paths, names, routes, snippets or repository
@@ -61,7 +74,7 @@ def seamcheck_share(repo_root: str = ".") -> str:
     """
     from seamcheck import share
 
-    markdown, payload = share.report(repo_root)
+    markdown, payload = share.report(repo_root, with_deps=with_deps)
     return markdown + "\n\nPre-filled issue link (submits nothing until pressed):\n" + share.issue_url(payload)
 
 

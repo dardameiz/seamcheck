@@ -33,7 +33,10 @@ class Command(BaseCommand):
         parser.add_argument("--explain", metavar="SYMBOL_ID", help="Explain one symbol.")
         parser.add_argument("--triage", metavar="SYMBOL_ID", help="Record a disposition.")
         parser.add_argument("--status", help="Triage status: approved, confirmed, deferred, untriaged.")
-        parser.add_argument("--reason", default="", help="Why this disposition.")
+        parser.add_argument("--reason", default="", help="Why this disposition, in your own words.")
+        parser.add_argument("--why", "--wrong", dest="why", default="",
+                            help="Why it was wrong, as a fixed word - the only part "
+                                 "`seamcheck share` can pass on. See `help triage`.")
         parser.add_argument("--repo-root", default=".", help="Repo to read snapshots/triage from.")
         parser.add_argument(
             "--backfill", type=int, metavar="N", default=None,
@@ -269,7 +272,8 @@ class Command(BaseCommand):
             self.stderr.write("--triage requires --status.")
             raise SystemExit(2)
         result = api.triage(
-            options["triage"], options["status"], options["repo_root"], options["reason"]
+            options["triage"], options["status"], options["repo_root"], options["reason"],
+            options.get("why", ""),
         )
         self.stdout.write(result["message"])
         if not result["ok"]:

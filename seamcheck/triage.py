@@ -24,6 +24,47 @@ class TriageStatus(str, Enum):
     DEFERRED = "deferred"
 
 
+class WhyWrong(str, Enum):
+    """Why a finding was wrong, as a fixed word rather than a sentence.
+
+    The reason people write is the most useful thing seamcheck could learn from - it is
+    what took precision from 28% to 42% when eight repositories were hand-labelled. It is
+    also free text, which is exactly where a path, a table name or a customer identifier
+    would escape if the reason were ever shared.
+
+    So the reason is captured as an ENUM and the prose is kept beside it, local and never
+    sent. The categories are not invented: each is a false-positive class actually
+    measured on a real repository, which is why the list is short and why "other" is last
+    rather than first.
+    """
+
+    DEPENDENCY = "consumed-by-dependency"      # a CDN bundle, node_modules, the framework
+    RUNTIME = "built-at-runtime"               # the name is assembled, not a literal
+    OUTSIDE_REPO = "read-outside-repo"         # a container, CI, a shell script, mobile
+    DECLARED_ELSEWHERE = "declared-elsewhere"  # schema or config lives in another repo
+    GENERATED = "generated"                    # build output, a copy of source
+    TEST_ONLY = "test-or-fixture"              # not the product
+    FRAMEWORK = "framework-implicit"           # the framework does this unasked
+    REALLY_DEAD = "genuinely-dead"             # a TRUE positive, and just as worth knowing
+    OTHER = "other"
+
+
+# What each one means, for `seamcheck help triage` and for the map's own picker. Kept
+# beside the enum so the two can never drift.
+WHY_HELP: dict[str, str] = {
+    WhyWrong.DEPENDENCY.value: "Something outside the repo uses it - a CDN bundle, a "
+                               "package, the framework's own code.",
+    WhyWrong.RUNTIME.value: "The name is built at runtime, so no literal for it exists.",
+    WhyWrong.OUTSIDE_REPO.value: "Read by a container, CI, a shell script or another app.",
+    WhyWrong.DECLARED_ELSEWHERE.value: "The schema or config it needs lives somewhere else.",
+    WhyWrong.GENERATED.value: "Build output or a copy of code already read.",
+    WhyWrong.TEST_ONLY.value: "A test or fixture, not the product.",
+    WhyWrong.FRAMEWORK.value: "The framework does this without being asked.",
+    WhyWrong.REALLY_DEAD.value: "Nothing wrong with the finding - it really is dead.",
+    WhyWrong.OTHER.value: "None of the above.",
+}
+
+
 @dataclass
 class TriageEntry:
     symbol_id: str
@@ -32,6 +73,9 @@ class TriageEntry:
     who: str
     when: str
     reason: str
+    # The shareable half of `reason`: a fixed word, defaulted so every stored entry
+    # written before this existed still loads.
+    why: str = ""
 
 
 def fingerprint_for_symbol(symbol: Symbol) -> str:
@@ -47,13 +91,21 @@ def fingerprint_for_symbol(symbol: Symbol) -> str:
     return f"{symbol.kind}:{symbol.snippet}:{symbol.status.value}"
 
 
+_ENTRY_FIELDS = frozenset(f.name for f in dataclasses.fields(TriageEntry))
+
+
 def load_triage(repo_root: str) -> list[TriageEntry]:
     path = pathlib.Path(repo_root) / _TRIAGE_FILE
     if not path.is_file():
         return []
     data = json.loads(path.read_text(encoding="utf-8"))
     return [
-        TriageEntry(**{**entry, "status": TriageStatus(entry["status"])})
+        # Unknown keys dropped rather than raising: a file written by a newer seamcheck
+        # must still load in an older one, and a triage file is somebody's work.
+        TriageEntry(**{
+            **{k: v for k, v in entry.items() if k in _ENTRY_FIELDS},
+            "status": TriageStatus(entry["status"]),
+        })
         for entry in data.get("entries", [])
     ]
 

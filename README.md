@@ -286,6 +286,7 @@ seamcheck backfill   # scan the last N commits so the map has history
 seamcheck observe    # drive your pages in a real browser and record what it saw
 seamcheck config     # what was detected, and how it was worked out
 seamcheck share      # a report about the scan containing none of your code
+seamcheck triage     # record "this one is fine, and here is why"
 ```
 
 `seamcheck help <command>` explains any of them with examples.
@@ -320,6 +321,7 @@ claude mcp add seamcheck -- seamcheck-mcp
 | `seamcheck_triage` | records "this one is fine, and here is why", so it stops being raised |
 | `seamcheck_services` | which services this repository declares, and which are deployable |
 | `seamcheck_share` | the code-free scan report, for an agent to show you before you send it |
+| `seamcheck_why_wrong` | the nine fixed reasons, so an agent can pick one when it triages |
 
 The server talks over stdin/stdout — no port, no daemon. Run it with the agent's working
 directory set to the project root. **For a Django project it has to run inside that
@@ -368,6 +370,48 @@ into an email. Or read it, decide it is too much, and delete it; that is a fine 
 One thing worth saying plainly: **if the repository belongs to an employer or a client, that
 is their call rather than yours.** Please do not send metrics about someone else's code
 because a README asked nicely.
+
+### The part that actually helps: tell it which findings were wrong
+
+Counts say a scan produced three thousand findings. They cannot say which of them were
+**wrong**, and wrongness is the only thing that improves the tool — hand-labelling eight
+repositories is what took its precision from 28% to 42%.
+
+You are already deciding this, one finding at a time, whenever you look at your backlog and
+think *"that one's fine."* Say so and it stops being raised:
+
+```bash
+seamcheck triage '<symbol-id>' --wrong consumed-by-dependency
+```
+
+Or on the map: open a finding, press **This is wrong**, pick a reason. One tap puts the
+command on your clipboard — the page cannot write to disk, so it hands you the thing that
+can rather than pretending.
+
+The reason is one of nine fixed words, and that is deliberate. The prose you type in
+`--reason` stays on your machine forever; only the fixed word can travel, because free text
+is exactly where a path or a table name would escape. The nine are not invented either —
+each is a false-positive class measured on a real repository:
+
+| | |
+|---|---|
+| `consumed-by-dependency` | a CDN bundle, a package, the framework's own code |
+| `built-at-runtime` | the name is assembled, so no literal for it exists |
+| `read-outside-repo` | a container, CI, a shell script, another app |
+| `declared-elsewhere` | the schema or config it needs lives somewhere else |
+| `generated` | build output, or a copy of code already read |
+| `test-or-fixture` | a test, not the product |
+| `framework-implicit` | the framework does this without being asked |
+| `genuinely-dead` | nothing wrong with it — it really is dead |
+| `other` | none of the above |
+
+`genuinely-dead` matters as much as the rest. A finding confirmed **right** is evidence too.
+
+### Seeing it before you send it
+
+The map has a **Send a report** view: the exact values, in a table, with a Copy button and a
+pre-filled GitHub issue. Nothing leaves until you press a button, and the button is on
+GitHub's page rather than this one.
 
 ## What it cannot see
 

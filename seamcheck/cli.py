@@ -49,6 +49,39 @@ class Command:
 
 
 COMMANDS: dict[str, Command] = {
+    "triage": Command(
+        args=["--triage"],
+        summary="Record \"this one is fine, and here is why\".",
+        detail=(
+            "Marks one finding so it stops being raised, and records WHY. The mark is "
+            "keyed to the evidence rather than to the symbol, so it expires by itself the "
+            "moment that evidence changes - a third writer appearing on an element is a "
+            "new problem, not the one you approved. An 'approved' that survives the "
+            "code it approved is how a suppression file becomes a lie.\n\n"
+            "`--reason` is your own words and never leaves this machine. `--wrong` is one "
+            "of nine fixed words, and it is the only part `seamcheck share` can pass on: "
+            "free text is exactly where a path or a table name would escape, so the "
+            "vocabulary is fixed rather than trusted.\n\n"
+            "The nine, each a false-positive class measured on a real repository:\n"
+            "  consumed-by-dependency  a CDN bundle, a package, the framework itself\n"
+            "  built-at-runtime        the name is assembled, so no literal exists\n"
+            "  read-outside-repo       a container, CI, a shell script, another app\n"
+            "  declared-elsewhere      the schema or config lives somewhere else\n"
+            "  generated               build output, or a copy of code already read\n"
+            "  test-or-fixture         a test, not the product\n"
+            "  framework-implicit      the framework does this without being asked\n"
+            "  genuinely-dead          nothing wrong with it - it really is dead\n"
+            "  other                   none of the above\n\n"
+            "`genuinely-dead` matters as much as the rest: a finding confirmed RIGHT is "
+            "evidence too."
+        ),
+        examples=[
+            ("seamcheck triage 'css_selector:class:x' --wrong consumed-by-dependency",
+             "mark it wrong, and say why in a word that can be shared"),
+            ("seamcheck triage 'url:/api/x' --wrong genuinely-dead --reason 'removing in PR 412'",
+             "confirm it IS dead; the prose stays local"),
+        ],
+    ),
     "share": Command(
         args=[],
         summary="A report about the scan that contains none of your code.",
@@ -68,6 +101,12 @@ COMMANDS: dict[str, Command] = {
             "One aggregate line - a data layer detected, no schema present, hundreds of "
             "findings against it - is enough to find a bug like that, and it says nothing "
             "about the code.\n\n"
+            "`--with-deps` adds one thing the strict payload cannot carry: the public "
+            "packages you depend on. Counts say an extractor is missing a dependency's "
+            "markup; they cannot say WHICH library, and nobody can write the handling for "
+            "a library they cannot name. It is opt-in because a scoped package name can "
+            "belong to a private registry and this cannot tell offline - so you see the "
+            "list first.\n\n"
             "If the repository belongs to an employer or a client, sharing metrics about "
             "it is their decision rather than yours."
         ),
@@ -75,6 +114,9 @@ COMMANDS: dict[str, Command] = {
             ("seamcheck share", "print the report, write seamcheck-share.md, show the link"),
             ("seamcheck share --json", "the raw payload, for a script or an agent"),
             ("seamcheck share --quiet", "just the report, no explanation or link"),
+            ("seamcheck share --with-deps",
+             "also list your public dependencies - the one thing that makes a "
+             "\"consumed-by-dependency\" report actionable"),
         ],
     ),
     "map": Command(
@@ -254,21 +296,6 @@ COMMANDS: dict[str, Command] = {
         ),
         examples=[("seamcheck explain 'url:/api/get-user-stats/'", "one symbol, in full")],
     ),
-    "triage": Command(
-        args=["--triage"],
-        summary="Record a disposition for a finding, so the gate stops raising it.",
-        detail=(
-            "Marks one symbol approved, confirmed or deferred, with a reason, and stores it "
-            "against a fingerprint of the symbol. `check` then stops failing on it - until "
-            "the symbol itself changes, at which point the triage is invalidated and it "
-            "comes back. An 'approved' that survives the code it approved is how a "
-            "suppression file becomes a lie."
-        ),
-        examples=[
-            ("seamcheck triage 'url:/webhooks/stripe/' --status approved --reason 'called by Stripe'",
-             "stop the gate failing on an endpoint only an external service calls"),
-        ],
-    ),
 }
 
 
@@ -370,9 +397,16 @@ def _wrap(text: str) -> str:
     solve. Paragraph breaks are preserved; the source strings own where those go.
     """
     width = min(max(shutil.get_terminal_size((80, 24)).columns - 2, 40), 92)
-    return "\n\n".join(
-        textwrap.fill(paragraph.strip(), width=width) for paragraph in text.split("\n\n")
-    )
+
+    def one(paragraph: str) -> str:
+        # A paragraph whose lines are INDENTED is a table, not prose - a list of flag
+        # values with their meanings, aligned in columns. Filling it turns the columns
+        # into a run-on sentence, which is what happened to the triage vocabulary.
+        if any(line.startswith("  ") for line in paragraph.splitlines() if line.strip()):
+            return "\n".join(line.rstrip() for line in paragraph.splitlines() if line.strip())
+        return textwrap.fill(paragraph.strip(), width=width)
+
+    return "\n\n".join(one(paragraph) for paragraph in text.split("\n\n"))
 
 
 def command_help(name: str) -> str:
@@ -495,7 +529,7 @@ def _run_without_django(arguments, verbose: bool) -> int:
     with quiet(not verbose):
         if options["triage"]:
             result = api.triage(options["triage"], options["status"] or "approved",
-                                root, options["reason"])
+                                root, options["reason"], options["why"])
             print(result["message"])
             return 0 if result.get("ok") else 2
         if options["explain"]:
@@ -605,7 +639,7 @@ def _plain_args(arguments) -> dict:
         # `json` and `explain` as the agent-facing interface. The MCP server got them
         # right, so the two surfaces disagreed, which is the one thing they must never do.
         "explain": None, "show_config": False, "triage": None, "status": None,
-        "reason": "",
+        "reason": "", "why": "",
     }
     items = list(arguments)
     for index, item in enumerate(items):
@@ -622,6 +656,12 @@ def _plain_args(arguments) -> dict:
             options["status"] = following
         elif item == "--reason" and following:
             options["reason"] = following
+        elif item in ("--why", "--wrong") and following:
+            # `--wrong X` is the short way to say "approved because X": the reason a
+            # finding was wrong is the whole point of marking it.
+            options["why"] = following
+            if item == "--wrong":
+                options["status"] = options["status"] or "approved"
         elif item == "--format" and following:
             options["fmt"] = following
         elif item == "--out" and following:
@@ -670,8 +710,9 @@ def _share(rest: list[str]) -> int:
 
     want_json = "--json" in rest
     quiet_mode = "--quiet" in rest or "-q" in rest
+    with_deps = "--with-deps" in rest
     with quiet():
-        markdown, payload = share.report(".")
+        markdown, payload = share.report(".", with_deps=with_deps)
 
     if want_json:
         print(share.as_json(payload))

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import collections
 import json
+import pathlib
 import platform
 import sys
 import urllib.parse
@@ -61,7 +62,87 @@ def _note_key(note: str) -> str:
     return " ".join(note.split()[:6]).rstrip(".,:").lower()
 
 
-def _payload(graph: Graph, adapters: list[dict], services: list) -> dict:
+def _triage_shapes(repo_root: str, graph: Graph) -> dict:
+    """What a person marked wrong, as counts of (kind, status, reason) - never the prose.
+
+    This is the part worth having. Counts alone say a scan produced 3,000 findings; they
+    cannot say which of them were WRONG, and wrongness is the only thing that improves the
+    tool. A person triaging their own backlog is already deciding exactly that, one finding
+    at a time, and the decision was being thrown away.
+
+    The prose reason they typed stays on their machine. Only the fixed word travels, and
+    only alongside the kind it was about - `dom_attr|unresolved|consumed-by-dependency`
+    tells us an extractor is missing a dependency's markup, and contains nothing of theirs.
+    """
+    from seamcheck.triage import load_triage
+
+    by_id = {symbol.id: symbol for symbol in graph.symbols}
+    shapes: collections.Counter = collections.Counter()
+    marked = 0
+    for entry in load_triage(repo_root):
+        symbol = by_id.get(entry.symbol_id)
+        if symbol is None:
+            continue
+        marked += 1
+        shapes[f"{symbol.kind}|{symbol.status.value}|{entry.why or 'unspecified'}"] += 1
+    return {"marked": marked, "shapes": dict(shapes.most_common(30))}
+
+
+# Manifests that name PUBLIC packages. Read only when the reader asks for it - see
+# _dependencies for why this is opt-in when everything else is not.
+_MANIFESTS = (
+    ("package.json", ("dependencies", "devDependencies")),
+    ("pyproject.toml", None),
+    ("requirements.txt", None),
+)
+
+
+def _dependencies(repo_root: str, limit: int = 60) -> list[str]:
+    """The public packages this project depends on, with versions.
+
+    THE EXCEPTION to the no-free-text rule, and the reason it exists: counts tell us an
+    extractor is wrong and in what way - `dom_attr|unresolved|consumed-by-dependency, 47` -
+    but not WHICH dependency, and you cannot write the handling for a library you cannot
+    name. Told "the project uses tiptap, sonner and radix", the fix is an afternoon of
+    reading three public repositories. Told only "a dependency", it is guesswork.
+
+    These are public package names, not the reader's code. But a scoped name CAN be a
+    private registry package, and this module cannot tell the difference offline - so
+    unlike everything else in the payload this is **opt-in**, and the reader sees the list
+    before it goes anywhere. The strict guarantee stays the default; this is a conscious
+    upgrade to it.
+    """
+    import json as _json
+    import re as _re
+
+    root = pathlib.Path(repo_root)
+    found: dict[str, str] = {}
+    package = root / "package.json"
+    if package.is_file():
+        try:
+            data = _json.loads(package.read_text(encoding="utf-8", errors="replace"))
+            for section in ("dependencies", "devDependencies"):
+                for name, version in (data.get(section) or {}).items():
+                    if isinstance(name, str) and isinstance(version, str):
+                        found[name] = version.lstrip("^~>=< ")
+        except (OSError, ValueError):
+            pass
+    requirements = root / "requirements.txt"
+    if requirements.is_file():
+        try:
+            for line in requirements.read_text(encoding="utf-8", errors="replace").splitlines():
+                line = line.split("#")[0].strip()
+                match = _re.match(r"^([A-Za-z0-9._-]+)\s*[=><~!]*\s*([0-9][\w.]*)?", line)
+                if match and match.group(1):
+                    found[match.group(1)] = match.group(2) or ""
+        except OSError:
+            pass
+    return [f"{name}@{version}" if version else name
+            for name, version in sorted(found.items())][:limit]
+
+
+def _payload(graph: Graph, adapters: list[dict], services: list,
+             triage: dict | None = None, dependencies: list[str] | None = None) -> dict:
     """Everything sent, and nothing else. Numbers and fixed words only."""
     by_status = collections.Counter(symbol.status.value for symbol in graph.symbols)
     by_kind = collections.Counter(symbol.kind for symbol in graph.symbols)
@@ -96,6 +177,9 @@ def _payload(graph: Graph, adapters: list[dict], services: list) -> dict:
         "by_kind": dict(by_kind.most_common()),
         "kind_status": dict(pairs.most_common()),
         "uncertain_causes": dict(causes.most_common(20)),
+        "triage": triage or {"marked": 0, "shapes": {}},
+        # Absent unless asked for. See _dependencies.
+        **({"dependencies": dependencies} if dependencies else {}),
     }
 
 
@@ -108,14 +192,16 @@ def _version() -> str:
         return "source"
 
 
-def build(repo_root: str = ".") -> dict:
+def build(repo_root: str = ".", with_deps: bool = False) -> dict:
     """Scan and reduce to the shareable payload."""
     from seamcheck import api
     from seamcheck.pipeline import LAST_ADAPTERS
     from seamcheck.services import detect_services
 
     graph = api.scan(repo_root)
-    return _payload(graph, list(LAST_ADAPTERS), detect_services(repo_root))
+    return _payload(graph, list(LAST_ADAPTERS), detect_services(repo_root),
+                    _triage_shapes(repo_root, graph),
+                    _dependencies(repo_root) if with_deps else None)
 
 
 def _table(title: str, rows: dict, limit: int = 14) -> list[str]:
@@ -159,6 +245,22 @@ def render(payload: dict) -> str:
         count = status.get(name, 0)
         lines.append(f"| {name} | {count:,} | {count * 100 // total}% |")
     lines.append("")
+    triage = payload.get("triage") or {}
+    if triage.get("shapes"):
+        lines += [
+            f"**Findings a person marked** ({triage['marked']}) — the useful part. Each row "
+            "is a kind, the status it was reported at, and why it was wrong.",
+            "",
+        ]
+        lines += _table("Marked", triage["shapes"], limit=20)[1:]
+    if payload.get("dependencies"):
+        lines += [
+            f"**Dependencies** ({len(payload['dependencies'])}) — included because you "
+            "asked with `--with-deps`. Public package names, so a false positive blamed on "
+            "\"a dependency\" can actually be chased.",
+            "",
+            "```", ", ".join(payload["dependencies"]), "```", "",
+        ]
     lines += _table("Uncertain, by cause", payload["uncertain_causes"])
     lines += _table("Findings by kind and status", payload["kind_status"], limit=20)
     lines += [
@@ -190,9 +292,9 @@ def issue_url(payload: dict) -> str:
     return f"{ISSUES_URL}?{query}"
 
 
-def report(repo_root: str = ".") -> tuple[str, dict]:
+def report(repo_root: str = ".", with_deps: bool = False) -> tuple[str, dict]:
     """(markdown, payload) - the one function the CLI and the MCP server both call."""
-    payload = build(repo_root)
+    payload = build(repo_root, with_deps)
     return render(payload), payload
 
 

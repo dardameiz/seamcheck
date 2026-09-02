@@ -458,12 +458,22 @@ def report(
     return renderers[fmt](built)
 
 
-def triage(symbol_id: str, status: str, repo_root: str = ".", reason: str = "") -> dict:
+def triage(symbol_id: str, status: str, repo_root: str = ".", reason: str = "",
+           why: str = "") -> dict:
+    """Record a disposition. `why` is the shareable half - a fixed word, see WhyWrong."""
+    from seamcheck.triage import WhyWrong
+
     try:
         triage_status = TriageStatus(status)
     except ValueError:
         allowed = ", ".join(s.value for s in TriageStatus)
         return {"ok": False, "message": f"Unknown status `{status}`. Use one of: {allowed}."}
+    if why:
+        try:
+            why = WhyWrong(why).value
+        except ValueError:
+            allowed = ", ".join(w.value for w in WhyWrong)
+            return {"ok": False, "message": f"Unknown reason `{why}`. Use one of: {allowed}."}
 
     graph = scan(repo_root)
     symbol = next((s for s in graph.symbols if s.id == symbol_id), None)
@@ -479,6 +489,7 @@ def triage(symbol_id: str, status: str, repo_root: str = ".", reason: str = "") 
             who=os.environ.get("USER", "unknown"),
             when=dt.date.today().isoformat(),
             reason=reason,
+            why=why,
         )
     )
     save_triage(entries, repo_root)
@@ -543,6 +554,22 @@ def _norm(path: str, repo_root: str) -> str:
 # the map is served from, and an ALLOWLIST is what makes that safe: the set of files the
 # scan actually saw, rather than a document root somebody can walk out of.
 LAST_MAP_FILES: set[str] = set()
+
+
+def _share_payload(repo_root: str, graph: Graph) -> dict:
+    """The share report for a graph already scanned. Never raises: a map is worth more
+    than a report section, so a failure here costs the section and nothing else."""
+    try:
+        from seamcheck import share
+        from seamcheck.pipeline import LAST_ADAPTERS
+        from seamcheck.services import detect_services
+
+        return share._payload(
+            graph, list(LAST_ADAPTERS), detect_services(repo_root),
+            share._triage_shapes(repo_root, graph),
+        )
+    except Exception:  # noqa: BLE001
+        return {}
 
 
 def _render_map(repo_root: str, ref: str, progress: Progress | None = None) -> str:
@@ -627,4 +654,8 @@ def _render_map(repo_root: str, ref: str, progress: Progress | None = None) -> s
         editor=_config().get("editor"),
         series=series,
         adapters=list(LAST_ADAPTERS),
+        # The code-free report, built from the graph already in hand. Embedded so the
+        # Report view can show a reader exactly what would be sent without another scan,
+        # and so the page and `seamcheck share` can never disagree about it.
+        share_payload=_share_payload(repo_root, graph),
     )

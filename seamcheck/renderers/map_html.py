@@ -638,7 +638,37 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
 /* The line number is a coordinate someone is about to type into an editor. */
 .sheet .row .ln { color:var(--ink); font-weight:600; }
 .sheet .note { padding:0; margin-top:8px; font-family:inherit; }
-.acts { margin:8px 0 4px; }
+.acts { margin:8px 0 4px; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+/* Marking a finding wrong is the single most useful thing a reader can do for the tool,
+   so it sits beside the isolate button rather than behind a menu. Tinted, not shouted:
+   it is an offer, not an instruction. */
+.wrongbtn { border-color:var(--crit) !important; color:var(--crit) !important; }
+.whybox { margin:6px 0 2px; display:grid; gap:5px; }
+.whyopt { text-align:left; padding:8px 10px; border-radius:9px; cursor:pointer;
+          border:1px solid var(--line); background:var(--sunk); color:var(--ink);
+          display:grid; gap:2px; font-family:inherit; }
+.whyopt b { font-family:var(--mono); font-size:11.5px; color:var(--sig); }
+.whyopt span { font-size:11.5px; color:var(--muted); line-height:1.35; }
+.whyopt:hover { border-color:var(--sig); }
+.whyopt.copied { border-color:var(--ok); }
+.whyopt.copied b { color:var(--ok); }
+/* The report view. A table of the exact values, because "we only send counts" is a claim
+   and the counts on screen are the evidence for it. */
+.rep { background:var(--sunk); border:1px solid var(--line); border-radius:12px;
+       padding:14px 16px; margin:10px 0 4px; }
+.reptab { width:100%; border-collapse:collapse; font-family:var(--mono); font-size:12px; }
+.reptab td { padding:4px 0; border-bottom:1px solid var(--line); vertical-align:top; }
+.reptab tr:last-child td { border-bottom:none; }
+.reptab .k { color:var(--muted); word-break:break-all; padding-right:12px; }
+.reptab .v { color:var(--ink); text-align:right; white-space:nowrap; font-weight:600; }
+.reph { font-size:11px; text-transform:uppercase; letter-spacing:.09em; color:var(--muted);
+        margin:16px 0 6px; font-weight:600; }
+.repnote { margin:10px 0 0; }
+.repacts { margin:10px 0 6px; }
+.repbtn { display:inline-block; padding:7px 11px; font-size:12.5px; border-radius:8px;
+          border:1px solid var(--sig); background:var(--sig); color:#fff;
+          text-decoration:none; }
+.repbtn:hover { filter:brightness(1.1); }
 .acts button { padding:7px 11px; font-size:12.5px; border-radius:8px; cursor:pointer;
                border:1px solid var(--line); background:var(--bg); color:var(--sig); }
 .sheet .lbl { font-size:9.5px; text-transform:uppercase; letter-spacing:.09em;
@@ -2572,6 +2602,15 @@ function show(id) {
   dbody.innerHTML = `<h2>${esc(n.label)}</h2>
     <div class="acts">
       <button id="iso" type="button">${isolate ? "Show the whole page" : "Show only this chain"}</button>
+      ${n.status === "unresolved" || n.status === "unused"
+        ? `<button id="wrong" type="button" class="wrongbtn">This is wrong</button>` : ""}
+    </div>
+    <div class="whybox" id="whybox" hidden>
+      <div class="lbl">Why is it wrong? One tap copies the command that records it.</div>
+      ${Object.entries(WHY).map(([key, help]) =>
+        `<button type="button" class="whyopt" data-why="${esc(key)}"
+                 data-id="${esc(id)}"><b>${esc(key)}</b><span>${esc(help)}</span></button>`
+      ).join("")}
     </div>
     <div class="row"><span class="badge ${esc(n.status)}">${esc(n.status)}</span>
       ${esc(n.kind)}${ch ? " · " + esc(ch) : ""}</div>
@@ -2587,6 +2626,22 @@ function show(id) {
   document.getElementById("iso").onclick = () => {
     isolate = !isolate; view = {x:0, y:0, k:1}; draw(); show(id);
   };
+  // A static file cannot write to disk, so it does the honest thing: it hands over the
+  // exact command that does. One tap, no typing, and the reader can see what it will do
+  // before running it - which is the same contract as the pre-filled issue link.
+  const wrongBtn = document.getElementById("wrong");
+  if (wrongBtn) {
+    const box = document.getElementById("whybox");
+    wrongBtn.onclick = () => { box.hidden = !box.hidden; };
+    box.querySelectorAll(".whyopt").forEach(b => {
+      b.onclick = () => {
+        const cmd = `seamcheck triage '${b.dataset.id}' --wrong ${b.dataset.why}`;
+        navigator.clipboard?.writeText(cmd);
+        b.classList.add("copied");
+        b.querySelector("span").textContent = "copied - run it in the project";
+      };
+    });
+  }
 }
 document.getElementById("dx").onclick = () => { lit = null; isolate = false; closeSheet(); draw(); };
 
@@ -2911,7 +2966,7 @@ const OPENS_ON = "overview";
 //
 // They are Layer values now. The menu answers "what am I doing", the Layer answers "which
 // part of it", and neither pretends to be the other.
-const MENU = ["overview", "map", "page", "findings", "files", "changes"];
+const MENU = ["overview", "map", "page", "findings", "files", "changes", "report"];
 const SECTION_BY_KEY = Object.fromEntries((D.sections || []).map(sec => [sec.key, sec]));
 
 function menuCount(key) {
@@ -2923,8 +2978,11 @@ function menuCount(key) {
 }
 
 const TITLES = {overview: "Overview", map: "Map", files: "Files",
-                page: "The page a browser saw"};
-const VIEWS = MENU.filter(key => key !== "page" || OBS_PAGES.length).map(key => ({
+                page: "The page a browser saw", report: "Send a report"};
+const VIEWS = MENU
+  .filter(key => key !== "page" || OBS_PAGES.length)
+  .filter(key => key !== "report" || (typeof SHARE !== "undefined" && SHARE.symbols))
+  .map(key => ({
   key,
   title: TITLES[key] || (SECTION_BY_KEY[key] || {}).title || key,
   count: key === "overview" || key === "map" ? null : menuCount(key),
@@ -3064,6 +3122,87 @@ function sidesHtml() {
 // words in front of the counts a reader opened the page to read. Prose that answers a
 // question nobody asked yet is not documentation, it is a wall; every word of it is still
 // here, one tap away, under the terms it explains.
+// The report a person can send back, shown in full before anything leaves. Nothing here
+// contacts anything: the page has no network at all. It renders what `seamcheck share`
+// would produce, offers to copy it, and offers a pre-filled issue that submits nothing
+// until the reader presses the button on GitHub's own page.
+// The same markdown `seamcheck share` prints, built from the embedded payload so the two
+// surfaces cannot drift into saying different things about the same scan.
+function reportMarkdown() {
+  const p = SHARE || {}, st = p.by_status || {}, t = p.triage || {};
+  const total = Object.values(st).reduce((a, v) => a + v, 0) || 1;
+  const tbl = (title, o) => {
+    const e = Object.entries(o || {}).slice(0, 20);
+    if (!e.length) return [];
+    return [`**${title}**`, "", "| | count |", "|---|---:|",
+            ...e.map(([k, v]) => `| \`${k}\` | ${v} |`), ""];
+  };
+  return [
+    "### Seamcheck scan report", "",
+    "_Shape of a scan only. No file paths, names, routes, snippets or repository identity._", "",
+    `- seamcheck **${p.seamcheck}** · Python ${p.python} · ${p.platform}`,
+    `- adapters: **${(p.adapters || []).map(a => a.name + " (" + a.confidence + ")").join(", ") || "none detected"}**`,
+    `- graph: **${p.symbols} symbols**, ${p.edges} edges (${p.size})`, "",
+    "**Result**", "", "| status | count | share |", "|---|---:|---:|",
+    ...["connected", "unresolved", "unused", "uncertain"].map(k =>
+      `| ${k} | ${st[k] || 0} | ${Math.floor((st[k] || 0) * 100 / total)}% |`), "",
+    ...(t.marked ? tbl(`Findings a person marked (${t.marked})`, t.shapes) : []),
+    ...tbl("Uncertain, by cause", p.uncertain_causes),
+    ...tbl("Findings by kind and status", p.kind_status),
+    "**Anything wrong here?** If a number looks false for your project - findings against "
+    + "things that do exist, or nothing found where there is plainly something - that is "
+    + "the useful part. Say which, in your own words.", "",
+  ].join("\n");
+}
+
+function reportHtml() {
+  const p = SHARE || {};
+  const st = p.by_status || {};
+  const t = p.triage || {};
+  const rows = o => Object.entries(o || {}).slice(0, 16)
+    .map(([k, v]) => `<tr><td class="k">${esc(k)}</td><td class="v">${n(v)}</td></tr>`).join("");
+  return `<h2>Send a report</h2>
+    <p class="gloss">Seamcheck learns most from the scans it gets <b>wrong</b>, and those
+      are private repositories nobody can send. This is the shape of your scan with none of
+      your code in it — no file paths, no names, no routes, no snippets, no repository
+      identity. Every value below is a number or a word seamcheck defines in its own
+      source, which you can check by reading
+      <code>seamcheck/share.py</code>.</p>
+    <p class="gloss"><b>Nothing has been sent.</b> Seamcheck makes no network calls, and
+      this page cannot either.</p>
+
+    <h3 class="sec">What would be sent</h3>
+    <div class="rep">
+      <table class="reptab">
+        <tr><td class="k">seamcheck</td><td class="v">${esc(p.seamcheck || "")}</td></tr>
+        <tr><td class="k">adapters</td><td class="v">${esc((p.adapters || [])
+          .map(a => a.name + " (" + a.confidence + ")").join(", ") || "none")}</td></tr>
+        <tr><td class="k">symbols</td><td class="v">${n(p.symbols || 0)}</td></tr>
+        ${["connected", "unresolved", "unused", "uncertain"]
+          .map(k => `<tr><td class="k">${k}</td><td class="v">${n(st[k] || 0)}</td></tr>`).join("")}
+      </table>
+      ${t.marked ? `<h4 class="reph">Findings you marked wrong (${n(t.marked)})</h4>
+        <table class="reptab">${rows(t.shapes)}</table>` : `<p class="gloss repnote">
+        You have not marked any finding wrong yet. That is the part worth having — open a
+        finding on the map, press <b>This is wrong</b>, and pick a reason. It records why,
+        never what.</p>`}
+      <h4 class="reph">Why things are uncertain</h4>
+      <table class="reptab">${rows(p.uncertain_causes)}</table>
+    </div>
+
+    <h3 class="sec">How to send it</h3>
+    <div class="acts repacts">
+      <button type="button" id="repcopy">Copy the report</button>
+      <a class="repbtn" id="repissue" target="_blank" rel="noreferrer noopener">Open a pre-filled issue</a>
+    </div>
+    <p class="gloss">The issue opens on GitHub with the report already in it and submits
+      nothing until you press their button. Or paste it into an email — whatever you
+      prefer.</p>
+    <p class="gloss"><b>One thing worth saying plainly:</b> if this repository belongs to
+      an employer or a client, sharing metrics about it is their decision rather than
+      yours.</p>`;
+}
+
 function overviewHtml() {
   return `<h2>Overview</h2>
 
@@ -3473,6 +3612,29 @@ function renderPanel() {
         viewer.value = "findings"; switchTo("findings");
       };
     });
+    return;
+  }
+  if (mode === "report") {
+    panel.innerHTML = reportHtml();
+    const text = reportMarkdown();
+    const copy = document.getElementById("repcopy");
+    copy.onclick = () => {
+      navigator.clipboard?.writeText(text);
+      copy.textContent = "Copied";
+      setTimeout(() => { copy.textContent = "Copy the report"; }, 2000);
+    };
+    const issue = document.getElementById("repissue");
+    // Truncated for the URL only; the copy button always carries the whole thing.
+    const body = text.length > 5000
+      ? text.slice(0, 5000) + "\n\n_(truncated - use Copy for the full report)_" : text;
+    const st = (SHARE.by_status || {});
+    issue.href = "https://github.com/dardameiz/seamcheck/issues/new?"
+      + new URLSearchParams({
+          title: "scan report: "
+                 + ((SHARE.adapters || []).map(a => a.name).join("+") || "no adapter")
+                 + ` - ${st.uncertain || 0} uncertain, ${st.unresolved || 0} unresolved`,
+          body, labels: "scan-report",
+        }).toString();
     return;
   }
   if (mode === "changes") { panel.innerHTML = changesHtml(); return; }
@@ -3945,6 +4107,13 @@ def _payload(connectivity_map: ConnectivityMap) -> str:
     return json.dumps(data, separators=(",", ":")).replace("</", "<\\/")
 
 
+def _why_reasons() -> dict:
+    """The triage vocabulary, read from the one place that defines it."""
+    from seamcheck.triage import WHY_HELP
+
+    return WHY_HELP
+
+
 def _console_payload(console) -> str:
     """The review sections, or an empty shell so the page still renders without them."""
     from dataclasses import asdict
@@ -4011,7 +4180,7 @@ def _js(value) -> str:
 
 def render(connectivity_map: ConnectivityMap, console=None, files=None,
            repo_root: str = "", editor: str | None = None, series=None,
-           adapters=None, observed=None) -> str:
+           adapters=None, observed=None, share_payload=None) -> str:
     mode = (
         f"diff vs {_esc(connectivity_map.baseline_sha[:12])}"
         if connectivity_map.baseline_sha
@@ -4158,6 +4327,11 @@ def render(connectivity_map: ConnectivityMap, console=None, files=None,
         f"<script>const OPEN={json.dumps({'root': repo_root, 'href': editors.scheme(editor)})};</script>",
         f"<script>const MEANING={_js(meaning.table())};</script>",
         f"<script>const BLIND_SPOTS={json.dumps(meaning.BLIND_SPOTS)};</script>",
+        # The fixed reasons a finding can be wrong, and the code-free report itself. Both
+        # come from the same source the CLI uses, so the page and the terminal can never
+        # offer a different vocabulary.
+        f"<script>const WHY={_js(_why_reasons())};</script>",
+        f"<script>const SHARE={_js(share_payload or {})};</script>",
         f"<script>{_SCRIPT}</script>",
         "</body></html>",
     ])
