@@ -405,6 +405,16 @@ def run_scan(
         extract_dom_selectors(js_files, template_files or [])
         + extract_js_class_usages(js_evidence_files, template_files or [])
     )
+    # Multi-writer detection reads the WHOLE tree, not the entry graph. A write site is an
+    # observation, not a claim - "these two files both write #levelName" is true whether or
+    # not a bundler entry happens to reach them, and the verified live bugs on the
+    # reference project (level-name written by both level_progress_bridge.js and
+    # stats_manager.js) sit in files the entry walk does not reach. Narrowing this to the
+    # entry graph lost every one of them while the false positives stayed.
+    dom_writes = (
+        dom_selectors if js_evidence_files == js_files
+        else dom_selectors + extract_dom_selectors(js_evidence_files, template_files or [])
+    )
     progress.step("reading stylesheets")
     css_symbols = extract_css(css_files or [])
     # A <style> block in a template is a stylesheet. Reading only .css files reported
@@ -439,7 +449,7 @@ def run_scan(
     if dom_attrs or dom_selectors or css_symbols:
         selectors = [s for s in css_symbols if s.kind == "css_selector"]
         symbols += dom_attrs + dom_selectors + css_symbols
-        symbols += detect_multi_writers(dom_selectors)
+        symbols += detect_multi_writers(dom_writes)
         # Element matching sees the JS-created ones; CSS matching deliberately does not. An
         # element JavaScript builds is often styled inline or by an injected stylesheet, so
         # demanding a hand-written rule for it trades one false finding for another.

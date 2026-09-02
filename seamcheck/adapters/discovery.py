@@ -29,8 +29,15 @@ SKIP_DIRS = {
     "node_modules", ".git", "dist", "build", "coverage", ".next", "out", "vendor",
     "site-packages", "__pycache__", ".venv", "venv", ".tox", ".cache", "bower_components",
     "target", "tmp", "temp", "fixtures", "__fixtures__",
-    # This project's own directory of cloned third-party repositories.
-    "corpus",
+    # collectstatic output. A COPY of the source tree, so every file in it is a second
+    # spelling of a file already read - which made `staticfiles/…/stats_manager.js` count
+    # as a second writer of everything `pointless/…/stats_manager.js` writes, and turned
+    # a build step into findings. Same disease as `./x.js` vs `x.js`, one directory up.
+    "staticfiles", "static_collected", "collected_static", "collectstatic",
+    # This project's own directory of cloned third-party repositories, and its recall
+    # fixtures - tiny projects with bugs planted ON PURPOSE. Scanning itself found all
+    # four of them and reported them as its own defects, which is true and useless.
+    "corpus", "recall_fixtures",
 }
 
 # `ROOT_URLCONF = "sentry.conf.urls"` - a plain assignment in a settings module, which is
