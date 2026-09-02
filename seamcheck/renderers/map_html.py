@@ -1856,8 +1856,10 @@ function place(buckets, used, perRow) {
       ordered = [...ordered].sort((m, n) => (laneOf.get(m) - laneOf.get(n)) || (m - n));
     }
     let lastLane = -2;
-    ordered.forEach(c => {
-      const items = buckets.get(c);
+    // One column of one kind, laid out where the cursor currently is. Pulled out of the
+    // loop so the same code can lay out a whole kind, or one service's slice of it.
+    const layoutColumn = (c, items) => {
+      if (!items || !items.length) return;
       const kind = COLS[c] ? COLS[c][0] : "other";
       const label = COLS[c] ? COLS[c][1] : "Other";
       // A new kind starts on a fresh row, so the group heading always sits over its own
@@ -1876,7 +1878,9 @@ function place(buckets, used, perRow) {
           });
           rowTop += rowTop > y + BAND_TOP ? LANE_GAP : LANE_FIRST_DROP;
           lanes.push({x: 44, y: rowTop - 30, name: lane.name, id: lane.id,
-                      oracle: hasOracle});
+                      oracle: hasOracle,
+                      badge: hasOracle ? "SCHEMA IN REPO"
+                                       : "NO SCHEMA \u00b7 PAIRING ONLY"});
           rowTop += LANE_HEAD;
         }
       }
@@ -1910,7 +1914,38 @@ function place(buckets, used, perRow) {
       tallest = Math.max(tallest, rows * (CARD_H + GAP_Y) - GAP_Y);
       x += Math.min(items.length, perRow) * (CARD_W + GAP_X);
       width = Math.max(width, x);
-    });
+    };
+
+    // Which deployables have anything in this band. A monorepo renders as one
+    // undifferentiated strip otherwise: a Django service and a Node service become an
+    // anonymous row of `route` cards, and the fact that a request crosses from one
+    // deployable into another - the thing the reader came for - is nowhere on screen.
+    const svcOf = n => n.service || "";
+    const bandServices = [...new Set(
+      ordered.flatMap(c => (buckets.get(c) || []).map(svcOf)))].filter(Boolean).sort();
+
+    if (!laneOf && bandServices.length > 1) {
+      // A lane per service, in name order, with anything unattributed last so it is
+      // visibly the remainder rather than silently folded into a real service.
+      const runs = [...bandServices, ""];
+      runs.forEach(svc => {
+        const slice = new Map(ordered.map(c =>
+          [c, (buckets.get(c) || []).filter(n => svcOf(n) === svc)]));
+        if (![...slice.values()].some(v => v.length)) return;
+        if (x > 44) { x = 44; rowTop += tallest + GAP_Y + KIND_GAP; tallest = 0; }
+        rowTop += rowTop > y + BAND_TOP ? LANE_GAP : LANE_FIRST_DROP;
+        const langs = [...new Set([...slice.values()].flat()
+          .map(n => n.lang).filter(Boolean))].sort();
+        lanes.push({x: 44, y: rowTop - 30, id: svc || "unattributed",
+                    name: (svc || "not in any service")
+                          + (langs.length ? "  \u00b7  " + langs.join(", ") : ""),
+                    oracle: true, badge: svc ? "SERVICE" : ""});
+        rowTop += LANE_HEAD;
+        ordered.forEach(c => layoutColumn(c, slice.get(c)));
+      });
+    } else {
+      ordered.forEach(c => layoutColumn(c, buckets.get(c)));
+    }
     width = Math.max(width, x, rowWidth + 44);
     const h = BAND_TOP + (rowTop - (y + BAND_TOP)) + tallest + BAND_BOT;
     const band = BANDS[at] || {id: "other", label: "EVERYTHING ELSE THE SCAN FOUND",
@@ -2285,8 +2320,8 @@ function draw() {
   (lanes || []).forEach(L => {
     out.push(`<g class="lane">
       <text class="lanename" x="${L.x}" y="${L.y}">${esc(L.name)}</text>
-      <text class="lanebadge ${L.oracle ? "has" : "none"}" x="${L.x + 12 + L.name.length * 8.6}"
-            y="${L.y}">${L.oracle ? "SCHEMA IN REPO" : "NO SCHEMA \u00b7 PAIRING ONLY"}</text>
+      ${L.badge ? `<text class="lanebadge ${L.oracle ? "has" : "none"}"
+            x="${L.x + 12 + L.name.length * 8.6}" y="${L.y}">${esc(L.badge)}</text>` : ""}
     </g>`);
   });
 
