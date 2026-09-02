@@ -19,10 +19,30 @@ from seamcheck.graph import Graph, Status, Symbol
 from seamcheck.report import Report
 
 # Which side of the wire a kind lives on. The Overview leads with these two totals.
-BACKEND_KINDS = ("url", "view", "model", "signal_receiver", "admin_action", "template_tag")
+# The four regions the map draws, so the summary and the canvas use ONE vocabulary. These
+# used to be two tuples covering 14 kinds, and everything else in the scan was counted
+# nowhere at all: a Supabase project opened on "0% of 0 symbols" while its own backlog
+# listed four findings underneath, because every db_* kind fell outside both sets. Any
+# kind added to a band belongs here too.
+BACKEND_KINDS = (
+    "url", "view", "model", "signal_receiver", "admin_action", "template_tag",
+    "url_reference", "management_command",
+)
 FRONTEND_KINDS = (
-    "js_call", "fetch_target", "dom_selector", "dom_attr",
+    "js_call", "fetch_target", "dom_selector", "dom_attr", "json_field",
     "css_selector", "css_token_def", "css_token_use", "multi_writer_element",
+)
+STORE_KINDS = (
+    "db_table", "db_column", "db_function", "db_policy",
+    "db_table_use", "db_column_use", "db_function_use",
+    "redis_key", "redis_ttl", "firestore_rule", "firestore_collection",
+    "cloud_function", "cloud_function_use",
+    "storage_bucket", "edge_function", "edge_function_use",
+)
+OFFSCREEN_KINDS = (
+    "celery_task", "celery_schedule", "job", "job_enqueue", "job_schedule",
+    "stripe_webhook", "stripe_event", "graphql_field", "graphql_selection",
+    "env_var", "env_read",
 )
 
 
@@ -58,6 +78,9 @@ class Console:
     counts: dict[str, int]
     sections: list[Section]
     groups: list[tuple[str, int, str]]
+    # Defaults, and last: a dataclass cannot take a defaulted field before a bare one.
+    store: dict[str, int] = field(default_factory=dict)
+    offscreen: dict[str, int] = field(default_factory=dict)
 
 
 def _row(symbol: Symbol) -> Row:
@@ -146,7 +169,8 @@ def build_console(graph: Graph, report: Report) -> Console:
         Section(
             "findings", "Findings",
             "Everything the scan is willing to claim, grouped and worst first.",
-            rows=_rows(graph, tuple(BACKEND_KINDS + FRONTEND_KINDS), findings_only=True),
+            rows=_rows(graph, tuple(BACKEND_KINDS + FRONTEND_KINDS
+                                    + STORE_KINDS + OFFSCREEN_KINDS), findings_only=True),
         ),
     ]
 
@@ -156,6 +180,8 @@ def build_console(graph: Graph, report: Report) -> Console:
         baseline_sha=report.baseline_sha,
         backend=_side_counts(graph, BACKEND_KINDS),
         frontend=_side_counts(graph, FRONTEND_KINDS),
+        store=_side_counts(graph, STORE_KINDS),
+        offscreen=_side_counts(graph, OFFSCREEN_KINDS),
         counts=report.counts,
         sections=sections,
         groups=[(g.title, len(g.symbols), g.kind) for g in report.groups],

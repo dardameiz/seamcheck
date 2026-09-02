@@ -154,3 +154,32 @@ clickable page.
   twenty findings each is 300 judgements. That is the real cost, and it is the part that
   cannot be automated away — it is also exactly the work that produced every improvement so
   far.
+
+## Known open defects
+
+Logged rather than fixed, so they are not rediscovered. Each was found by pointing the tool
+at a real project and reading the result.
+
+### `check --since` fires on any edit that shifts a line
+
+A symbol id embeds `path:line`, so deleting one card from a template reported roughly 40
+attributes below it as `new_unused` while their predecessors silently vanished. Net change
+to the project: nothing. As a CI gate that is line noise, and the gate is the headline use
+case. The fix is a content-addressed id - kind plus label plus an enclosing anchor, without
+the line - which changes every stored snapshot, so it wants its own change and its own
+before/after.
+
+### The multi-writer claim cannot see two writers in one function
+
+Two writers in one FILE are now reported (`_same_file_writers`, uncertain), but two writes
+from the same function - a loop, a switch, a guard clause - are one site as far as this
+scan is concerned. That is probably correct, and it is written down so the next reader does
+not assume otherwise.
+
+### Path canonicalisation still happens at export
+
+`graph.shorten()` normalises `./x.js` to `x.js` when the graph is written out. The
+multi-writer detector now normalises for itself, but every other path-keyed consumer -
+per-file coverage, the file tree, the `path:line` ids that `--since` diffs on - still sees
+whichever spelling its producer used. Moving canonicalisation up to file discovery fixes
+the class; doing it as a separate change keeps the effect measurable.

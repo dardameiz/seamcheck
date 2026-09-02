@@ -32,6 +32,50 @@ _COLUMNS = [
     # ── the server ──────────────────────────────────────────────────────────
     ("url", "Route"),
     ("view", "Handler"),
+    # A kind reaches its BAND through its column - place() reads COLS[c][0] and looks that
+    # up in bandOfKind - so a kind with no entry here becomes "other" and falls into the
+    # unnamed overflow group, whatever band it is listed in. Seventeen kinds were in that
+    # state: every Celery task, every Stripe event, every GraphQL field, every background
+    # job and every model was being filed under "everything else the scan found" while
+    # BANDS said otherwise. Adding the store band is what made it visible.
+    ("model", "Model"),
+    ("url_reference", "Link"),
+    ("signal_receiver", "Signal"),
+    ("admin_action", "Admin action"),
+    ("template_tag", "Template tag"),
+    ("management_command", "Command"),
+    # ── the store ───────────────────────────────────────────────────────────
+    # Named for what a reader is looking at. Without these every data-layer card fell to
+    # the "Other" heading in a region called "everything else the scan found", which is
+    # where a mistyped column - the quiet bug this tool exists for - was being filed.
+    ("db_table", "Table"),
+    ("db_column", "Column"),
+    ("db_function", "SQL function"),
+    ("db_policy", "Row security"),
+    ("db_table_use", "Reads table"),
+    ("db_column_use", "Selects column"),
+    ("db_function_use", "Calls rpc()"),
+    ("redis_key", "Redis key"),
+    ("redis_ttl", "No expiry"),
+    ("firestore_rule", "Rule"),
+    ("firestore_collection", "Collection"),
+    ("cloud_function", "Cloud function"),
+    ("cloud_function_use", "Calls function"),
+    ("storage_bucket", "Bucket"),
+    ("edge_function", "Edge function"),
+    ("edge_function_use", "Invokes"),
+    # ── reached without a browser ───────────────────────────────────────────
+    ("celery_task", "Task"),
+    ("celery_schedule", "Beat schedule"),
+    ("job", "Background job"),
+    ("job_enqueue", "Queues work"),
+    ("job_schedule", "Cron"),
+    ("stripe_webhook", "Stripe webhook"),
+    ("stripe_event", "Stripe event"),
+    ("graphql_field", "GraphQL field"),
+    ("graphql_selection", "GraphQL query"),
+    ("env_var", "Config key"),
+    ("env_read", "Reads config"),
 ]
 
 _CSS = """
@@ -551,6 +595,9 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
 #cv.nolabels .nd text { display:none; }
 .nd.lit rect { stroke-width:3.5; }
 .ed { fill:none; stroke-width:1.1; opacity:.38; }
+/* On the isolated path: opaque and heavier, so the one thing being followed is the one
+   thing the eye lands on. */
+.ed.lit { stroke-width:2.4; opacity:1; }
 .ed.faded { opacity:.05; }
 .col { font-size:9.5px; fill:var(--muted); text-transform:uppercase; letter-spacing:.1em;
        font-family:var(--mono); }
@@ -679,6 +726,12 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
 #cv .band { fill:var(--panel); opacity:.30; stroke:var(--line); stroke-width:1; }
 #cv .band.seam { fill:var(--sig-fill); opacity:.55; stroke:var(--sig);
                  stroke-dasharray:5 4; }
+/* A lane heading inside a band. Bigger than the kind headings under it, because the
+   store is the thing a reader is choosing between, and the kind is a detail of it. */
+#cv .lanename { font-size:14px; fill:var(--ink); font-weight:700; letter-spacing:-.01em; }
+#cv .lanebadge { font-size:9.5px; letter-spacing:.1em; font-family:var(--mono); }
+#cv .lanebadge.has { fill:var(--ok); }
+#cv .lanebadge.none { fill:var(--muted); }
 #cv .bandlbl { font-size:11px; fill:var(--muted); letter-spacing:.17em; font-weight:500;
                pointer-events:none; }
 #cv .bandbig { font-size:26px; fill:var(--ink); font-weight:700; letter-spacing:-.02em;
@@ -1081,6 +1134,31 @@ const BANDS = [
    short: "THE SERVER",
    kinds: ["url", "view", "model", "signal_receiver", "admin_action", "template_tag",
            "url_reference", "management_command"]},
+  // The second seam. A request crosses the network and lands on a route; a query crosses
+  // another boundary and lands on a table. Same disease, next boundary down - and every
+  // one of these kinds used to fall into the unnamed overflow group at the bottom.
+  {id: "store", label: "THE STORE \u2014 THE SECOND SEAM, WHERE THE SERVER TALKS TO ITS DATA",
+   short: "THE STORE",
+   kinds: ["db_table", "db_column", "db_function", "db_policy",
+           "db_table_use", "db_column_use", "db_function_use",
+           "redis_key", "redis_ttl",
+           "firestore_rule", "firestore_collection",
+           "cloud_function", "cloud_function_use",
+           "storage_bucket", "edge_function", "edge_function_use"],
+   // Lanes, because "does this project have a database" is a question nobody asks and
+   // "show me Redis" is. Each store also fails differently: a mistyped column returns the
+   // row without it, a mistyped Redis key returns nothing and the code carries a default
+   // nobody chose. `declared` names the kinds that constitute an ORACLE - if a scan found
+   // none of them, the lane can only pair, never verify, and says so in its badge.
+   lanes: [
+     {id: "postgres", name: "Postgres", prefix: ["db_"],
+      declared: ["db_table", "db_column", "db_function", "db_policy"]},
+     {id: "redis", name: "Redis", prefix: ["redis_"], declared: []},
+     {id: "firebase", name: "Firebase", prefix: ["firestore_", "cloud_function"],
+      declared: ["firestore_rule", "cloud_function"]},
+     {id: "storage", name: "Storage", prefix: ["storage_", "edge_function"],
+      declared: ["edge_function"]},
+   ]},
   {id: "off", label: "REACHED WITHOUT A BROWSER", short: "NO BROWSER",
    kinds: ["celery_task", "celery_schedule", "stripe_webhook", "stripe_event",
            "graphql_field", "graphql_selection",
@@ -1603,7 +1681,27 @@ function readPack() {
   NODE_R = parseFloat(cs.getPropertyValue("--r-node")) || 5;
   WIRE_STYLE = (cs.getPropertyValue("--wire-style") || "curve").trim() || "curve";
 }
-function wirePath(ax, ay, bx, by) {
+const MARKERS = '<defs>' + [
+  ["connected", "var(--ok)"], ["unresolved", "var(--crit)"],
+  ["unused", "var(--warn)"], ["uncertain", "var(--dim)"], ["dim", "var(--dim)"],
+].flatMap(([name, colour]) => [["", 5], ["-lit", 7]].map(([suffix, size]) =>
+  `<marker id="ar-${name}${suffix}" viewBox="0 0 10 10" refX="9" refY="5"` +
+  ` markerWidth="${size}" markerHeight="${size}" orient="auto-start-reverse">` +
+  `<path d="M0,1 L9,5 L0,9 z" fill="${colour}"/></marker>` +
+  `<marker id="tl-${name}${suffix}" viewBox="0 0 10 10" refX="1" refY="5"` +
+  ` markerWidth="${size}" markerHeight="${size}" orient="auto-start-reverse">` +
+  `<path d="M10,1 L1,5 L10,9 z" fill="${colour}"/></marker>`
+)).join("") + '</defs>';
+
+function wirePath(ax, ay, bx, by, straight) {
+  // Under isolation the reader has asked to follow ONE path, so the line stops being
+  // decorative and becomes a schematic: right angles, which are far easier to trace with
+  // an eye than a bundle of parallel curves. The turn is offset from the midpoint so two
+  // runs between the same rows do not lie on top of each other.
+  if (straight) {
+    const mx = ax + Math.max(24, (bx - ax) / 2);
+    return `M${ax},${ay} L${mx},${ay} L${mx},${by} L${bx},${by}`;
+  }
   if (WIRE_STYLE === "ortho") {
     // Right angles: a schematic. The turn happens halfway, so parallel runs stay parallel.
     const mx = ax + (bx - ax) / 2;
@@ -1635,6 +1733,11 @@ const ROW_CHOICES = [3, 4, 5, 6, 8, 10, 12, 16, 20];
 // something at the top, it crosses the middle, and the bottom is what runs. Columns still
 // run left-to-right INSIDE a band, which is where the kind ordering belongs.
 const BAND_TOP = 96, BAND_BOT = 22, BAND_GAP = 26;
+// Room for a lane heading, and the air before one that is not the band's first.
+const LANE_HEAD = 34, LANE_GAP = 26;
+// The band's own heading is two lines tall, so the first lane inside it has to start
+// below them - without this the store name sat on top of the band's subtitle.
+const LANE_FIRST_DROP = 16;
 
 // Cards, flowing left to right, not slivers stacked in a column. A 150x20 sliver holds one
 // truncated line and 18,000 of them is a wall nobody reads. A card is 190x48 with a name on
@@ -1654,6 +1757,7 @@ function place(buckets, used, perRow) {
   const bandOfKind = new Map();
   BANDS.forEach((band, i) => band.kinds.forEach(k => bandOfKind.set(k, i)));
 
+  const lanes = [];
   const groups = new Map();
   used.forEach(c => {
     const kind = COLS[c] ? COLS[c][0] : "other";
@@ -1667,13 +1771,42 @@ function place(buckets, used, perRow) {
 
   [...groups.keys()].sort((m, n) => m - n).forEach(at => {
     let x = 44, rowTop = y + BAND_TOP, tallest = 0;
-    groups.get(at).forEach(c => {
+    const bandDef = BANDS[at];
+    // A band with lanes orders its columns by store and heads each run with the store's
+    // name and its oracle badge. Everything else keeps the flat kind order.
+    let ordered = groups.get(at);
+    let laneOf = null;
+    if (bandDef && bandDef.lanes) {
+      const which = kind => bandDef.lanes.findIndex(
+        L => L.prefix.some(pre => kind.startsWith(pre)));
+      laneOf = new Map(ordered.map(c => [c, which(COLS[c] ? COLS[c][0] : "")]));
+      ordered = [...ordered].sort((m, n) => (laneOf.get(m) - laneOf.get(n)) || (m - n));
+    }
+    let lastLane = -2;
+    ordered.forEach(c => {
       const items = buckets.get(c);
       const kind = COLS[c] ? COLS[c][0] : "other";
       const label = COLS[c] ? COLS[c][1] : "Other";
       // A new kind starts on a fresh row, so the group heading always sits over its own
       // cards rather than over the tail of the previous kind's.
       if (x > 44) { x = 44; rowTop += tallest + GAP_Y + KIND_GAP; tallest = 0; }
+      if (laneOf && laneOf.get(c) !== lastLane) {
+        lastLane = laneOf.get(c);
+        const lane = bandDef.lanes[lastLane];
+        if (lane) {
+          // Does this scan hold an oracle for this store? Only true if it actually found
+          // declarations - a Supabase project with no migrations checked in has the same
+          // lane and cannot verify a single name in it.
+          const hasOracle = lane.declared.some(k => {
+            const idx = ORDER.get(k);
+            return idx !== undefined && buckets.has(idx) && buckets.get(idx).length;
+          });
+          rowTop += rowTop > y + BAND_TOP ? LANE_GAP : LANE_FIRST_DROP;
+          lanes.push({x: 44, y: rowTop - 30, name: lane.name, id: lane.id,
+                      oracle: hasOracle});
+          rowTop += LANE_HEAD;
+        }
+      }
       columns.push({x, y: rowTop - 9, kind, label, count: items.length});
 
       if (items.length > AGGREGATE_OVER && !expandedKind) {
@@ -1709,7 +1842,7 @@ function place(buckets, used, perRow) {
     y += h + BAND_GAP;
   });
   bands.forEach(band => { band.w = Math.max(width - 26, 300); });
-  return {pos, columns, bands, aggregates, width: width + 44, height: y};
+  return {pos, columns, bands, lanes, aggregates, width: width + 44, height: y};
 }
 
 // A column wraps into lanes instead of running off the bottom of the world. One page here
@@ -1925,7 +2058,7 @@ function draw() {
       `<text x="20" y="98" class="mt sub">Take one off, or pick another page.</text>`;
     return;
   }
-  const {keep, value: {pos, columns, bands, aggregates, width, height}} = layoutFor(p);
+  const {keep, value: {pos, columns, bands, lanes, aggregates, width, height}} = layoutFor(p);
   // A phone is narrower than two columns of this map, so an untouched view opens showing
   // the whole chain, nudged clear of the left edge. Only the first draw of a view fits:
   // once someone pans or zooms, the view is theirs.
@@ -1965,7 +2098,13 @@ function draw() {
   reportMatches(drawnNodes.length, matched);
   reportEmpty(drawnNodes.length);
   const chain = lit && !isolate ? chainOf(p, lit) : null;
-  const out = ['<g id="vp">'];
+  // Arrowhead markers, emitted with every draw. They cannot live in the static shell:
+  // draw() replaces svg.innerHTML wholesale, so defs written once were wiped on the first
+  // frame and every marker-end pointed at nothing - the wires had no heads at all, and
+  // the markup looked perfectly correct while it happened. One marker per status because
+  // a marker cannot inherit the stroke of the path using it, and a grey head on a red
+  // wire reads as a different edge.
+  const out = [MARKERS, '<g id="vp">'];
   // The bands, drawn first and behind everything: full-width horizontal strips a reader
   // goes DOWN, which is the direction a request actually travels. A person touches
   // something in the top strip, it crosses the middle, and the bottom is what runs.
@@ -1983,15 +2122,61 @@ function draw() {
   });
   columns.forEach(c => out.push(
     `<text class="col" x="${c.x}" y="${c.y}">${esc(c.label)} ${c.count}</text>`));
+  // ── the wires ──────────────────────────────────────────────────────────────
+  // Three things this used to get wrong, all of them noise rather than error.
+  //
+  // SELF-LOOPS. A symbol whose status is carried on an edge to ITSELF - which is how
+  // unresolved and unused are recorded - was drawn as a path from its own right edge back
+  // to its own left edge: a curve looping backwards through the card, meaning nothing. On
+  // one project 78% of every line on the canvas was one of these. The status is already
+  // in the card's colour and fill; the line said it a second time, illegibly.
+  //
+  // DIRECTION. A seam has a direction - the call reaches the route, not the other way -
+  // and nothing on the canvas showed it. Every line now ends in an arrowhead at the
+  // TARGET, and a reciprocal pair collapses into ONE line with a head at each end instead
+  // of two curves lying on top of each other.
+  //
+  // ISOLATION. When a reader lights one node and asks to see only that, the answer should
+  // be as plain as possible: the curve becomes a right-angled run, the stroke thickens,
+  // and the arrow grows. A curve is atmosphere for a whole canvas; a schematic is what
+  // you want when you are following one path.
+  const seen = new Set();
+  const reciprocal = new Set();
   p.edges.forEach(e => {
+    if (e.source === e.target) return;
+    seen.add(e.source + "\u0000" + e.target);
+  });
+  p.edges.forEach(e => {
+    if (e.source !== e.target && seen.has(e.target + "\u0000" + e.source)) {
+      reciprocal.add([e.source, e.target].sort().join("\u0000"));
+    }
+  });
+  const drawnEdge = new Set();
+  p.edges.forEach(e => {
+    // A status carried on a loop to itself is not a connection. See above.
+    if (e.source === e.target) return;
     const a = pos.get(e.source), b = pos.get(e.target);
     if (!a || !b) return;
+    // Both ends parked on the same aggregate card would draw a line inside one rectangle.
+    if (a.agg && b.agg && a.x === b.x && a.y === b.y) return;
+    const pairKey = [e.source, e.target].sort().join("\u0000");
+    const twoWay = reciprocal.has(pairKey);
+    if (twoWay) {
+      if (drawnEdge.has(pairKey)) return;   // one line for the pair, two arrowheads
+      drawnEdge.add(pairKey);
+    }
     const ends = [byId.get(e.source), byId.get(e.target)];
     const dim = (chain && !(chain.has(e.source) && chain.has(e.target)))
       || (fading && query && !ends.every(n => n && hit(n)));
-    out.push(`<path class="ed${dim ? " faded" : ""}" stroke="${S[e.status] || "var(--dim)"}"
+    // Lit: this edge is part of the path the reader asked to see on its own.
+    const onChain = !!chain && chain.has(e.source) && chain.has(e.target);
+    const colour = S[e.status] || "var(--dim)";
+    const head = `url(#ar-${e.status || "dim"}${onChain ? "-lit" : ""})`;
+    const tail = twoWay ? ` marker-start="url(#tl-${e.status || "dim"}${onChain ? "-lit" : ""})"` : "";
+    out.push(`<path class="ed${dim ? " faded" : ""}${onChain ? " lit" : ""}"
+      stroke="${colour}" marker-end="${head}"${tail}
       d="${wirePath(a.x + (a.w || CARD_W), a.y + (a.h || CARD_H) / 2,
-                    b.x, b.y + (b.h || CARD_H) / 2)}"/>`);
+                    b.x, b.y + (b.h || CARD_H) / 2, onChain)}"/>`);
   });
   // "Alone" is the STATUS, not the edge count. A symbol reaches a page by an edge, so
   // nothing here can have no edges, and the map's edge set carries no self-loops either -
@@ -2006,6 +2191,19 @@ function draw() {
   // thousands of nodes.
   // The aggregate cards first, behind the individual ones: a kind with more members than
   // fit is a single card carrying its count, which is the fact that matters at this zoom.
+  // Lane headings inside the store band: the store's name, and whether this scan holds
+  // anything to check it against. The badge is the one thing no other band needs - every
+  // other band's evidence is in the repository by definition, and a data store's may live
+  // in a dashboard. A reader who sees "no schema" knows a grey card means unknowable
+  // rather than dead, before looking at a single card.
+  (lanes || []).forEach(L => {
+    out.push(`<g class="lane">
+      <text class="lanename" x="${L.x}" y="${L.y}">${esc(L.name)}</text>
+      <text class="lanebadge ${L.oracle ? "has" : "none"}" x="${L.x + 12 + L.name.length * 8.6}"
+            y="${L.y}">${L.oracle ? "SCHEMA IN REPO" : "NO SCHEMA \u00b7 PAIRING ONLY"}</text>
+    </g>`);
+  });
+
   (aggregates || []).forEach(g => {
     out.push(`<g class="nd agg st-${esc(g.status)}" data-kind="${esc(g.kind)}">
       <rect x="${g.x}" y="${g.y}" width="${g.w}" height="${g.h}" rx="${NODE_R}"
@@ -2750,9 +2948,14 @@ const n = v => (v || 0).toLocaleString();
 
 // The four statuses split two ways that matter, and only one of them is a to-do list.
 function totals() {
+  // Every region, not two of them. Summing backend and frontend alone made the headline
+  // read "0% of 0 symbols · nothing unresolved and nothing unused" directly above a
+  // backlog listing four real findings, on any project whose symbols live in the store or
+  // off-browser regions. The headline is the first thing read and it was the wrongest.
   const all = {};
   ["connected", "unresolved", "unused", "uncertain"].forEach(k => {
-    all[k] = (D.backend[k] || 0) + (D.frontend[k] || 0);
+    all[k] = (D.backend[k] || 0) + (D.frontend[k] || 0)
+           + ((D.store || {})[k] || 0) + ((D.offscreen || {})[k] || 0);
   });
   const sum = c => Object.values(c).reduce((a, v) => a + v, 0);
   return {all, total: sum(all), looking: (all.unresolved || 0) + (all.unused || 0)};
@@ -2792,10 +2995,16 @@ function heroHtml() {
 // matters in one line: the backend is clean and every finding is in the frontend.
 function sidesHtml() {
   const sum = c => Object.values(c).reduce((a, v) => a + v, 0);
-  const rows = [["Frontend", D.frontend], ["Backend", D.backend]]
+  // The same four regions the canvas draws. Two rows covered 14 kinds and silently
+  // omitted every other symbol in the scan - a data-layer project opened on "0% of 0
+  // symbols" with four findings listed directly underneath. A row with nothing in it is
+  // dropped rather than shown as a zero, so an ordinary Django app still sees two.
+  const rows = [["Frontend", D.frontend], ["Backend", D.backend],
+                ["The store", D.store], ["No browser", D.offscreen]]
     .map(([name, c]) => ({
-      name, total: sum(c), finds: (c.unresolved || 0) + (c.unused || 0),
+      name, total: sum(c || {}), finds: ((c || {}).unresolved || 0) + ((c || {}).unused || 0),
     }))
+    .filter(r => r.total)
     .sort((a, b) => b.total - a.total);
   const widest = Math.max(...rows.map(r => r.total), 1);
 
@@ -3710,7 +3919,8 @@ def _console_payload(console) -> str:
     from dataclasses import asdict
 
     if console is None:
-        return json.dumps({"backend": {}, "frontend": {}, "groups": [], "sections": []})
+        return json.dumps({"backend": {}, "frontend": {}, "store": {}, "offscreen": {},
+                           "groups": [], "sections": []})
     # Rows carry a snippet the panel never draws, and a section can hold well over a
     # thousand of them - together a megabyte and a half on a page meant to open on a
     # phone. Send a screenful, and say so when a section is longer than what was sent.
@@ -3746,6 +3956,11 @@ def _console_payload(console) -> str:
 
     data = {
         "backend": console.backend, "frontend": console.frontend,
+        # Named explicitly, like the two above. This dict is hand-built rather than an
+        # asdict(), so a field added to Console reaches the page only when it is added
+        # here too - which is why the store and off-browser counts arrived empty.
+        "store": getattr(console, "store", {}) or {},
+        "offscreen": getattr(console, "offscreen", {}) or {},
         "groups": [[title, count, gloss] for title, count, gloss in console.groups],
         "sections": [_section(section) for section in console.sections],
     }
