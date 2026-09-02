@@ -202,10 +202,11 @@ GraphQL schemas
 **Monorepos** — a repository with several services is not one application. Seamcheck reads
 the workspace manifests, project files and Dockerfiles, tells the deployables apart from
 the libraries, and can say which service owns a file (`seamcheck share`, or the `services`
-MCP tool). cal.com declares 113 packages and deploys six of them.
+MCP tool). A large monorepo commonly declares a hundred packages and deploys a handful.
 
-Also tried against 20 open-source projects: 53,361 files, 9.5M lines, 2,435 routes. If
-yours does not work, I would genuinely like to know.
+Also run against 32 open-source projects — 9.4M lines across all seven backends — as a
+standing check that it works on code I did not write. Aggregate only: I do not publish
+findings against a project by name. If yours does not work, I would genuinely like to know.
 
 ## It reads your data layer too
 
