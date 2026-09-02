@@ -285,3 +285,122 @@ Worth recording, because a list of complaints is not an evaluation.
 (unresolved 3,492 → 3,428), and reading only that number you would conclude the tool did
 nothing. What it actually did was point at ~12,000 req/s of waste and two live bugs. **The
 counts are the wrong headline. The joins are the product.**
+
+---
+
+# Update · 0.8.1 · re-measured on the same project
+
+Upgraded and re-scanned after the cleanup. **Everything in scope for the release landed**, and the
+findings triaged with `--wrong` words came back correctly classified. Recorded here so the loop is
+visible from this side too.
+
+## Verified fixed
+
+| # | Item | Evidence on re-scan |
+|---|---|---|
+| **T1** | Path normalisation (absolute vs relative) | same-file-counted-twice **299 → 0**. Multi-writer findings **370 → 48**, and all 48 are genuine |
+| **T3** | `share` could not import the project | imports cleanly, and reports **47,131 symbols / 96,007 edges — matching the scan exactly**, where it used to disagree (46,309 vs 47,834) |
+| **T4** | No changelog | `CHANGELOG.md`, with coverage/precision/recall/render per release, and the honest note that `uncertain` is not counted as a claim |
+| **F6** | Interpolated attribute value hid a literal attribute name | `data-tab` → **connected** on all three sites |
+| **F5** | Django's generated `id_<field>` | `id_multiplier_1_3_hours` → **uncertain** |
+| **F4** | Class assembled by a Django tag | `ad-badge-` is **no longer emitted at all** |
+| **F3** | `querySelectorAll` connected only the first declaration | `js-open-achievements` → **connected on every line**, including the five that were the victims |
+| **F1** | CDN icon font judged against local CSS | `fas` → **uncertain**, not `unresolved` |
+| **C7** | Rank a dead selector by what it costs | **built** (`87dbfbfd8`, `e599f6dc7`), after the v0.8.1 tag |
+
+**The control held.** `ru-stat-item` — hand-verified as genuinely dead, marked
+`confirmed / genuinely-dead` — is **still `unresolved`**. The fixes did not blanket-downgrade
+everything, which is the failure mode a precision push is most at risk of.
+
+## Numbers on the same project
+
+| | 0.8.0, before cleanup | 0.8.1, after | |
+|---|---:|---:|---|
+| unresolved | 3,492 | **2,695** | −23% |
+| unused | 2,136 | **1,560** | −27% |
+| uncertain | 2,883 | 3,345 | **+462 — the right direction** |
+| edges | 48,313 | **96,007** | ×2 |
+
+Two of those deserve a note in the release copy, because both look wrong at a glance:
+
+- **`uncertain` rising is the tool getting more honest.** Those 462 moved *out of* `unresolved` and
+  `unused`, where it had been confidently wrong. The number to quote as improvement is
+  `unresolved`, down 23%.
+- **Edges doubling** is `b7ea4f323` — *HTML reads an id without any JavaScript, and none of it
+  counted*. ~48,000 real connections the graph did not previously have.
+
+## Two mechanisms observed working on real data
+
+**Triage expiry.** `seamcheck check` reported four marks as *"triage invalidated — the evidence
+behind this disposition changed, so the mark no longer applies."* Exactly the documented design: the
+marks were keyed to evidence, the evidence changed when the bugs were fixed, and the approvals
+expired rather than silently outliving the code they approved.
+
+**The line-shift artefact, now demonstrated.** `check` reported three `new_unresolved` for
+`dom_selector:data:avatar` in one file. They are not new — `data-avatar` appears **6 times before
+and 6 times after** the edit. Deleting 317 lines re-ids everything below it, because symbol ids
+embed `path:line`. Worth solving before `check` is trusted as a PR gate: a refactor that moves code
+will always look like it introduced findings.
+
+---
+
+# New checks, from finishing the job
+
+Three more, all found after the first version of this file — two of them by running the host
+project's own test suite to completion for the first time.
+
+### C10 — an assertion whose collection can be empty
+
+```python
+targets = self._switcher_targets('/cps-test/')   # returned {} once the parser broke
+for code, target in targets.items():             # a loop over {} asserts nothing
+    self.assertEqual(...)
+```
+
+This test was **green for the entire time its parser was broken**. It is not a rare shape: the same
+session found three instances of one bug class —
+
+1. this loop over an empty dict;
+2. a regression plug-in whose `preflight_fn(ctx)` destructured a parameter its only caller does not
+   pass, so it **died before the first assertion** while appearing in the ledger as covering two;
+3. 107 anomalies raised as raw strings instead of registered constants, so they can never fail a run.
+
+All three are "the check did not run" wearing the costume of "the check passed". Static analysis can
+see all three: a loop with no non-empty precondition, a destructure against a known call signature,
+a raise of a string where a registry constant is expected.
+
+> **A test that cannot fail is indistinguishable from a test that passed — and both are green.**
+
+### C11 — global state activated and not restored
+
+```python
+translation.activate('es')      # simulating what the middleware left behind
+...                             # …and never restored
+```
+
+Django's active language is thread-local, not per-test. That one line made the **whole suite
+order-dependent**: `test_pps_service` asserts English substrings in validation errors and got back
+*"Duración no válida"* and *"CPS demasiado alto"* — **ten failures in a file that passes on its own,
+in a directory that passes on its own.** The failures pointed at the victim, never at the cause.
+
+Worth a check because the shape is mechanical: a call that mutates process-global state
+(`translation.activate`, `timezone.activate`, `settings` mutation, `locale.setlocale`) inside a test
+or fixture, with no `finally`, no `override` context manager, and no teardown.
+
+### C12 — the scan's own caveat should travel with the finding
+
+The summary prints *"Celery tasks, Redis subscribers, WebSocket handlers and Stripe webhooks are not
+traced yet"*. That caveat is the entire explanation for a whole class of `redis_key unused` rows,
+and it lives 200 lines away from them. Attach it to the rows it explains.
+
+---
+
+# Still blocking, from the consuming side
+
+**F12 — `redis_key unused` does not read f-string key construction.** `api:user_stats:*` is reported
+unused; it is used in three places as `f"api:user_stats:{user_id}"`. That is the dominant idiom in a
+Django codebase and `*`-patterns are exactly what it produces. **All 107 `redis_key unused` findings
+on this project were left untouched for this reason** — not because they were checked and dismissed,
+but because the category cannot currently be trusted enough to act on.
+
+It is the one open item that changes what a consumer is able to do with the output.
