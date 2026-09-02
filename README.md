@@ -12,7 +12,8 @@ never runs your code.
 ![The map](docs/images/map.png)
 
 <sub>A small Express shop, scanned. Read it downwards: **the browser** at the top, **the
-seam** where requests cross the network, **the server** underneath.</sub>
+seam** where requests cross the network, **the server** underneath, and **the store** where
+it talks to its data.</sub>
 
 ## Why I made it
 
@@ -29,6 +30,8 @@ It does not catch everything, and I am sure there are things it gets wrong. When
 tell, it tries to say `uncertain` rather than guess. **If you find it being confidently
 wrong somewhere, please [open an issue](https://github.com/dardameiz/seamcheck/issues)** —
 that is the most useful thing anyone can send me.
+
+What changed, per release: [CHANGELOG.md](CHANGELOG.md).
 
 ## Install
 
@@ -148,8 +151,36 @@ every hop, and a sentence saying what it means and what to check.
 ![A broken request, clicked, with its chain lit](docs/images/chain.png)
 
 <sub>`checkout.js` asks for `/api/shipping/quotes`. The server serves
-`/api/shipping/quote`. One character, valid on both sides, and nothing else would have
-told you.</sub>
+`/api/shipping/quote`. One character, valid on both sides, and nothing else would have told
+you. The lit line runs straight and carries an arrow, so the direction is the request's
+direction; everything not on the path recedes.</sub>
+
+The number it opens on is the only one that matters: **how much is worth looking at**, and
+what the rest of the scan is instead.
+
+![The score](docs/images/overview.png)
+
+<sub>Ten of 101 symbols are findings. The other 91 are named rather than hidden — 76
+connected with evidence attached, 15 uncertain, which is the scan declining to guess. Each
+region carries its own rate, so "the store is 11% findings" is a sentence you can act on
+and "the frontend is bigger" is not.</sub>
+
+It reads your data layer as the **second seam** — a query crosses a boundary and lands on a
+table the same way a request crosses one and lands on a route.
+
+![The store band](docs/images/database.png)
+
+<sub>Lanes by store, because each fails differently. Every lane says whether it has an
+oracle: `schema in repo` means a name can be checked, `no schema · pairing only` means it
+cannot, and a grey card there is unknowable rather than dead. Redis never has one — nothing
+declares a key — so it can only ever show you that two halves of your own code disagree.</sub>
+
+One menu, and the counts are the current page's.
+
+![The menu](docs/images/menu.png)
+
+<sub>Views on top, then the lenses: the whole scan, or just the database, Redis,
+configuration or background jobs.</sub>
 
 Everything it is willing to claim, each one explained in a sentence, worst first.
 
@@ -167,15 +198,53 @@ Five looks, if you care. Aurora is the default.
 
 No configuration. It works out which one you are using from what is in the repo.
 
-| | detected by | reads |
+**How well, though, is a fair question — and the honest answer is that it varies a lot.**
+So here is where each one actually stands, by how much real code it has been run against
+rather than by how much of it is written.
+
+| | | detected by | reads |
+|---|---|---|---|
+| **Django** | 🟢 **used daily** | `manage.py` | the URLconf, imported; templates, models, admin, Celery |
+| **Express** | 🟡 tried on real repos | `app.get(...)` | call sites, from source |
+| **Next.js** | 🟡 tried on real repos | `pages/api`, `app/**/route.ts` | the file tree |
+| **FastAPI** | 🟡 tried on real repos | `@app.get` | decorators, from source |
+| **Flask** | 🟡 tried on real repos | `@app.route` | decorators, from source |
+| **NestJS** | 🟠 read, barely used | `@Controller` | decorators, composed with the controller prefix |
+| **Fastify** | 🟠 read, barely used | `fastify.get(...)` | call sites, from source |
+
+| data layer | | reads |
 |---|---|---|
-| **Django** | `manage.py` | the URLconf, imported |
-| **Flask** | `@app.route` | decorators, from source |
-| **FastAPI** | `@app.get` | decorators, from source |
-| **Express** | `app.get(...)` | call sites, from source |
-| **Fastify** | `fastify.get(...)` | call sites, from source |
-| **NestJS** | `@Controller` | decorators, composed with the controller prefix |
-| **Next.js** | `pages/api`, `app/**/route.ts` | the file tree |
+| **Supabase / Postgres** | 🟡 tried on real repos | `supabase/migrations/*.sql` against every `.from()`, `.select()` and `.rpc()` |
+| **Redis** | 🟡 tried on real repos | keys written and read, across Python and JavaScript, and cache keys with no expiry |
+| **Firebase** | 🟠 read, barely used | `firestore.rules` against `collection(db, …)`, and callables against their exports |
+| **Django ORM · Prisma · Mongo** | 🔴 not yet | — |
+
+🟢 **used daily** — one large production app, every day, for months. Every false-positive
+class below was found there.
+🟡 **tried on real repos** — run against open-source projects and hand-checked, but nobody
+is living with it.
+🟠 **read, barely used** — the reader exists and its demo passes; almost no real-world
+exposure.
+🔴 **not yet** — measured as worth doing, not built.
+
+### This is where I could use help
+
+The gap between 🟢 and 🟡 is not code, it is **someone running it on their own project and
+telling me what it got wrong.** Every improvement in the last releases came from exactly
+that: a Supabase user reporting 728 findings against tables that existed, someone finding
+that 65 multi-writer findings named one file, an icon font judged against a stylesheet that
+was never in the repo.
+
+If you run it and something is wrong — findings against things that plainly exist, or
+silence where there is plainly something — that is the useful part:
+
+```bash
+seamcheck triage '<id>' --wrong consumed-by-dependency   # nine fixed words, see help triage
+seamcheck share                                          # counts only, no code, no paths
+```
+
+Or open an issue in your own words. **A report saying "NestJS, 200 findings, most of them
+nonsense, here is one" is worth more than any amount of me guessing.**
 
 Each one is checked against a small app written for the purpose, with a deliberately
 mistyped endpoint in it, and each one finds it:

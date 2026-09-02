@@ -78,3 +78,32 @@ jobs:
       - uses: actions/download-artifact@v4
         with: { name: dist, path: dist/ }
       - uses: pypa/gh-action-pypi-publish@release/v1
+
+  # A tag on its own tells nobody anything. This turns the tag into a GitHub Release
+  # carrying that version's CHANGELOG section, which is what shows up in the sidebar, in
+  # the feed people watch, and in the notification a dependent gets.
+  notes:
+    needs: pypi
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: The section for this version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          # From this version's heading to the next one, exclusive.
+          awk -v v="$VERSION" '
+            $0 ~ "^## " v " " { found=1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > notes.md
+          # Never publish an empty release: a missing section is a mistake worth seeing.
+          if [ ! -s notes.md ]; then
+            echo "No CHANGELOG section for $VERSION - add one before tagging." >&2
+            exit 1
+          fi
+          echo "Install: \`pip install -U seamcheck\`" >> notes.md
+      - name: Publish
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file notes.md

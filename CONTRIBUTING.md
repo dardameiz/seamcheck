@@ -63,6 +63,15 @@ from that comparison and not from the unit tests:
 When the two counts disagree, find out which side is wrong before changing anything. An
 AST is usually right and the regex baseline usually over-counts (comments, strings).
 
+## What contributing means for ownership
+
+You keep the copyright on your own commits. Opening a pull request against this repository
+offers that patch under the project's licence — MIT — so it ships under the same terms as
+everything else, and nobody, maintainer included, gets a private more-permissive copy.
+
+There is no CLA to sign and no copyright to assign. The trade is deliberate: the project
+cannot be relicensed out from under you either.
+
 ## Commits
 
 [Conventional Commits](https://www.conventionalcommits.org/): `feat:`, `fix:`, `test:`,

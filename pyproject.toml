@@ -8,7 +8,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "seamcheck"
-version = "0.8.0"
+version = "0.8.1"
 description = "Find the code your project no longer connects to - and the connections it only thinks it has. A frontend-to-backend seam checker with a visual map."
 readme = "README.md"
 license = "MIT"
@@ -81,7 +81,7 @@ artifacts = ["seamcheck/js_tools/*.bundle.mjs", "seamcheck/css_tools/*.bundle.mj
 exclude = ["seamcheck/tests", "seamcheck/triage.json"]
 
 [tool.hatch.build.targets.sdist]
-include = ["seamcheck", "README.md", "LICENSE"]
+include = ["seamcheck", "README.md", "LICENSE", "CHANGELOG.md"]
 
 [tool.ruff]
 # Held to the package's own floor. With py312 here, UP038 and UP017 "fix" isinstance
