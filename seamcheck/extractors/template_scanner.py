@@ -90,6 +90,55 @@ def _tokens(attribute: str, value: str) -> list[str]:
     return [cleaned]
 
 
+# HTML reads an id without any JavaScript, and until now none of these counted as a read.
+# Measured on Sentry: `<a href="#create" data-toggle="tab">` sits four lines from the
+# element it targets, in the same file, and `id="create"` was still reported unused.
+#
+# Two shapes. One carries a `#`, because it is a URL fragment; the other is a bare id,
+# because the attribute's whole purpose is to name one. Getting that backwards silently
+# matches nothing.
+_FRAGMENT_ATTRS = frozenset({
+    "href",                                    # <a href="#panel">
+    "data-target", "data-bs-target",           # Bootstrap 4 / 5 toggles
+    "data-bs-parent", "data-parent",           # accordions
+    "xlink:href",                              # <use xlink:href="#icon">
+})
+_BARE_ID_ATTRS = frozenset({
+    "for",                                     # <label for="field">
+    "form",                                    # <input form="the-form">
+    "list",                                    # <input list="suggestions">
+    "aria-controls", "aria-labelledby", "aria-describedby", "aria-owns",
+    "aria-flowto", "aria-details", "aria-errormessage",
+    "popovertarget", "commandfor",             # modern HTML, no JS involved
+    "headers",                                 # <td headers="col1 col2">
+})
+
+
+# A separate pass. _ATTRIBUTE_RE is deliberately narrow - it defines what a DEFINITION
+# looks like - and widening it to catch reads would change what counts as a dom_attr.
+_ID_REF_RE = re.compile(
+    r"""\b(""" + "|".join(
+        re.escape(name) for name in sorted(_FRAGMENT_ATTRS | _BARE_ID_ATTRS)
+    ) + r""")\s*=\s*(?:"([^"]*)"|'([^']*)')"""
+)
+
+
+def _id_references(attribute: str, value: str) -> list[str]:
+    """Ids this attribute READS. Several of them are space-separated lists."""
+    attribute = attribute.lower()
+    cleaned = _INTERPOLATION_RE.sub(_EXPRESSION_MARK, _replace_block_tags(value or ""))
+    out: list[str] = []
+    if attribute in _FRAGMENT_ATTRS:
+        # Only a same-document fragment. `href="/page#x"` targets another document's id,
+        # and `href="#"` targets nothing at all.
+        if not cleaned.startswith("#") or len(cleaned) < 2:
+            return []
+        out = [cleaned[1:]]
+    elif attribute in _BARE_ID_ATTRS:
+        out = cleaned.split()
+    return [name for name in out if name and _EXPRESSION_MARK not in name]
+
+
 def _line_of(text: str, offset: int) -> int:
     return text.count("\n", 0, offset) + 1
 
@@ -135,6 +184,26 @@ def scan_templates(template_files: list[str]) -> list[Symbol]:
                         kind="dom_attr", label=label_prefix, sub="data", file=file_path,
                         line=line, status=Status.UNCERTAIN, snippet=f'{attribute}="{value}"',
                         chain=[pathlib.Path(file_path).name, label_prefix], note="",
+                    )
+                )
+
+        # Ids the markup READS. Evidence, never a claim: a fragment can legitimately point
+        # at an element some script creates later, so "nothing defines it" is not a
+        # conclusion this scan can reach.
+        for match in _ID_REF_RE.finditer(text):
+            attribute = match.group(1)
+            value = match.group(2) if match.group(2) is not None else match.group(3)
+            line = _line_of(text, match.start())
+            for target in _id_references(attribute, value):
+                symbols.append(
+                    Symbol(
+                        id=f"dom_selector:id:{target}:{file_path}:{line}",
+                        kind="dom_selector", label=target, sub="id:evidence",
+                        file=file_path, line=line, status=Status.UNCERTAIN,
+                        snippet=f'{attribute}="{value}"',
+                        chain=[pathlib.Path(file_path).name, target],
+                        note="Referenced from the markup itself - an anchor, a toggle, a "
+                             "label or an ARIA relationship. Evidence that the id is live.",
                     )
                 )
     return symbols
