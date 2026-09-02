@@ -234,6 +234,58 @@ Five looks, if you care. Aurora is the default.
 
 ![The design packs](docs/images/packs.png)
 
+## Four words, and it never says more than it can prove
+
+| | |
+|---|---|
+| **connected** | Something reaches it, and the evidence is attached. |
+| **unresolved** | Something reaches for it by name and it is not there. Usually a bug. |
+| **unused** | Both ends are visible and nothing connects them. Usually a decision. |
+| **uncertain** | The scan cannot tell. |
+
+`uncertain` is a real answer rather than a cop-out. A route assembled at runtime genuinely
+cannot be known by reading the source, and I would rather it admitted that than pretended
+otherwise. It is also why the other three can be trusted.
+
+### How the four fit together, and the two numbers that measure them
+
+Every symbol gets exactly one of the four. Nothing is counted twice, and nothing is
+dropped:
+
+```
+every symbol found
+│
+├─ a verdict was reached ─────────────────────────── COVERAGE
+│  ├─ connected    something reaches it, evidence attached
+│  ├─ unresolved   reaches for a name that is not there  ─┐
+│  └─ unused       both ends visible, nothing connects   ─┴─ these two are CLAIMS
+│
+└─ uncertain  ── no evidence either way. NOT a claim that it is dead.
+   ├─ no oracle  the evidence is not in this repository, so nothing that
+   │             reads source can ever settle it. Not a gap - the shape of
+   │             the project. A CDN <link>, or Bootstrap in an uncommitted
+   │             node_modules.
+   └─ fixable    the evidence IS in the repository and Seamcheck cannot
+                 read it yet. This half is the to-do list.
+```
+
+**Two numbers, two different denominators.** Quoting either one alone is misleading, and
+quoting one as though it were the other is worse:
+
+| | | answers |
+|---|---|---|
+| **Coverage** | verdicts ÷ symbols | *"how much of my project can it speak to at all?"* |
+| **Precision** | true claims ÷ claims | *"when it does say something is broken, is it right?"* |
+
+**Precision says nothing about `uncertain`, because `uncertain` is not a claim.** A backend
+that answered `uncertain` for every single symbol would have flawless precision and be
+completely useless — which is exactly why coverage is reported per backend below, and why
+it is reported next to its ceiling.
+
+**And `uncertain` is never "probably dead".** It is the scan naming the evidence it does
+not have. If that reads as an accusation against working code, the wording is wrong and I
+would like to know.
+
 ## Does it work with my stack?
 
 No configuration. It works out which one you are using from what is in the repo.
@@ -241,10 +293,9 @@ No configuration. It works out which one you are using from what is in the repo.
 **How well, though, is a fair question, and the honest answer is that it varies enormously
 — so the table below reports it as a number rather than a claim.**
 
-*Coverage* is the share of the things it found that it was actually able to judge. The
-remainder come back `uncertain`, which means "no evidence either way" and not "fine". A
-backend with low coverage is not lying to you; it is mostly declining to answer, and that
-is worth knowing before you install it.
+Coverage, as defined just above: the share it reached a verdict on. **A backend with low
+coverage is not lying to you — it is mostly declining to answer**, and that is the thing
+worth knowing before you install it.
 
 **Django is the one being made good first, deliberately.** It is where the tool is used
 every day against a large production codebase, so it is the only place a wrong finding gets
@@ -413,58 +464,6 @@ UNRESOLVED  redis_ttl  cache:board:*   names itself a cache, written with no exp
 Key patterns are normalised before they are compared, so `user:{uid}:stats`,
 `user:${id}:stats` and `user:%s:stats` are one key — a Python writer meets a JavaScript
 reader.
-
-## Four words, and it never says more than it can prove
-
-| | |
-|---|---|
-| **connected** | Something reaches it, and the evidence is attached. |
-| **unresolved** | Something reaches for it by name and it is not there. Usually a bug. |
-| **unused** | Both ends are visible and nothing connects them. Usually a decision. |
-| **uncertain** | The scan cannot tell. |
-
-`uncertain` is a real answer rather than a cop-out. A route assembled at runtime genuinely
-cannot be known by reading the source, and I would rather it admitted that than pretended
-otherwise. It is also why the other three can be trusted.
-
-### How the four fit together, and the two numbers that measure them
-
-Every symbol gets exactly one of the four. Nothing is counted twice, and nothing is
-dropped:
-
-```
-every symbol found
-│
-├─ a verdict was reached ─────────────────────────── COVERAGE
-│  ├─ connected    something reaches it, evidence attached
-│  ├─ unresolved   reaches for a name that is not there  ─┐
-│  └─ unused       both ends visible, nothing connects   ─┴─ these two are CLAIMS
-│
-└─ uncertain  ── no evidence either way. NOT a claim that it is dead.
-   ├─ no oracle  the evidence is not in this repository, so nothing that
-   │             reads source can ever settle it. Not a gap - the shape of
-   │             the project. A CDN <link>, or Bootstrap in an uncommitted
-   │             node_modules.
-   └─ fixable    the evidence IS in the repository and Seamcheck cannot
-                 read it yet. This half is the to-do list.
-```
-
-**Two numbers, two different denominators.** Quoting either one alone is misleading, and
-quoting one as though it were the other is worse:
-
-| | | answers |
-|---|---|---|
-| **Coverage** | verdicts ÷ symbols | *"how much of my project can it speak to at all?"* |
-| **Precision** | true claims ÷ claims | *"when it does say something is broken, is it right?"* |
-
-**Precision says nothing about `uncertain`, because `uncertain` is not a claim.** A backend
-that answered `uncertain` for every single symbol would have flawless precision and be
-completely useless — which is exactly why coverage is reported per backend below, and why
-it is reported next to its ceiling.
-
-**And `uncertain` is never "probably dead".** It is the scan naming the evidence it does
-not have. If that reads as an accusation against working code, the wording is wrong and I
-would like to know.
 
 ## The commands
 
