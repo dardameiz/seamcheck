@@ -1154,6 +1154,8 @@ const LAYERS = [
   ["celery", "Celery"],
   ["jobs", "Background jobs"],
   ["config", "Configuration"],
+  ["database", "Database"],
+  ["redis", "Redis"],
   ["graphql", "GraphQL"],
 ];
 const LAYER_KINDS = {
@@ -1161,6 +1163,16 @@ const LAYER_KINDS = {
   celery: new Set(["celery_task", "celery_schedule"]),
   jobs: new Set(["job", "job_enqueue", "job_schedule"]),
   config: new Set(["env_var", "env_read"]),
+  // The data layer, split by store rather than lumped together. "Does this project have a
+  // database" is not a question anyone asks; "show me Redis" is, and the two answer to
+  // completely different failure modes - a mistyped column returns a row without it, a
+  // mistyped Redis key returns nothing at all and nobody notices.
+  database: new Set(["db_table", "db_column", "db_function", "db_policy",
+                     "db_table_use", "db_column_use", "db_function_use",
+                     "edge_function", "edge_function_use", "storage_bucket",
+                     "firestore_collection", "firestore_rule",
+                     "cloud_function", "cloud_function_use"]),
+  redis: new Set(["redis_key", "redis_ttl"]),
   graphql: new Set(["graphql_field", "graphql_selection"]),
 };
 // A layer only offers itself when the scan actually found that service.
