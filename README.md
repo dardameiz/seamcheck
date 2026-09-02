@@ -48,7 +48,9 @@ Not hypothetical. These came out of the 511,000-line Django app it is measured a
 | three dead selectors | timers fetching on a loop to fill elements **that exist in no template** — **~12,000 requests per second** at the app's target concurrency |
 | a dead `dom_attr` | the **level-up modal had been frozen since it shipped** — the only function writing it was never called, so it showed the page-load value through every level-up |
 | a selector that could never match | a lookup whose own comment said **"ORDER IS LOAD-BEARING"**, in six files, matching nothing |
-| duplicated writers | 1,248 lines of JavaScript deleted across 15 files — second copies left behind by refactors that never finished |
+| a duplicated feature | a **second, complete out-of-pushes system** — its own 5-second interval and its own MutationObserver — running beside the real one |
+| two live copies of a panel | both wrote elements that **exist in no template**; the panel had already been deleted once |
+| duplicated writers | **1,248 lines** of JavaScript deleted across 15 files — second copies left behind by refactors that never finished |
 
 **None of them threw. None failed a test. No error, no ticket** — which is exactly why they
 had all been running for years. A value that is quietly wrong and an element that is quietly
@@ -56,6 +58,12 @@ dead do not announce themselves.
 
 The detail, with the numbers and the query that separated them from the cosmetic findings,
 is in [Field notes](#field-notes-from-the-measurement-project) below.
+
+It runs in CI with **no API key, no network call and no model**, so this costs nothing per
+run and nothing per repository — and an AI agent working on the code can read the findings
+instead of re-deriving them from the source every session. See
+[In CI](#in-ci--no-token-no-network-no-model) and
+[If you build with an AI agent](#if-you-build-with-an-ai-agent).
 
 ## Why I made it
 
@@ -607,6 +615,23 @@ the one already there. The symptom moves, the next session adds another, and it 
 worse.
 
 So there is an MCP server. The agent asks, and gets the answer with the exact lines.
+
+**And it is cheaper than asking the model.** A question like *"is any of this dead?"* has a
+deterministic answer, and paying an LLM to re-derive it is paying for the same reasoning
+every session, at the price of reading half the repository into context each time. Seamcheck
+computes it once, from the source, with **no model and no tokens at all** — then hands the
+agent a list of file-and-line answers to act on. The agent spends its context on the fix
+rather than on rediscovering the problem.
+
+That difference matters most exactly where the codebase is too big to hold at once, which
+is the same place the bugs hide.
+
+**There is a correctness argument too, and it is the more important one.** An agent reading
+code to decide whether something is dead will produce an answer either way — it has no way
+to say *"I could not tell."* Seamcheck does, and says it constantly: `uncertain` is a real
+verdict here, and the whole design refuses to convert it into `unused` by assumption. An
+agent that trusts a confident guess deletes working code; one that is handed `unresolved`
+with the evidence attached, and `uncertain` where the evidence is missing, does not.
 
 ```bash
 pip install 'seamcheck[mcp]'
