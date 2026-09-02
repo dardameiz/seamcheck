@@ -19,6 +19,10 @@ backend that answered `uncertain` everywhere would score 100% precision and be u
 
 ## Unreleased
 
+**Measured:** coverage **79%** across 47 projects and 136,181 symbols (Flask 91%, Django
+83%, FastAPI 56%, Express 45%, Next.js 36%, NestJS 32%) · precision **45%** · recall
+**6/6**.
+
 Coverage became a number this project actually reports, and reporting it found four bugs.
 
 - **Added** — `tools/coverage.py`. Precision alone could never answer "is this useful on my
