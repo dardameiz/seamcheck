@@ -38,6 +38,11 @@ class Edge:
     from_id: str
     to_id: str
     status: Status
+    # Why this edge is UNCERTAIN, in the matcher's own words. The status word alone is not
+    # an answer: "uncertain" that cannot say WHICH evidence is missing is unimprovable,
+    # because nobody can tell which extractor would fix it. Empty for decisive statuses,
+    # where the status is the whole story.
+    note: str = ""
 
 
 @dataclass

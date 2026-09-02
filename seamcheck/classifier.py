@@ -84,7 +84,16 @@ def _from_edges(symbol: Symbol, incoming: dict, outgoing: dict) -> Symbol:
     # Nothing but UNCERTAIN edges. The loop above never reaches this case - it walks only
     # the three decisive statuses - so a symbol held back on purpose fell through with no
     # explanation, which is the one thing a status word must never do here.
-    if not symbol.note and symbol.kind in _UNCERTAIN_NOTES:
+    if symbol.note:
+        return symbol
+    # The matcher that held it back knows exactly why, and now says so on the edge. That
+    # beats the per-kind fallback below, which can only give one reason per kind while a
+    # single kind is commonly held back for several different missing oracles.
+    reasons = [edge.note for edge in touching
+               if edge.status is Status.UNCERTAIN and edge.note]
+    if reasons:
+        return replace(symbol, note=reasons[0])
+    if symbol.kind in _UNCERTAIN_NOTES:
         return replace(symbol, note=_UNCERTAIN_NOTES[symbol.kind])
     return symbol
 

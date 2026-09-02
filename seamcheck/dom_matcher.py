@@ -68,7 +68,8 @@ def match_dom_selectors(dom_attrs: list[Symbol], dom_selectors: list[Symbol]) ->
         # Uncertain rather than connected: the field may genuinely not exist, and this
         # cannot tell which without the form.
         if not matched and _base_sub(selector) == "id" and _FORM_ID_RE.match(selector.label):
-            edges.append(Edge(from_id=selector.id, to_id=selector.id, status=Status.UNCERTAIN))
+            edges.append(Edge(from_id=selector.id, to_id=selector.id,
+                              status=Status.UNCERTAIN, note=_UNCERTAIN_FORM_ID))
             continue
         if matched:
             for attr in matched:
@@ -141,6 +142,18 @@ def _same_file_writers(
 # absence of a file again.
 # Django renders every form widget with `id="id_<field>"`. So does its admin, for every
 # field on every ModelForm - and none of it appears in any template.
+_UNCERTAIN_ASSEMBLABLE = (
+    "Nothing references this rule, but its name could be assembled at runtime from a "
+    "prefix that does appear in the JavaScript - so it is live and unprovable at once, "
+    "and calling it dead would be a guess."
+)
+
+_UNCERTAIN_FORM_ID = (
+    "Django renders this id from a form widget, so it is declared in Python and never "
+    "written in a template. Searching the HTML for it is searching where it was never "
+    "going to be; confirming it needs the form, which this scan does not read."
+)
+
 _FORM_ID_RE = re.compile(r"\Aid_[a-z][\w]*\Z")
 
 # Utility-first class shapes, for when the Tailwind build output is not available to name
@@ -372,14 +385,26 @@ def match_css_selectors(
             # these contribute evidence and never become findings themselves.
             continue
         else:
-            edges.append(Edge(
-                from_id=symbol.id, to_id=symbol.id,
-                status=(
-                    Status.UNCERTAIN
-                    if not styles_are_local or _from_a_cdn(symbol.label, vendor_prefixes)
-                    else Status.UNRESOLVED
-                ),
-            ))
+            from_cdn = _from_a_cdn(symbol.label, vendor_prefixes)
+            if not styles_are_local:
+                edges.append(Edge(
+                    from_id=symbol.id, to_id=symbol.id, status=Status.UNCERTAIN,
+                    note=("No stylesheet in this repository defines this class, and no "
+                          "local CSS was found at all - so there is nothing here to check "
+                          "it against. Styles served from a CDN or built elsewhere are "
+                          "invisible to a source scan."),
+                ))
+            elif from_cdn:
+                edges.append(Edge(
+                    from_id=symbol.id, to_id=symbol.id, status=Status.UNCERTAIN,
+                    note=("This class belongs to a family loaded from a CDN (an icon font "
+                          "or a vendor stylesheet), whose rules are not in the repository. "
+                          "The class is almost certainly real; nothing here can confirm it."),
+                ))
+            else:
+                edges.append(Edge(
+                    from_id=symbol.id, to_id=symbol.id, status=Status.UNRESOLVED,
+                ))
 
     # Class-name stems seen in the source, so a rule whose name could be ASSEMBLED at
     # runtime is separated from one that could not. `extract_js_class_usages` already emits
@@ -397,13 +422,21 @@ def match_css_selectors(
         # - is read so the classes it defines resolve, and is never judged: a vendor rule
         # this project does not happen to use is not this project's dead code.
         if symbol.sub.startswith("vendor:"):
-            edges.append(Edge(from_id=symbol.id, to_id=symbol.id, status=Status.UNCERTAIN))
+            edges.append(Edge(
+                from_id=symbol.id, to_id=symbol.id, status=Status.UNCERTAIN,
+                note=("A rule from a framework's own stylesheet, read so that classes it "
+                      "defines resolve. Whether this project uses it is not this "
+                      "project's business, so it is never judged."),
+            ))
             continue
         # A rule nothing references, where the name could still be built at runtime, is not
         # evidence of anything. Marked UNCERTAIN here rather than downgraded later, because
         # this is where the evidence is: the classifier cannot see class-name stems.
         if key[0] == "class" and _assemblable(symbol.label, stems):
-            edges.append(Edge(from_id=symbol.id, to_id=symbol.id, status=Status.UNCERTAIN))
+            edges.append(Edge(
+                from_id=symbol.id, to_id=symbol.id, status=Status.UNCERTAIN,
+                note=_UNCERTAIN_ASSEMBLABLE,
+            ))
         else:
             edges.append(Edge(from_id=symbol.id, to_id=symbol.id, status=Status.UNUSED))
     return edges
