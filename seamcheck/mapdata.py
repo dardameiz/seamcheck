@@ -200,6 +200,34 @@ def build_page_map(page: str, files: set[str], graph: Graph, adjacency: dict[str
             _add_edge(module_id, symbol.id, symbol.status.value)
             frontier.append((symbol.id, symbol))
 
+    # A multi-writer element is the one finding whose SHAPE is the defect: N files
+    # writing one thing. Seeded like everything else it gets a single edge, from the file
+    # the sample happened to come from - so the map drew a two-node chain and hid the
+    # convergence, while the panel beside it listed four writers. Isolating the finding
+    # then showed one of them, which is the least useful subset there is.
+    #
+    # The other writers are already known, as basenames on `chain`. Resolving them to the
+    # modules on this page and drawing an edge from each is what makes the fan-in visible,
+    # and it needs no new analysis - `chainOf` walks every ancestor already, so lighting
+    # the finding now lights all of its writers at once.
+    by_basename: dict[str, str] = {}
+    for path in files:
+        by_basename.setdefault(os.path.basename(path), path)
+    for seeds in seeds_by_module.values():
+        for symbol in seeds:
+            if symbol.kind != "multi_writer_element":
+                continue
+            for name in symbol.chain:
+                writer = by_basename.get(name)
+                if not writer or writer == symbol.file:
+                    continue
+                writer_id = _module_node_id(writer)
+                if writer_id not in nodes:
+                    nodes[writer_id] = MapNode(
+                        writer_id, os.path.basename(writer), "module", "connected", file=writer)
+                    _add_edge(_page_node_id(page), writer_id, Status.CONNECTED.value)
+                _add_edge(writer_id, symbol.id, symbol.status.value)
+
     # Walk outward from every seed: fetch -> url -> view -> response field.
     for _ in range(_MAX_HOPS):
         next_frontier: list[tuple[str, Symbol]] = []
