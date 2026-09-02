@@ -16,6 +16,32 @@ before, which is the entire reason to stop polishing against a single codebase.
   4. Volume is sane.  4,000 findings on a 5,000-line project means an extractor misfires,
                       whatever the sample precision says.
 
+## Which repositories are worth adding
+
+The corpus is being grown towards ~100-150 projects, and the selection rule is not "popular"
+or "big". It is: **does this repository contain BOTH SIDES of a seam?**
+
+Seamcheck checks boundaries between languages. A repository that is only a JSON API has no
+boundary in it - the other half lives in some frontend repo nobody cloned - and scanning it
+measures the route reader and nothing else. Measured: paperless-ngx, a Django REST backend
+with its Angular client in-tree but built separately, yields 522 symbols. Pretix, a Django
+app that renders its own templates, yields 16,133 from a comparable codebase.
+
+So, in priority order:
+
+  1. **Full-stack monoliths.** Server-rendered templates plus their own CSS and JS in one
+     tree - Django, Flask, Rails-shaped Express, Next.js used as a full application. These
+     are where every cross-language check has something to check.
+  2. **Full-stack monorepos.** Backend and frontend in one repository, even in separate
+     packages. The seam is real and crossing it is the interesting case.
+  3. **API-only services** - a few per backend, to keep the route readers honest, and no
+     more. They cannot exercise the DOM, CSS or template halves at all.
+  4. **Frontend-only apps** - a few, for the same reason in reverse.
+
+A backend is not "covered" because its adapter runs. It is covered when the corpus holds
+enough full-stack projects in it that coverage and precision both stop moving when another
+one is added.
+
 Nothing here publishes a repository's findings. Aggregate numbers are fine, naming what was
 scanned is fine, naming a repository beside its findings is not - at 98.3% precision roughly
 one finding in sixty is wrong, and a wrong finding published against a named project is a
@@ -49,6 +75,103 @@ CORPUS = pathlib.Path(
 # Chosen for SHAPES not for stars: a template, a production app, a tutorial-shaped app.
 # Every entry is permissively licensed so quoting a line in a bug report is uncontroversial.
 REPOS = [
+    # --- Django, the focus backend -------------------------------------------------
+    # Ordered small to large on purpose. The working method is one repository at a
+    # time: scan it, hand-check what it claims, fix the rule the mistake belongs to,
+    # only then move on. Starting on a 400k-line codebase means never finishing the
+    # first one.
+    {
+        "name": "healthchecks",
+        "url": "https://github.com/healthchecks/healthchecks",
+        "adapter": "django",
+        "why": "small, clean, classic Django templates and vanilla JS - the shape every"
+               " rule should handle before any exotic one",
+    },
+    {
+        "name": "mezzanine",
+        "url": "https://github.com/stephenmcd/mezzanine",
+        "adapter": "django",
+        "why": "older template-heavy CMS - the idioms a 2012 Django app still uses",
+    },
+    {
+        "name": "django-cms",
+        "url": "https://github.com/django-cms/django-cms",
+        "adapter": "django",
+        "why": "templates assembled at runtime from placeholders - the hardest case for"
+               " deciding what a template actually renders",
+    },
+    {
+        "name": "netbox",
+        "url": "https://github.com/netbox-community/netbox",
+        "adapter": "django",
+        "why": "Django templates plus HTMX - attributes drive behaviour, so a dead"
+               " data-attribute is a dead feature",
+    },
+    {
+        "name": "readthedocs.org",
+        "url": "https://github.com/readthedocs/readthedocs.org",
+        "adapter": "django",
+        "why": "Django templates with a separate built frontend - the two-world case",
+    },
+    {
+        "name": "weblate",
+        "url": "https://github.com/WeblateOrg/weblate",
+        "adapter": "django",
+        "why": "large, heavily internationalised - templates where most strings are tags",
+    },
+    {
+        "name": "pretix",
+        "url": "https://github.com/pretix/pretix",
+        "adapter": "django",
+        "why": "large Django with plugins - routes and templates contributed by installed"
+               " apps rather than declared in one place",
+    },
+    {
+        "name": "paperless-ngx",
+        "url": "https://github.com/paperless-ngx/paperless-ngx",
+        "adapter": "django",
+        "why": "Django REST plus an Angular SPA - the contrast case, where there are"
+               " almost no templates and the seam is entirely API-to-client",
+    },
+    {
+        "name": "djangoproject.com",
+        "url": "https://github.com/django/djangoproject.com",
+        "adapter": "django",
+        "why": "the Django project's own site - idiomatic by definition, and small enough"
+               " to hand-check end to end",
+    },
+    {
+        "name": "bookwyrm",
+        "url": "https://github.com/bookwyrm-social/bookwyrm",
+        "adapter": "django",
+        "why": "templates plus progressive-enhancement JS - data attributes doing real work",
+    },
+    {
+        "name": "wger",
+        "url": "https://github.com/wger-project/wger",
+        "adapter": "django",
+        "why": "templates, HTMX and web components together in one app",
+    },
+    {
+        "name": "misago",
+        "url": "https://github.com/rafalp/Misago",
+        "adapter": "django",
+        "why": "Django forum with a heavy JS frontend in the same tree - the seam is inside"
+               " one repository",
+    },
+    {
+        "name": "inventree",
+        "url": "https://github.com/inventree/InvenTree",
+        "adapter": "django",
+        "why": "large Django with templates and a big hand-written JS layer",
+    },
+    {
+        "name": "django-debug-toolbar",
+        "url": "https://github.com/django-commons/django-debug-toolbar",
+        "adapter": "django",
+        "why": "small, and its whole product IS templates plus CSS plus JS - dense seams"
+               " per line of code",
+    },
     # --- deliberately large, to find what only shows up at scale -------------------
     {
         "name": "sentry",
