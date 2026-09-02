@@ -12,6 +12,7 @@ from seamcheck.graph import Graph, Status, relativise
 from seamcheck.nodetools import report as _notify
 from seamcheck.pipeline import SCAN_PHASES, run_scan
 from seamcheck.progress import Progress, null
+from seamcheck.extractors.preprocessor_extractor import preprocessor_files
 from seamcheck.roots import discover_css_files, discover_js_roots, tailwind_classes
 from seamcheck.snapshot import current_git_sha, load_snapshot, save_snapshot
 from seamcheck.triage import (
@@ -237,6 +238,15 @@ def scan(
         extra_roots=[c for c in static_candidates if c != _css_root_dir],
     )
 
+    # Sass/SCSS/Less sources. Their compiled CSS is normally a build artefact nobody
+    # commits, so on a project that writes its styles this way the .css scan above finds
+    # almost nothing. Read for the class names they DEFINE only - see the extractor for why
+    # they can never be treated as a complete list.
+    preprocessor_sources = preprocessor_files(
+        [_css_root_dir] + [c for c in static_candidates if c != _css_root_dir]
+        if _css_root_dir else static_candidates
+    )
+
     scanned = relativise(run_scan(
         # Empty for a project that is not Django. The Django adapter is the only reader
         # that wants it, and it is not the one running in that case.
@@ -253,6 +263,7 @@ def scan(
         tailwind_build_classes=(
             tailwind_classes(os.path.join(repo_root, build_output)) if build_output else set()
         ),
+        preprocessor_sources=preprocessor_sources,
         progress=progress,
         repo_root=repo_root,
         static_urls=(

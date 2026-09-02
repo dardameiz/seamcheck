@@ -39,6 +39,7 @@ from seamcheck.extractors.url_reference_extractor import (
     find_js_files,
 )
 from seamcheck.field_matcher import match_json_response_fields
+from seamcheck.extractors.preprocessor_extractor import preprocessor_classes
 from seamcheck.graph import Edge, Graph, Status, Symbol
 from seamcheck.matcher import match_js_to_django
 from seamcheck.nodetools import report
@@ -187,6 +188,7 @@ def run_scan(
     app_labels: list[str] | None = None,
     template_files: list[str] | None = None,
     css_files: list[str] | None = None,
+    preprocessor_sources: list[str] | None = None,
     tailwind_build_classes: set[str] | None = None,
     progress: Progress | None = None,
     repo_root: str = ".",
@@ -481,8 +483,18 @@ def run_scan(
         # Whether this project HAS stylesheets of its own. With none, every class in
         # every template is unstyled as far as the scan can see, and saying so would be a
         # claim about a file that is not here.
+        # Sass sources say which classes ARE defined; they cannot say which are not, so
+        # they join the build-time evidence and are deliberately kept OUT of the oracle
+        # test below. NetBox is the case that settles it: its own .scss defines 103
+        # classes and @imports Tabler and Bootstrap from a node_modules that is not in the
+        # repository. Counting .scss as "there are local styles here" would turn ~4,600
+        # perfectly real vendor classes into unresolved findings - trading an honest
+        # `uncertain` for a wall of false claims, which is the one trade this tool exists
+        # to refuse.
+        scss_classes, scss_stems = preprocessor_classes(preprocessor_sources or [])
         edges += match_css_selectors(
-            dom_selectors, dom_attrs, selectors, tailwind_build_classes or set(),
+            dom_selectors, dom_attrs, selectors,
+            (tailwind_build_classes or set()) | scss_classes | scss_stems,
             usage_only=js_dom_attrs,
             styles_are_local=bool(css_files) or bool(tailwind_build_classes),
         )
