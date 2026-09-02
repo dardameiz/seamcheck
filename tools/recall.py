@@ -40,6 +40,11 @@ def _matches(symbol, rule: dict) -> bool:
         elif key == "label_contains":
             if want not in symbol.label:
                 return False
+        elif key.endswith("_contains"):
+            # Substring on any field, so a rule can assert a marker that is composed
+            # rather than fixed - `sub` carries `class:read|costly:polling-fetch`.
+            if want not in (getattr(symbol, key[: -len("_contains")], "") or ""):
+                return False
         elif getattr(symbol, key, None) != want:
             return False
     return True

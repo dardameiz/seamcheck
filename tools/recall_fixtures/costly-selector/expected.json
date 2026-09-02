@@ -1,0 +1,10 @@
+{
+  "why": "A dead selector is ranked by what its deadness COSTS, not by what it is. The first two are dead the same way and cost wildly different amounts: one sits inside a 5-second fetch loop, the other is a single wasted call at load. The trap is the middle one - it is only a few lines from the setInterval, and the first version of this check tested proximity and flagged it. Containment, not distance.",
+  "must_find": [
+    { "kind": "dom_selector", "label_contains": "latency-readout", "sub_contains": "costly:polling-fetch" },
+    { "kind": "dom_selector", "label_contains": "observed-ghost", "sub_contains": "costly:observer" }
+  ],
+  "must_not_find": [
+    { "kind": "dom_selector", "label_contains": "cheap-dead-thing", "sub_contains": "costly:" }
+  ]
+}
