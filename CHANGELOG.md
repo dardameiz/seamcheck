@@ -17,11 +17,37 @@ Coverage and precision have **different denominators** and neither is meaningful
 backend that answered `uncertain` everywhere would score 100% precision and be useless.
 `uncertain` is not counted as a claim in precision, because it is not a claim.
 
-## Unreleased
+## 0.8.2 — 3 Sep 2026
 
 **Measured:** coverage **79%** across 47 projects and 136,181 symbols (Flask 91%, Django
 83%, FastAPI 56%, Express 45%, Next.js 36%, NestJS 32%) · precision **45%** · recall
-**6/6**.
+**6/6** · render **46/46**.
+
+The map learned to say what it is looking at. It reads across languages, services and data
+stores, and it had never once named any of them.
+
+- **Added** — every node carries the **language of its file** and the **service that owns
+  it**. Bands name the languages inside them, and a band with more than one service lays
+  out a lane each: `@acme/api · TypeScript`, `web · Python`. A monorepo used to render as
+  one anonymous strip.
+- **Added** — **the server reaches its store**. Redis emits a use per call site, as
+  `db_table_use` always has, and each view links to the store work written inside it. A
+  chain used to stop at the handler while THE STORE sat below as an island nothing could
+  reach; a path now runs browser → seam → server → store in one line.
+- **Changed** — following one path is drawn as a path: **left to right by hop**, straight
+  schematic wires with arrowheads, files as pills. It was being drawn with the survey's
+  rules, so a four-hop chain came out as a narrow column with four writers stacked on top
+  of each other.
+- **Fixed** — a multi-writer finding drew **one** writer. The others were basenames that
+  nothing resolved to a node, so the panel listed four while the canvas showed one — and
+  isolating it showed the least useful subset available.
+- **Fixed** — under isolation nothing was ever "on the chain", which switched off the
+  schematic wires, the heavier stroke and the lit arrowheads in the one view whose own
+  comment says it exists to turn them on.
+- **Fixed** — a single service rooted in a **subdirectory** was answered for every file in
+  the repository, labelling a whole Django application as the Node service beside it. And a
+  Django service in a monorepo carries no packaging manifest, so it was not a service at
+  all; `manage.py` is the marker it always has.
 
 Coverage became a number this project actually reports, and reporting it found four bugs.
 
