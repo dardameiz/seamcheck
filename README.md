@@ -38,6 +38,24 @@ None of these throw. Nothing fails a test. That is exactly why they survive:
 <sub>**The red list is the point.** Every finding names the file and line on both sides of
 the seam, and says which evidence it has.</sub>
 
+## Why I made it
+
+I was building a game — a fairly large Django app with a lot of hand-written JavaScript —
+and I kept losing afternoons to the same kind of bug. The Python was fine. The JavaScript
+was fine. The route one asked for and the route the other served were one character apart,
+and nothing I already had read both sides of that.
+
+So I wrote something to find them, for myself, on that project. It kept catching things I
+would not have found on my own, and after a while it seemed like other people might have
+the same afternoons to lose. So here it is.
+
+It does not catch everything, and I am sure there are things it gets wrong. When it cannot
+tell, it tries to say `uncertain` rather than guess. **If you find it being confidently
+wrong somewhere, please [open an issue](https://github.com/dardameiz/seamcheck/issues)** —
+that is the most useful thing anyone can send me.
+
+What changed, per release: [CHANGELOG.md](CHANGELOG.md).
+
 <!-- ══════════════════════════════════════════════════════════════════════════════
      FIELD NOTES — everything below this marker was added from the pointlessbutton
      measurement work, newest section last. Keep new entries inside this block so it
@@ -101,24 +119,6 @@ Two rules that keep the number honest while you shrink it:
 2. **A page the run never visited leaves no trace, and looks exactly like a page that is broken.**
    Everything `observe` promotes is labelled as observed for that reason — so `uncertain` going down
    should always be traceable to a specific run over a specific set of pages.
-
-## Why I made it
-
-I was building a game — a fairly large Django app with a lot of hand-written JavaScript —
-and I kept losing afternoons to the same kind of bug. The Python was fine. The JavaScript
-was fine. The route one asked for and the route the other served were one character apart,
-and nothing I already had read both sides of that.
-
-So I wrote something to find them, for myself, on that project. It kept catching things I
-would not have found on my own, and after a while it seemed like other people might have
-the same afternoons to lose. So here it is.
-
-It does not catch everything, and I am sure there are things it gets wrong. When it cannot
-tell, it tries to say `uncertain` rather than guess. **If you find it being confidently
-wrong somewhere, please [open an issue](https://github.com/dardameiz/seamcheck/issues)** —
-that is the most useful thing anyone can send me.
-
-What changed, per release: [CHANGELOG.md](CHANGELOG.md).
 
 ## Install
 
