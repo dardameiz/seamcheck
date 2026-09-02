@@ -40,7 +40,6 @@ from seamcheck.extractors.url_reference_extractor import (
 )
 from seamcheck.field_matcher import match_json_response_fields
 from seamcheck.extractors.preprocessor_extractor import preprocessor_classes
-from seamcheck.costly import flag_costly
 from seamcheck.graph import Edge, Graph, Status, Symbol
 from seamcheck.matcher import match_js_to_django
 from seamcheck.nodetools import report
@@ -513,9 +512,6 @@ def run_scan(
     if not routes_complete:
         classified = _withhold_route_claims(classified, coverage_note)
     graph = Graph(symbols=classified, edges=edges)
-    # Post-processing over findings that already exist: a dead selector beside a timer or
-    # a fetch costs requests forever, not bytes. Never creates or reclassifies anything.
-    graph = flag_costly(graph, repo_root)
     return _with_feature_labels(graph, dom_attrs)
 
 
