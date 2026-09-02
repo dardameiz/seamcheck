@@ -1728,6 +1728,16 @@ function fit(text, max) {
 }
 
 const NODE_W = 150, LANE = 160, ROW = 30;
+// The heading over each hop of an isolated path. Reads as the story, not the schema.
+// Roughly the detail sheet's width, so an isolated path is laid out beside it.
+const SHEET_ROOM = 420;
+const HOP_WORD = {
+  page: "the page", module: "the file", js_call: "asks for", fetch_target: "crosses",
+  url: "the route", view: "the handler", dom_selector: "looks for",
+  dom_attr: "the element", css_selector: "styled by",
+  multi_writer_element: "all write", redis_key: "the key", db_table_use: "reads",
+  db_table: "the table", job_enqueue: "queues", job: "the worker",
+};
 // The second line of a card, in a reader's words rather than the extractor's.
 const KIND_WORD = {
   page: "page", module: "source file", js_call: "fetch call",
@@ -1963,7 +1973,80 @@ function place(buckets, used, perRow) {
 // amount of scrolling made the page legible, which is why the map used to show only
 // modules until you drilled in. Wrapped, the same page is about 1,300px tall and every
 // symbol it has is on screen at once.
+// Following ONE path is a different picture from surveying a page, and it was being
+// drawn with the survey's rules: kind columns stacked downwards, so a four-hop chain came
+// out as a single narrow column and the four writers of one element sat on top of each
+// other. A path has a direction, and a direction reads left to right.
+//
+// Hops are BFS depth from the page, so every node lands in the column matching its
+// distance along the chain and a fan-in - the case where the shape IS the finding - draws
+// as several cards in one column converging on the next.
+function layoutPath(p, keep) {
+  const nodes = p.nodes.filter(n => keep.has(n.id));
+  const byId = new Map(nodes.map(n => [n.id, n]));
+  const fwd = new Map(), back = new Map();
+  p.edges.forEach(e => {
+    if (!byId.has(e.source) || !byId.has(e.target) || e.source === e.target) return;
+    (fwd.get(e.source) || fwd.set(e.source, []).get(e.source)).push(e.target);
+    (back.get(e.target) || back.set(e.target, []).get(e.target)).push(e.source);
+  });
+  // Start from the page if it is here, otherwise from whatever nothing points at.
+  const roots = nodes.filter(n => n.kind === "page").map(n => n.id);
+  const starts = roots.length ? roots
+    : nodes.filter(n => !(back.get(n.id) || []).length).map(n => n.id);
+  const depth = new Map();
+  let front = (starts.length ? starts : [nodes[0] && nodes[0].id]).filter(Boolean);
+  front.forEach(id => depth.set(id, 0));
+  while (front.length) {
+    const next = [];
+    front.forEach(id => (fwd.get(id) || []).forEach(m => {
+      if (depth.has(m)) return;
+      depth.set(m, depth.get(id) + 1);
+      next.push(m);
+    }));
+    front = next;
+  }
+  // Anything the walk never reached still has to be drawn somewhere truthful.
+  let deepest = 0;
+  depth.forEach(d => { deepest = Math.max(deepest, d); });
+  nodes.forEach(n => { if (!depth.has(n.id)) depth.set(n.id, deepest + 1); });
+
+  const cols = new Map();
+  nodes.forEach(n => {
+    const d = depth.get(n.id);
+    if (!cols.has(d)) cols.set(d, []);
+    cols.get(d).push(n);
+  });
+  const STEP_X = CARD_W + 96, STEP_Y = CARD_H + 26;
+  const pos = new Map();
+  const columns = [];
+  let width = 0, height = 0;
+  [...cols.keys()].sort((a, b) => a - b).forEach((d, i) => {
+    const items = cols.get(d);
+    const x = 60 + i * STEP_X;
+    // Centred on a common axis, so a column of four writers brackets the single card it
+    // converges on rather than hanging below it.
+    const total = items.length * STEP_Y - (STEP_Y - CARD_H);
+    const top = 120 + Math.max(0, (260 - total) / 2);
+    items.forEach((n, j) => {
+      pos.set(n.id, {x, y: top + j * STEP_Y, w: CARD_W, h: CARD_H});
+      height = Math.max(height, top + j * STEP_Y + CARD_H);
+    });
+    columns.push({x, y: top - 18, kind: items[0].kind,
+                  label: HOP_WORD[items[0].kind] || (items.length > 1 ? "these" : "then"),
+                  count: items.length});
+    width = Math.max(width, x + CARD_W);
+  });
+  // The detail sheet is open whenever this layout is in use - it is the thing the
+  // reader clicked to get here - so the path has to be fitted into what is left of the
+  // canvas. Without this the last hop, which is the finding itself, sat underneath it.
+  return {pos, columns, bands: [], lanes: [], aggregates: [],
+          width: width + 60 + SHEET_ROOM, height: height + 80};
+}
+
+
 function layout(p, keep) {
+  if (isolate && lit) return layoutPath(p, keep);
   const buckets = new Map();
   p.nodes.filter(n => keep.has(n.id)).forEach(n => {
     const c = ORDER.has(n.kind) ? ORDER.get(n.kind) : COLS.length;
@@ -2210,7 +2293,12 @@ function draw() {
   const fading = !query || matched > 0;
   reportMatches(drawnNodes.length, matched);
   reportEmpty(drawnNodes.length);
-  const chain = lit && !isolate ? chainOf(p, lit) : null;
+  // Under isolation EVERY drawn edge is on the chain, so the chain set is still what
+  // decides how a wire is drawn - excluding it here meant the schematic style, the heavier
+  // stroke and the lit arrowheads were all switched off in precisely the view whose
+  // comment says it exists to turn them on. The reader asked to follow one path and got
+  // the decorative curves back.
+  const chain = lit ? chainOf(p, lit) : null;
   // Arrowhead markers, emitted with every draw. They cannot live in the static shell:
   // draw() replaces svg.innerHTML wholesale, so defs written once were wiped on the first
   // frame and every marker-end pointed at nothing - the wires had no heads at all, and
@@ -2355,13 +2443,19 @@ function draw() {
     const sub = fit(
       n.kind === "module" && n.lang ? n.lang.toLowerCase() + " file"
         : (KIND_WORD[n.kind] || n.kind.replace(/_/g, " ")), 26);
+    // On an isolated path a FILE is drawn as a pill rather than a card. Reading a chain
+    // is reading a sequence of different kinds of thing, and a column of identical
+    // rectangles makes every hop look alike - the shape should carry some of the meaning
+    // before the label is even read. A true circle cannot hold "live.js / javascript
+    // file", so the corner radius goes to half the height and the text stays legible.
+    const pill = isolate && n.kind === "module";
     out.push(`<g class="nd${shown ? "" : " faded"}${n.id === lit ? " lit" : ""}" data-id="${n.id}">
-      <rect x="${q.x}" y="${q.y}" width="${q.w}" height="${q.h}" rx="${NODE_R}"
+      <rect x="${q.x}" y="${q.y}" width="${q.w}" height="${q.h}" rx="${pill ? q.h / 2 : NODE_R}"
             fill="${alone ? (F[n.status] || "var(--panel)") : "var(--panel)"}"
             stroke="${stroke}" stroke-width="${ch ? 3 : 1.5}"/>
       <title>${esc(n.label)}${n.file ? "\n" + esc(n.file) + (n.line ? ":" + n.line : "") : ""}</title>
-      <text x="${q.x + 12}" y="${q.y + 20}">${esc(label)}</text>
-      <text class="sub" x="${q.x + 12}" y="${q.y + 36}">${esc(sub)}</text></g>`);
+      <text x="${q.x + (pill ? 22 : 12)}" y="${q.y + 20}">${esc(label)}</text>
+      <text class="sub" x="${q.x + (pill ? 22 : 12)}" y="${q.y + 36}">${esc(sub)}</text></g>`);
   });
   out.push("</g>");
   svg.innerHTML = out.join("");
