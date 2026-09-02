@@ -1,5 +1,24 @@
 """MCP surface. Thin wrappers over seamcheck.api - the same code the CLI runs.
 
+THE LOOP THESE TOOLS EXIST FOR, in order, because the individual tools do not imply it:
+
+  1. seamcheck_unverified   the claims nobody has judged - a queue, worst first
+  2. read the actual code   open the file at the line. The note is what the tool THINKS;
+                            it is not evidence. Reasoning about the note is not verifying.
+  3. seamcheck_triage       record the verdict WITH a `why` from seamcheck_why_wrong.
+                            `genuinely-dead` is a verdict too - a finding confirmed right
+                            is as useful as one confirmed wrong.
+  4. seamcheck_share        the report, containing counts and fixed words and none of the
+                            code. It returns the markdown AND a pre-filled issue link.
+  5. SHOW IT AND ASK        paste the report into the conversation, say what it contains,
+                            and ask whether to send it. Then hand over the link.
+
+Step 5 is not optional and no tool here performs it. Nothing in this package makes a
+network call: the report is prepared, and a person decides. An agent that opens the link
+itself, or that submits on the user's behalf without being asked, has taken a decision
+that was never its own - and the repository may belong to an employer who never agreed.
+
+
 Kept deliberately thin: an agent asking `check` must get the answer the terminal would give,
 because the moment the two disagree neither can be trusted. Every tool here is one call into
 `api`.
@@ -48,6 +67,17 @@ def seamcheck_triage(symbol_id: str, status: str, repo_root: str = ".", reason: 
     seamcheck_why_wrong - and is the only part `seamcheck share` can pass on.
     """
     return api.triage(symbol_id, status, repo_root, reason, why)
+
+
+@mcp.tool()
+def seamcheck_unverified(repo_root: str = ".", limit: int = 25, kind: str = "") -> dict:
+    """Findings nobody has judged yet — the queue to work through.
+
+    Each row carries the file, the line and the note, so you can open the code and decide
+    whether the claim is true without another call. Judge one, record it with
+    seamcheck_triage(..., why=...), and take the next.
+    """
+    return api.unverified(repo_root, limit, kind)
 
 
 @mcp.tool()

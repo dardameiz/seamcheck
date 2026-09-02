@@ -26,6 +26,14 @@ from seamcheck.graph import Edge, Status, Symbol
 from seamcheck.nodetools import report
 
 _METHODS = ("get", "post", "put", "delete", "patch", "options", "head", "all")
+# Names that hold an HTTP CLIENT, not a router. `axios.post('/api/x', body)` is
+# indistinguishable from `app.post('/api/x', handler)` by shape alone, and reading it as a
+# route made every mistyped endpoint resolve against a route its own caller had invented.
+_HTTP_CLIENTS = frozenset({
+    "axios", "ky", "got", "http", "https", "client", "apiClient", "httpClient", "api",
+    "instance", "request", "fetcher", "agent", "superagent", "$http", "$api", "service",
+    "apiService", "httpService", "restClient", "backend", "supabase",
+})
 
 # `app.get('view engine')` is Express's SETTINGS reader, not a route. One argument and no
 # handler, and the string has no leading slash - that is how it is told apart.
@@ -188,6 +196,18 @@ class _File:
             keys.append((self.path, "<default>"))
         return keys
 
+    def _is_router(self, owner: str) -> bool:
+        """Whether this name holds an app or a router, rather than an HTTP client.
+
+        Permissive on purpose where it cannot know: a router imported from another module
+        is not declared here, and refusing those would lose real routes. So a name is
+        accepted unless it is declared as something else, or is one of the handful of
+        names the ecosystem uses for a client.
+        """
+        if owner in self.routers or owner in self.apps:
+            return True
+        return owner not in _HTTP_CLIENTS
+
     def _read_call(self, node: dict) -> None:
         callee = node.get("callee") or {}
         if callee.get("type") != "MemberExpression":
@@ -202,7 +222,16 @@ class _File:
             path = _literal(arguments[0] if arguments else None)
             # A route needs a path AND something to run. `app.get('view engine')` is the
             # settings reader and has neither a leading slash nor a handler.
-            if path is not None and path.startswith("/") and len(arguments) >= 2:
+            #
+            # AND the owner has to be a router. `axios.post('/api/x', body)` is the same
+            # shape as `app.post('/api/x', handler)` - a member call, a path, two
+            # arguments - so without this every client call REGISTERED THE ROUTE IT WAS
+            # CALLING. The tool then could not find the one bug it exists for: a typo'd
+            # endpoint resolved happily against the phantom route its own call had
+            # invented. Found by pointing it at a demo shop whose whole point was that
+            # typo, and watching it come back connected.
+            if (path is not None and path.startswith("/") and len(arguments) >= 2
+                    and self._is_router(owner)):
                 self.routes.append((owner, method.upper(), path, _line(node)))
             return
 

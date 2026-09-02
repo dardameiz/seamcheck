@@ -458,6 +458,50 @@ def report(
     return renderers[fmt](built)
 
 
+def unverified(repo_root: str = ".", limit: int = 25, kind: str = "") -> dict:
+    """Claims nobody has judged yet, so an agent can work a queue instead of a wall.
+
+    `check` answers "did anything change", which is the CI question. This answers the other
+    one: WHICH findings still need a person - or an agent that can read the code - to say
+    whether they are true. Each row carries everything needed to judge it without a second
+    call: the file and line to open, the note explaining what the tool thinks, and the id
+    to triage it by.
+
+    Ordered worst-kind-first and capped, because a queue of twenty-five is worked and a
+    queue of three thousand is closed.
+    """
+    graph = scan(repo_root)
+    judged = {entry.symbol_id for entry in load_triage(repo_root)}
+    claims = [
+        symbol for symbol in graph.symbols
+        if symbol.status in (Status.UNRESOLVED, Status.UNUSED)
+        and symbol.id not in judged
+        and (not kind or symbol.kind == kind)
+    ]
+    # Unresolved before unused: one says something is missing, the other that something is
+    # spare, and the first is the one that breaks at runtime.
+    claims.sort(key=lambda s: (s.status is not Status.UNRESOLVED, s.kind, s.label))
+    remaining = len(claims)
+    return {
+        "total_unjudged": remaining,
+        "by_kind": {
+            k: sum(1 for s in claims if s.kind == k) for k in sorted({s.kind for s in claims})
+        },
+        "findings": [
+            {
+                "id": symbol.id,
+                "status": symbol.status.value,
+                "kind": symbol.kind,
+                "label": symbol.label,
+                "file": symbol.file,
+                "line": symbol.line,
+                "note": symbol.note,
+            }
+            for symbol in claims[:limit]
+        ],
+    }
+
+
 def triage(symbol_id: str, status: str, repo_root: str = ".", reason: str = "",
            why: str = "") -> dict:
     """Record a disposition. `why` is the shareable half - a fixed word, see WhyWrong."""

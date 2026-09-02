@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from collections import Counter, defaultdict
 
 from seamcheck.graph import Edge, Status, Symbol
@@ -42,9 +43,16 @@ def match_dom_selectors(dom_attrs: list[Symbol], dom_selectors: list[Symbol]) ->
     Not a CSS selector engine: a combinator like `.a .b` is matched on segment presence,
     a stated v1 limitation.
     """
-    attrs_by_key: dict[tuple[str, str], Symbol] = {}
+    # EVERY element with the key, not the first one. This was a dict keyed by
+    # (sub, label) built with setdefault, so one selector reached one element - and a class
+    # written six times in a template came out as one connected and five "nothing reaches
+    # this", with the single `querySelectorAll` for it sitting in plain sight. The `All`
+    # is the entire point of that method, and even `querySelector` REACHES FOR the class;
+    # which element it happens to return is a runtime detail, not a fact about the markup.
+    # 92 false claims on one project.
+    attrs_by_key: dict[tuple[str, str], list[Symbol]] = {}
     for attr in dom_attrs:
-        attrs_by_key.setdefault((attr.sub, attr.label), attr)
+        attrs_by_key.setdefault((attr.sub, attr.label), []).append(attr)
 
     edges: list[Edge] = []
     reached: set[str] = set()
@@ -53,11 +61,20 @@ def match_dom_selectors(dom_attrs: list[Symbol], dom_selectors: list[Symbol]) ->
         # applies needs no template attribute to match - the JS creates the element.
         if selector.label == "<dynamic>" or selector.sub.startswith(("class:apply", "class:stem")):
             continue
-        matched = attrs_by_key.get((_base_sub(selector), selector.label))
+        matched = attrs_by_key.get((_base_sub(selector), selector.label)) or []
+        # `id_<field>` is rendered by a Django form widget, never written in the template.
+        # The declaration exists - in a ModelForm, in Python - and nothing in the HTML
+        # layer can see it, so a template search for it looks like a search for nothing.
+        # Uncertain rather than connected: the field may genuinely not exist, and this
+        # cannot tell which without the form.
+        if not matched and _base_sub(selector) == "id" and _FORM_ID_RE.match(selector.label):
+            edges.append(Edge(from_id=selector.id, to_id=selector.id, status=Status.UNCERTAIN))
+            continue
         if matched:
-            reached.add(matched.id)
-            edges.append(Edge(from_id=selector.id, to_id=matched.id, status=Status.CONNECTED))
-        else:
+            for attr in matched:
+                reached.add(attr.id)
+                edges.append(Edge(from_id=selector.id, to_id=attr.id, status=Status.CONNECTED))
+        elif not selector.sub.endswith(":evidence"):
             edges.append(Edge(from_id=selector.id, to_id=selector.id, status=Status.UNRESOLVED))
 
     # A data attribute is reached exactly four ways, and all four are read now: dataset.x,
@@ -118,8 +135,57 @@ def _same_file_writers(
     )
 
 
-def _one_spelling(path: str) -> str:
-    """`./pointless/x.js` and `pointless/x.js` are one file.
+# Class families shipped by a stylesheet a project LINKS rather than contains. Every one
+# of these is a library whose CSS normally arrives from a CDN, so by construction no file
+# in the repo defines `fa-home` or `bi-check` - and reporting them is reporting the
+# absence of a file again.
+# Django renders every form widget with `id="id_<field>"`. So does its admin, for every
+# field on every ModelForm - and none of it appears in any template.
+_FORM_ID_RE = re.compile(r"\Aid_[a-z][\w]*\Z")
+
+# Utility-first class shapes, for when the Tailwind build output is not available to name
+# them exactly. Deliberately narrow: these are prefixes no hand-written component class
+# starts with, followed by a value.
+_UTILITY_RE = re.compile(
+    r"\A(?:text|bg|border|ring|fill|stroke|from|via|to|shadow|opacity|rounded)-"
+    r"(?:\[.*\]|[a-z]+(?:-\d{2,3})?|\d+|full|none|sm|md|lg|xl|\dxl)\Z"
+)
+
+
+def _is_utility(label: str, utility_classes: frozenset[str] | None) -> bool:
+    """Whether this class is a framework utility rather than a name someone chose."""
+    if utility_classes and label in utility_classes:
+        return True
+    return bool(_UTILITY_RE.match(label))
+
+
+_CDN_CLASS_PREFIXES = (
+    "fa-", "fas", "far", "fab", "fal", "fad", "fa ",       # Font Awesome
+    "bi-", "bi ",                                          # Bootstrap Icons
+    "mdi-", "mdi ",                                        # Material Design Icons
+    "glyphicon",                                           # Bootstrap 3
+    "material-icons", "material-symbols",                  # Material
+    "ti-", "ti ",                                          # Tabler
+    "icon-",                                               # the common generic
+    "swiper-", "leaflet-", "flatpickr-", "select2-",        # widgets that ship their own CSS
+    "tox-", "cke_", "ql-", "fc-",                          # TinyMCE, CKEditor, Quill, FullCalendar
+)
+
+
+def _from_a_cdn(label: str, extra: tuple[str, ...]) -> bool:
+    """Whether this class belongs to a library whose stylesheet is not in the repo.
+
+    The oracle is per FAMILY, not per project. `styles_are_local` asks "is there a
+    stylesheet here at all", which is the right question for a project whose CSS is
+    entirely a CDN link - and the wrong one for the ordinary mixed case: 199 local
+    stylesheets AND a Font Awesome tag. There the oracle says local, and 453 icon classes
+    get judged against a file that was never going to define them.
+    """
+    return label.startswith(_CDN_CLASS_PREFIXES) or (bool(extra) and label.startswith(extra))
+
+
+def _one_spelling(path: str, repo_root: str = "") -> str:
+    """`/abs/pointless/x.js`, `./pointless/x.js` and `pointless/x.js` are one file.
 
     graph.shorten() already knows this, but it runs at EXPORT - long after this detector
     has counted the two spellings as two writers and flagged every element the file
@@ -129,10 +195,27 @@ def _one_spelling(path: str) -> str:
     "more than one file writes this element" and then named exactly one file, which is
     the self-contradiction that gives the class away.
     """
-    return os.path.normpath(path).replace(os.sep, "/")
+    cleaned = os.path.normpath(path)
+    # An ABSOLUTE path and a repo-relative one are the same file too, and that half was
+    # missed: the entry-graph reader returns absolute paths and the tree walk returns
+    # relative ones, both feed this, and normpath alone leaves them different strings.
+    # Measured on the reference project after the `./x` fix shipped: 299 of 370
+    # multi-writer findings - 81% - were one file wearing both spellings.
+    if repo_root and os.path.isabs(cleaned):
+        try:
+            relative = os.path.relpath(cleaned, os.path.abspath(repo_root))
+            if not relative.startswith(".."):
+                cleaned = relative
+        except ValueError:
+            pass
+    return cleaned.replace(os.sep, "/")
 
 
-def detect_multi_writers(dom_selectors: list[Symbol]) -> list[Symbol]:
+def detect_multi_writers(
+    dom_selectors: list[Symbol],
+    repo_root: str = "",
+    utility_classes: frozenset[str] | None = None,
+) -> list[Symbol]:
     # Whole paths, not basenames: the directory is what tells a family apart from a fight,
     # and two same-named files in different directories are two writers either way. The
     # parallel basename map this used to keep is gone - the gate read one collection and
@@ -147,7 +230,12 @@ def detect_multi_writers(dom_selectors: list[Symbol]) -> list[Symbol]:
     for selector in dom_selectors:
         if not selector.sub.endswith(":write") or selector.label == "<dynamic>":
             continue
-        canonical = _one_spelling(selector.file)
+        # A utility class has no owner. `text-yellow-400` is touched by every file that
+        # colours something, which is what a utility IS - reporting three files as fighting
+        # over it describes Tailwind, not a defect.
+        if _is_utility(selector.label, utility_classes):
+            continue
+        canonical = _one_spelling(selector.file, repo_root)
         paths[selector.label].add(canonical)
         enclosing = selector.chain[-1] if len(selector.chain) > 1 else ""
         if enclosing:
@@ -226,6 +314,7 @@ def match_css_selectors(
     tailwind_build_classes: set[str],
     usage_only: list[Symbol] | None = None,
     styles_are_local: bool = True,
+    vendor_prefixes: tuple[str, ...] = (),
 ) -> list[Edge]:
     """Three-way: what the DOM uses, what CSS defines, and what Tailwind generates.
 
@@ -265,6 +354,11 @@ def match_css_selectors(
     for symbol in list(dom_attrs) + list(dom_selectors):
         if symbol.label == "<dynamic>" or _base_sub(symbol) not in ("id", "class"):
             continue
+        # A Django form widget's id is declared in Python, not in any stylesheet or
+        # template, so it can be judged by neither. The exemption belongs here as well as
+        # in the DOM matcher: this loop reaches the same selectors and would overrule it.
+        if _base_sub(symbol) == "id" and _FORM_ID_RE.match(symbol.label):
+            continue
         key = (_base_sub(symbol), symbol.label)
         used_keys.add(key)
         defined = css_by_key.get(key)
@@ -280,7 +374,11 @@ def match_css_selectors(
         else:
             edges.append(Edge(
                 from_id=symbol.id, to_id=symbol.id,
-                status=Status.UNRESOLVED if styles_are_local else Status.UNCERTAIN,
+                status=(
+                    Status.UNCERTAIN
+                    if not styles_are_local or _from_a_cdn(symbol.label, vendor_prefixes)
+                    else Status.UNRESOLVED
+                ),
             ))
 
     # Class-name stems seen in the source, so a rule whose name could be ASSEMBLED at

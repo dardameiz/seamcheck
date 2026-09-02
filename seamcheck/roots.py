@@ -126,6 +126,21 @@ def discover_js_roots(vite_config: str, templates_root: str, static_root: str) -
     return [root for root in dict.fromkeys(roots) if pathlib.Path(root).is_file()]
 
 
+# Stylesheets a TOOL wrote into the repo. A pytest-html run drops `assets/style.css` next
+# to its report; scanning it reported 36 of that template's own classes as this project's
+# dead code. Same family as dist/ and vendor bundles, one directory the exclusion missed.
+_REPORT_ARTIFACT_DIRS = frozenset({
+    "assets", "htmlcov", "playwright-report", "test-results", "allure-report",
+    "lighthouse", "coverage-report", "reports",
+})
+_REPORT_ARTIFACT_NAMES = frozenset({"style.css", "report.css", "coverage.css"})
+
+
+def _is_report_artifact(path: pathlib.Path) -> bool:
+    parts = set(path.parts)
+    return bool(parts & _REPORT_ARTIFACT_DIRS) and path.name in _REPORT_ARTIFACT_NAMES
+
+
 def _is_project_stylesheet(path: pathlib.Path, tailwind_output: str | None) -> bool:
     """Whether this stylesheet is code the project wrote, and can therefore act on.
 
@@ -148,6 +163,8 @@ def _is_project_stylesheet(path: pathlib.Path, tailwind_output: str | None) -> b
     if any(part in EXCLUDED_DIRS for part in path.parts):
         return False
     if path.name.endswith(".min.css"):
+        return False
+    if _is_report_artifact(path):
         return False
     return not (tailwind_output and path.resolve() == pathlib.Path(tailwind_output).resolve())
 

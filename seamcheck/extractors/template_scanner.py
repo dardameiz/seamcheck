@@ -29,6 +29,8 @@ _ATTRIBUTE_RE = re.compile(
 # it a fragment lost 41 classes that are plainly in the markup.
 _INTERPOLATION_RE = re.compile(r"\{\{.*?\}\}|\$\{[^}]*\}")
 _BLOCK_TAG_RE = re.compile(r"\{%.*?%\}")
+# What counts as "still inside a name" on either side of a template tag.
+_NAME_CHAR = re.compile(r"[\w-]").match
 # A class token is written by a human or a utility framework. Anything carrying JS
 # punctuation came from a script block, not from markup.
 _NOT_A_CLASS_RE = re.compile(r"""[${}()'"^,;]|^\W+$""")
@@ -41,10 +43,38 @@ _NOT_A_CLASS_RE = re.compile(r"""[${}()'"^,;]|^\W+$""")
 _EXPRESSION_MARK = "\x00"
 
 
+def _replace_block_tags(value: str) -> str:
+    """A `{% %}` tag separates names, EXCEPT where it joins one.
+
+    Both shapes are real and they need opposite treatment:
+
+        class="ev-watch{% if x %} ev-watch-wide{% endif %}"   two whole names
+        class="ad-badge-{% if x %}urgent{% else %}low{% endif %}"   ONE assembled name
+
+    Treating every tag as whitespace was right for the first and wrong for the second,
+    where it produced three classes that do not exist - the dangling prefix `ad-badge-`
+    and the two branch texts `urgent` and `low`, reported as if a person had written them
+    - while the name that DOES exist, `ad-badge-urgent`, went unreported. 83 findings.
+
+    The tell is the characters either side of the tag. Flanked by name characters, the tag
+    is inside a name and the whole run is assembled at runtime; otherwise it delimits.
+    """
+    out, cursor = [], 0
+    for match in _BLOCK_TAG_RE.finditer(value):
+        before = value[match.start() - 1] if match.start() else ""
+        after = value[match.end()] if match.end() < len(value) else ""
+        joins = bool(before) and bool(after) and _NAME_CHAR(before) and _NAME_CHAR(after)
+        out.append(value[cursor:match.start()])
+        out.append(_EXPRESSION_MARK if joins else " ")
+        cursor = match.end()
+    out.append(value[cursor:])
+    return "".join(out)
+
+
 def _tokens(attribute: str, value: str) -> list[str]:
-    # Block tags become whitespace (they separate names); interpolations become the mark
-    # (they are part of one name).
-    cleaned = _INTERPOLATION_RE.sub(_EXPRESSION_MARK, _BLOCK_TAG_RE.sub(" ", value))
+    # Interpolations become the mark (they are part of one name); block tags separate
+    # names unless they sit inside one - see _replace_block_tags.
+    cleaned = _INTERPOLATION_RE.sub(_EXPRESSION_MARK, _replace_block_tags(value))
     if attribute == "class":
         return [
             token

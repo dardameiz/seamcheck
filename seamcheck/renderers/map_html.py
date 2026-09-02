@@ -1428,6 +1428,12 @@ pages.onchange = e => {
   current = Number(e.target.value); focus = null; view = {x:0, y:0, k:1};
   closeSheet(); draw();
   if (window.syncReadout) syncReadout();
+  // The colour key counts the CURRENT page, and changing the page did not refresh it - so
+  // it kept the previous page's numbers. On a page holding one red card the key said
+  // "connected 14 · uncertain 2" and hid the unresolved pill entirely, which is the
+  // sharpest way this tool could contradict itself: a control insisting there is nothing
+  // to look at while the thing to look at is on screen in red.
+  if (window.syncChrome) syncChrome();
 };
 
 // Clicking a colour in the key filters the canvas to that status. Toggling, so several

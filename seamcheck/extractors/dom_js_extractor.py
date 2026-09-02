@@ -35,6 +35,23 @@ _WRITE_NAMESPACES = frozenset({"style", "dataset", "classList"})
 _TOKEN_RE = re.compile(r"#([\w-]+)|\.([\w-]+)|\[data-([\w-]+)")
 
 
+# `[data-tab="${x}"]` and `'[data-tab="' + x + '"]'` - the attribute name is static even
+# when the value is not.
+_PARTIAL_ATTR_RE = re.compile(r"\[\s*data-([\w-]+)")
+
+
+def _partial_attr_names(node: dict) -> list[str]:
+    """Attribute names readable from a selector that is otherwise built at runtime."""
+    text = ""
+    if node.get("type") == "TemplateLiteral":
+        text = "".join(
+            ((q.get("value") or {}).get("cooked") or "") for q in (node.get("quasis") or [])
+        )
+    elif node.get("type") == "BinaryExpression":
+        text = "".join(_concat_shape(node))
+    return sorted(set(_PARTIAL_ATTR_RE.findall(text)))
+
+
 def _selector_tokens(callee_name: str, raw: str) -> list[tuple[str, str]]:
     """(sub, label) pairs a selector string pins down."""
     if callee_name == "getElementById":
@@ -202,6 +219,17 @@ def _dom_selectors_in(path: str, ast_root: dict, line_offset: int = 0) -> list[S
         chain = [basename, enclosing] if enclosing else [basename]
 
         if first.get("type") != "Literal" or not isinstance(first.get("value"), str):
+            # The LITERAL HALF of a built selector is still evidence. In
+            # `[data-tab="${tabName}"]` the value is unknown and the attribute NAME is
+            # right there in the source - so crediting nothing reported every live tab
+            # control on a dashboard as markup nothing reads: 638 of them on one project,
+            # each with its reader sixty lines further down the same file.
+            #
+            # The same split the class stems already make: a name that is partly static is
+            # partly evidence.
+            for name in _partial_attr_names(first):
+                _data_access(name, line, enclosing,
+                             f'{callee_name}("[data-{name}=...]")')
             symbols.append(
                 Symbol(
                     id=f"dom_selector:dynamic:{path}:{line}", kind="dom_selector",
@@ -434,7 +462,13 @@ def extract_js_class_usages(
     seen: set[str] = set()
 
     def _record(name: str, path: str, line, enclosing: str, snippet: str) -> None:
-        symbol_id = f"dom_selector:class:{name}:{path}:{line}"
+        # One per class PER FILE, not per site. These symbols are evidence that a rule is
+        # live - they are uncertain by design and can never become a finding - so a second
+        # copy of `.btn` from line 40 of the same file adds nothing and costs a node. On a
+        # React monorepo the per-site keying produced 20,041 of them where the whole rest
+        # of the graph was 1,100, which is a slower map and a misleading uncertain count
+        # for no extra evidence at all.
+        symbol_id = f"dom_selector:class:{name}:{path}"
         if symbol_id in seen:
             return
         seen.add(symbol_id)

@@ -401,8 +401,22 @@ def run_scan(
     # scan reported 5,318 selectors with no evidence either way.
     # template_files too: the JavaScript a template writes inline queries the DOM like any
     # other JavaScript, and reading only .js files made 202 KB of it invisible.
+    # Selectors from the entry graph can make CLAIMS - "this script queries an element no
+    # template has" is a finding when the script is one the pages run. Selectors from the
+    # rest of the tree are EVIDENCE only: a `querySelectorAll('.js-open-achievements')` in
+    # a file the bundler entry never reaches still proves the class is read, and six copies
+    # of that class in a template were being reported as markup nothing touches while the
+    # line that touches them sat one directory away.
+    entry_selectors = extract_dom_selectors(js_files, template_files or [])
+    seen_selector_ids = {symbol.id for symbol in entry_selectors}
+    evidence_selectors = [
+        dataclasses.replace(symbol, sub=f"{symbol.sub}:evidence")
+        for symbol in extract_dom_selectors(
+            [f for f in js_evidence_files if f not in set(js_files)], [])
+        if symbol.id not in seen_selector_ids
+    ] if js_evidence_files != js_files else []
     dom_selectors = (
-        extract_dom_selectors(js_files, template_files or [])
+        entry_selectors + evidence_selectors
         + extract_js_class_usages(js_evidence_files, template_files or [])
     )
     # Multi-writer detection reads the WHOLE tree, not the entry graph. A write site is an
@@ -449,7 +463,8 @@ def run_scan(
     if dom_attrs or dom_selectors or css_symbols:
         selectors = [s for s in css_symbols if s.kind == "css_selector"]
         symbols += dom_attrs + dom_selectors + css_symbols
-        symbols += detect_multi_writers(dom_writes)
+        symbols += detect_multi_writers(
+            dom_writes, repo_root, frozenset(tailwind_build_classes or ()))
         # Element matching sees the JS-created ones; CSS matching deliberately does not. An
         # element JavaScript builds is often styled inline or by an injected stylesheet, so
         # demanding a hand-written rule for it trades one false finding for another.

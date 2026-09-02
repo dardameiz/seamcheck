@@ -700,6 +700,27 @@ def _show_config_plain(root: str) -> int:
     return 0
 
 
+def _setup_django_if_any() -> None:
+    """Bootstrap Django when this is a Django project, and shrug when it is not.
+
+    The same thing the main path does, factored out so a command handled before that path
+    still scans the project the same way it would.
+    """
+    found = find_project(pathlib.Path.cwd())
+    if not found:
+        return
+    settings_module, root = found
+    sys.path.insert(0, str(root))
+    os.chdir(root)
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", settings_module)
+    try:
+        import django
+
+        django.setup()
+    except Exception:  # noqa: BLE001 - a project that will not import is read from source
+        pass
+
+
 def _share(rest: list[str]) -> int:
     """Build the shareable report, write it, and print where to send it.
 
@@ -762,9 +783,16 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if not name else 2
 
     if argv[0] == "share":
-        # Handled here rather than through the management command: it needs no Django, no
-        # server and no arguments, and routing it through the generic path would make a
-        # report about a repository depend on that repository being a Django project.
+        # Handled here rather than through the management command: it needs no server and
+        # no arguments, and routing it through the generic path would make a report about
+        # a repository depend on that repository being a Django project.
+        #
+        # It DOES set Django up first where there is a Django project, which it did not.
+        # Sitting above the bootstrap meant `share` scanned by reading source while
+        # `check` in the same shell scanned by importing - so the one command whose whole
+        # purpose is to be trustworthy reported 46,309 symbols where every other command
+        # reported 47,834, and said `ModuleNotFoundError` on the way past.
+        _setup_django_if_any()
         return _share(argv[1:])
 
     known = parser.parse_args(argv)

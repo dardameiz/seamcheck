@@ -268,8 +268,17 @@ class Command(BaseCommand):
         )
 
     def _triage(self, options):
+        # `--wrong X` says the finding was wrong, which IS the disposition - requiring
+        # `--status approved` as well made the command in `seamcheck help triage` fail on
+        # copy-paste, blocking the exact feedback loop the release exists for.
+        if not options["status"] and options.get("why"):
+            options["status"] = "approved"
         if not options["status"]:
-            self.stderr.write("--triage requires --status.")
+            self.stderr.write(
+                "--triage needs a disposition: either --status approved|confirmed|deferred, "
+                "or --wrong <reason> which means approved. `seamcheck help triage` lists "
+                "the reasons."
+            )
             raise SystemExit(2)
         result = api.triage(
             options["triage"], options["status"], options["repo_root"], options["reason"],
