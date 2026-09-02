@@ -379,10 +379,16 @@ def match_css_selectors(
             edges.append(Edge(from_id=symbol.id, to_id=defined.id, status=Status.CONNECTED))
         elif key[0] == "class" and symbol.label in tailwind_build_classes:
             edges.append(Edge(from_id=symbol.id, to_id=symbol.id, status=Status.CONNECTED))
-        elif symbol.sub.startswith(("class:apply", "class:stem")):
+        elif symbol.sub.startswith(("class:apply", "class:stem")) or symbol.sub.endswith(":evidence"):
             # A class JavaScript applies exists to be styled OR to be a hook the code
             # later queries. Having no stylesheet rule is therefore not a defect, so
             # these contribute evidence and never become findings themselves.
+            #
+            # `:evidence` generally, not just those two: an id referenced by `href="#x"`
+            # or `<label for>` is a USE of that id, and it has no business being asked
+            # whether a stylesheet defines it. The DOM matcher already exempts them and
+            # this loop reaches the same symbols, so the exemption has to exist twice or
+            # it does not exist at all - it silently produced 58 findings on healthchecks.
             continue
         else:
             from_cdn = _from_a_cdn(symbol.label, vendor_prefixes)
