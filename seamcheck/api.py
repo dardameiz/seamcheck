@@ -57,6 +57,41 @@ def _static_root(config: dict, repo_root: str) -> str:
     return os.path.join(repo_root, config.get("static_root", "static"))
 
 
+def _template_files(config: dict, repo_root: str) -> list[str]:
+    """Every template the project has, not just the ones under one chosen directory.
+
+    Detection picks the DENSEST template directory and everything else was invisible. A
+    Django project routinely has several - a project-level `templates/` and one per app -
+    and on the reference project the app's `pointless/templates/` holds the pages people
+    actually visit while the chosen root was the admin overrides. Classes used only in the
+    unscanned half were then reported as CSS nothing applies.
+
+    The configured root still comes first; the rest are the conventional locations, which
+    is also where Django's own app-directories loader looks.
+    """
+    roots: list[str] = []
+    configured = config.get("templates_root")
+    if configured:
+        roots.append(os.path.join(repo_root, configured))
+    base = pathlib.Path(repo_root)
+    for pattern in ("templates", "*/templates", "*/*/templates", "views", "*/views"):
+        roots += [str(d) for d in sorted(base.glob(pattern)) if d.is_dir()]
+
+    found: list[str] = []
+    seen: set[str] = set()
+    for root in dict.fromkeys(roots):
+        if not os.path.isdir(root):
+            continue
+        if any(part in _SKIP_TREES for part in pathlib.PurePath(root).parts):
+            continue
+        for path in sorted(pathlib.Path(root).rglob("*.html")):
+            resolved = str(path.resolve())
+            if resolved not in seen:
+                seen.add(resolved)
+                found.append(str(path))
+    return found
+
+
 def _static_candidates(config: dict, repo_root: str) -> list[str]:
     """Every directory a `{% static 'x' %}` reference might resolve under, best first.
 
@@ -94,6 +129,10 @@ def _discover_roots(config: dict, repo_root: str) -> list[str]:
 # coffee break for a diminishing return, and the cap is high enough that no repository in
 # the 32-project corpus reaches it except the very largest.
 _MAX_JS_FALLBACK = 4000
+# Trees that hold copies or somebody else's code, for the directory sweeps below.
+_SKIP_TREES = frozenset({"node_modules", "venv", ".venv", "dist", "build", "staticfiles",
+                         "site-packages", "__pycache__", ".git", "corpus",
+                         "recall_fixtures"})
 
 
 def _js_roots(config: dict, repo_root: str) -> tuple[list[str], str, list[str]]:
@@ -174,11 +213,7 @@ def scan(
     )
     progress.step("listing templates")
     templates_root = config.get("templates_root")
-    template_files = (
-        [str(p) for p in pathlib.Path(repo_root, templates_root).rglob("*.html")]
-        if templates_root and os.path.isdir(os.path.join(repo_root, templates_root))
-        else []
-    )
+    template_files = _template_files(config, repo_root)
     progress.step("listing stylesheets")
     css_root = config.get("css_source_root")
     _css_root_dir = (

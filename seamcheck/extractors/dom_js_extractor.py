@@ -149,12 +149,27 @@ def _dom_selectors_in(path: str, ast_root: dict, line_offset: int = 0) -> list[S
             )
         )
 
+    # Nodes that are the TARGET of an assignment. `el.dataset.sectionIndex = si` is not a
+    # read of a data attribute, it is the line that CREATES it - and recording it as a read
+    # made the write into a search for an element that has the attribute, which nothing
+    # declares, so the very line that defines it was reported as reaching nothing. Four of
+    # one project's remaining false claims were exactly this, each pointing at its own
+    # definition. The definitions extractor already reads these; only the read side was
+    # double-counting them.
+    assigned = set()
+    for node, _enclosing in _walk(ast_root):
+        node_type = node.get("type")
+        if node_type in ("AssignmentExpression", "UpdateExpression"):
+            target = node.get("left") or node.get("argument")
+            if isinstance(target, dict):
+                assigned.add(id(target))
+
     for node, enclosing in _walk(ast_root):
         raw = ((node.get("loc") or {}).get("start") or {}).get("line")
         at = (raw + line_offset) if raw else raw
 
         # el.dataset.buttonType -> the data-button-type attribute
-        if node.get("type") == "MemberExpression":
+        if node.get("type") == "MemberExpression" and id(node) not in assigned:
             owner = node.get("object") or {}
             if (owner.get("property") or {}).get("name") == "dataset":
                 accessed = (node.get("property") or {}).get("name")
