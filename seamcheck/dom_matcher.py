@@ -150,11 +150,20 @@ def match_css_selectors(
     css_selectors: list[Symbol],
     tailwind_build_classes: set[str],
     usage_only: list[Symbol] | None = None,
+    styles_are_local: bool = True,
 ) -> list[Edge]:
     """Three-way: what the DOM uses, what CSS defines, and what Tailwind generates.
 
     A class with no hand-written rule is not dead if the utility CSS build emits it -
     without that set, every Tailwind utility in every template reads as unresolved.
+
+    `styles_are_local` is the same question the Supabase reader had to learn to ask: is
+    there an oracle here at all? A project whose entire stylesheet is a CDN `<link>` has no
+    CSS in the repository, so "nothing styles this class" is drawn from the absence of a
+    file rather than from evidence. Measured on a Flask project that loads Bootstrap from
+    jsdelivr and ships no CSS of its own: 102 of its 167 findings were `nav-link`, `badge`,
+    `page-item` and friends - every one of them styled perfectly well, by a stylesheet the
+    scan was never shown.
     """
     css_by_key = {(symbol.sub, symbol.label): symbol for symbol in css_selectors}
     used_keys: set[tuple[str, str]] = set()
@@ -189,7 +198,10 @@ def match_css_selectors(
             # these contribute evidence and never become findings themselves.
             continue
         else:
-            edges.append(Edge(from_id=symbol.id, to_id=symbol.id, status=Status.UNRESOLVED))
+            edges.append(Edge(
+                from_id=symbol.id, to_id=symbol.id,
+                status=Status.UNRESOLVED if styles_are_local else Status.UNCERTAIN,
+            ))
 
     # Class-name stems seen in the source, so a rule whose name could be ASSEMBLED at
     # runtime is separated from one that could not. `extract_js_class_usages` already emits

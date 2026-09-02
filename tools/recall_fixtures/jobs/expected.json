@@ -1,0 +1,16 @@
+{
+  "why": "A job is named by a string on one side and registered by a string on the other, and nothing in any of these libraries checks the two agree. Two typos are planted; each means work is queued that no worker will ever take off. The 7-field cron is the schedule mistake people actually make.",
+  "must_find": [
+    {"kind": "job_enqueue", "label": "send-invoyce", "status": "unresolved"},
+    {"kind": "job_enqueue", "label": "app/user.craeted", "status": "unresolved"},
+    {"kind": "job_schedule", "label": "0 3 * * * * *", "status": "unresolved"},
+    {"kind": "job", "label": "send-invoice", "status": "connected"},
+    {"kind": "job", "label": "app/user.created", "status": "connected"},
+    {"kind": "job", "label": "nightly-report", "status": "uncertain"},
+    {"kind": "job_schedule", "label": "0 3 * * *", "status": "connected"}
+  ],
+  "must_not_find": [
+    {"kind": "job", "label": "send-invoice", "status": "unresolved"},
+    {"kind": "job", "label": "nightly-report", "status": "unused"}
+  ]
+}

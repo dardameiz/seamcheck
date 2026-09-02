@@ -153,6 +153,7 @@ def run_scan(
     urlconf_module: str,
     js_entry_files: list[str],
     js_project_root: str,
+    js_extra_files: list[str] | None = None,
     entry_point_files: set[str] | None = None,
     asgi_file: str | None = None,
     first_party_prefixes: list[str] | None = None,
@@ -226,7 +227,7 @@ def run_scan(
             )
 
     progress.step("JavaScript modules")
-    js_symbols, js_edges = extract_js(js_entry_files, js_project_root)
+    js_symbols, js_edges = extract_js(js_entry_files, js_project_root, js_extra_files)
     # JavaScript a template writes inline is still JavaScript. This project keeps 200 KB
     # of it, calling five endpoints that no .js file mentions - which a scan of .js files
     # alone reported as endpoints nothing calls.
@@ -384,9 +385,13 @@ def run_scan(
         # exactly the ones worth carrying: each explains why a getElementById is not broken.
         resolved = {edge.to_id for edge in dom_edges}
         symbols += [attr for attr in js_dom_attrs if attr.id in resolved]
+        # Whether this project HAS stylesheets of its own. With none, every class in
+        # every template is unstyled as far as the scan can see, and saying so would be a
+        # claim about a file that is not here.
         edges += match_css_selectors(
             dom_selectors, dom_attrs, selectors, tailwind_build_classes or set(),
             usage_only=js_dom_attrs,
+            styles_are_local=bool(css_files) or bool(tailwind_build_classes),
         )
         # Tokens JavaScript sets at runtime are real definitions; without them half of
         # this project's "undefined var()" findings were false.

@@ -29,12 +29,14 @@ import os
 import pathlib
 import re
 
+from seamcheck.adapters.discovery import SKIP_DIRS
 from seamcheck.graph import Edge, Status, Symbol
 
-_SKIP = {
-    "node_modules", ".git", "dist", "build", "__pycache__", "venv", ".venv",
-    "site-packages", "migrations", "corpus", ".tox",
-}
+# The one skip list, plus the one directory this reader alone must avoid: a migration
+# file mentioning Stripe is a schema, not an integration. Keeping a private copy of the
+# rest is how `fixtures` came to be skipped by every other extractor and scanned by this
+# one - a planted test bug reported as a finding about seamcheck itself.
+_SKIP = SKIP_DIRS | {"migrations"}
 
 _WEBHOOK_NOTE = (
     "Reached by Stripe's servers, not by anything in this codebase. Nothing here "

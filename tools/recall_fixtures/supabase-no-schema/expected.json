@@ -1,0 +1,13 @@
+{
+  "why": "REGRESSION GUARD for the 728-false-finding bug. The schema lives in the Supabase dashboard, not in this repo. Every one of these tables exists in the real database, so the scan must claim NOTHING about them - the absence of a migration file is not evidence of an absent table.",
+  "must_find": [
+    {"kind": "db_table_use", "label": "projects", "status": "uncertain"},
+    {"kind": "db_column_use", "label": "tasks.title", "status": "uncertain"},
+    {"kind": "db_function_use", "label": "get_org_summary", "status": "uncertain"}
+  ],
+  "must_not_find": [
+    {"kind": "db_table_use", "status": "unresolved"},
+    {"kind": "db_column_use", "status": "unresolved"},
+    {"kind": "db_function_use", "status": "unresolved"}
+  ]
+}

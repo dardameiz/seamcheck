@@ -14,7 +14,41 @@ _CONVERTERS = {
     "uuid": r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
     "path": r".+",
 }
-_PARAMETER = re.compile(r"<(?:(\w+):)?(\w+)>")
+# Every framework spells a dynamic segment differently, and this understood exactly one of
+# them. A Next.js route is `[id]`, an Express or Nest route is `:id`, a FastAPI route is
+# `{id}` - none contain `<`, so _as_pattern returned None for all of them and dynamic
+# routes were simply unmatchable outside Django. cal.com's catch-all
+# `/api/integrations/[...args]` is why this was found: ten real calls to it were reported
+# as calls to a route that does not exist.
+#
+#   <int:pk> <pk>     Django, Flask
+#   :id               Express, NestJS, Fastify
+#   [id]              Next.js         - one segment
+#   [...args]         Next.js         - catch-all, one segment or more
+#   [[...args]]       Next.js         - optional catch-all, zero segments or more
+#   {id} {id:path}    FastAPI, Starlette
+_PARAMETER = re.compile(
+    r"<(?:(?P<django_conv>\w+):)?(?P<django>\w+)>"
+    r"|\[\[\.\.\.(?P<optional_catch_all>\w+)\]\]"
+    r"|\[\.\.\.(?P<catch_all>\w+)\]"
+    r"|\[(?P<next>\w+)\]"
+    r"|\{(?P<fastapi>\w+)(?::(?P<fastapi_conv>\w+))?\}"
+    r"|:(?P<express>\w+)"
+)
+
+
+def _segment_pattern(match: re.Match) -> str:
+    """The regex one dynamic segment stands for."""
+    groups = match.groupdict()
+    if groups.get("catch_all"):
+        # One segment or more, slashes included: /a, /a/b, /a/b/c.
+        return r".+"
+    if groups.get("optional_catch_all"):
+        # Zero segments or more. The leading slash is part of the escaped literal before
+        # it, so this has to be able to swallow that too.
+        return r".*"
+    converter = groups.get("django_conv") or groups.get("fastapi_conv") or "str"
+    return _CONVERTERS.get(converter, r"[^/]+")
 
 
 def _normalize(path: str) -> str:
@@ -22,15 +56,27 @@ def _normalize(path: str) -> str:
 
 
 def _as_pattern(path: str) -> re.Pattern | None:
-    """A Django route with converters, compiled. None for a route that has none."""
-    if "<" not in path:
+    """A route with dynamic segments, compiled. None for a route that has none."""
+    if not any(character in path for character in "<[{:"):
         return None
     out, cursor = [], 0
+    found = False
     for parameter in _PARAMETER.finditer(path):
-        out.append(re.escape(path[cursor:parameter.start()]))
-        # An unconverted <name> is Django's `str` default.
-        out.append(_CONVERTERS.get(parameter.group(1) or "str", r"[^/]+"))
+        found = True
+        literal = path[cursor:parameter.start()]
+        if parameter.groupdict().get("optional_catch_all") and literal.endswith("/"):
+            # `/blog/[[...slug]]` serves `/blog` itself as well as `/blog/a/b`, so the
+            # separator in front of it is part of the optional piece rather than a
+            # required literal - otherwise the bare `/blog` never matches its own route.
+            out.append(re.escape(literal[:-1]))
+            out.append(r"(?:/.*)?")
+            cursor = parameter.end()
+            continue
+        out.append(re.escape(literal))
+        out.append(_segment_pattern(parameter))
         cursor = parameter.end()
+    if not found:
+        return None
     out.append(re.escape(path[cursor:]))
     try:
         return re.compile("".join(out) + r"\Z")

@@ -67,10 +67,50 @@ def _discover_roots(config: dict, repo_root: str) -> list[str]:
     )
 
 
-def _js_roots(config: dict, repo_root: str) -> tuple[list[str], str]:
+# How many first-party JavaScript files to read when there are no entry points to walk
+# from. A monorepo can hold tens of thousands; parsing all of them turns a scan into a
+# coffee break for a diminishing return, and the cap is high enough that no repository in
+# the 32-project corpus reaches it except the very largest.
+_MAX_JS_FALLBACK = 4000
+
+
+def _js_roots(config: dict, repo_root: str) -> tuple[list[str], str, list[str]]:
+    """The JavaScript to read: the declared entry points UNION the first-party tree.
+
+    It used to be entry points alone, walked through their imports. That is right for the
+    files an entry can reach and blind to everything else, and "everything else" turns out
+    to be most of a modern application:
+
+      * A Next.js app-router page is routed to BY THE FILESYSTEM. Nothing imports it, so
+        no import walk can ever arrive at it - and those pages are where the fetches are.
+      * Entry points themselves are found from a Vite config or a Django template's
+        {% static_js %} tag, both Django-shaped, so a plain React or Express repository
+        often declared none at all and the entire JavaScript reader ran over an empty list.
+
+    Every axios call, every fetch and every DOM write in such a file was invisible, which
+    is a large part of why those projects scanned as almost entirely `uncertain`. A project
+    whose entries DO reach everything is unaffected: the extra list is then empty.
+
+    Returned as (entries, project root, the rest) rather than one merged list, because the
+    two are read differently - see extract_js.
+    """
+    from seamcheck.extractors.url_reference_extractor import find_js_files
+
     if "js_entry_files" in config:
-        return list(config["js_entry_files"]), config.get("js_project_root", repo_root)
-    return _discover_roots(config, repo_root), repo_root
+        entries = list(config["js_entry_files"])
+        project_root = config.get("js_project_root", repo_root)
+    else:
+        entries, project_root = _discover_roots(config, repo_root), repo_root
+
+    # ABSOLUTE, because discover_js_files() joins each entry onto the project root, and a
+    # root-prefixed relative path joins to itself twice - a directory that cannot exist,
+    # so every added file silently dropped out again.
+    seen = {os.path.abspath(os.path.join(project_root, entry)) for entry in entries}
+    extra = sorted(
+        path for path in (os.path.abspath(p) for p in find_js_files(repo_root))
+        if path not in seen
+    )
+    return entries, project_root, extra[:_MAX_JS_FALLBACK]
 
 
 def _entry_point_files(config: dict, repo_root: str) -> set[str]:
@@ -105,7 +145,7 @@ def scan(
     _CONFIG_ROOT[0] = repo_root
     progress.step("JavaScript entry points")
     config = _config()
-    js_entry_files, js_project_root = _js_roots(config, repo_root)
+    js_entry_files, js_project_root, js_extra_files = _js_roots(config, repo_root)
     asgi_module = config.get("asgi_module")
     asgi_file = (
         os.path.join(repo_root, asgi_module.replace(".", os.sep) + ".py") if asgi_module else None
@@ -136,6 +176,7 @@ def scan(
         # that wants it, and it is not the one running in that case.
         urlconf_module=config.get("urlconf_module", ""),
         js_entry_files=js_entry_files,
+        js_extra_files=js_extra_files,
         js_project_root=js_project_root,
         entry_point_files=_entry_point_files(config, repo_root),
         asgi_file=asgi_file if asgi_file and os.path.isfile(asgi_file) else None,
@@ -392,7 +433,7 @@ def _page_files(repo_root: str) -> dict[str, set[str]]:
     """
     from seamcheck.extractors.js_extractor import discover_js_files
 
-    roots, _ = _js_roots(_config(), repo_root)
+    roots, _, _extra = _js_roots(_config(), repo_root)
     return {
         os.path.splitext(os.path.basename(root))[0]: {
             _norm(path, repo_root) for path in discover_js_files([root], repo_root)
@@ -431,7 +472,7 @@ LAST_MAP_FILES: set[str] = set()
 
 def _render_map(repo_root: str, ref: str, progress: Progress | None = None) -> str:
     progress = progress or null()
-    js_entry_files, _ = _js_roots(_config(), repo_root)
+    js_entry_files, _, _extra = _js_roots(_config(), repo_root)
     from seamcheck.console import build_console
     from seamcheck.filetree import build_file_tree
     from seamcheck.history import commit_series

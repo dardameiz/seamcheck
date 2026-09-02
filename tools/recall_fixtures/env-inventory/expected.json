@@ -1,0 +1,13 @@
+{
+  "why": "The example file covers 3 of the 4 keys read, so it IS an inventory and a per-key verdict is earned. SEARCH_API_KEY is read and declared nowhere - uncertain, never unresolved, because real secrets live in a dashboard. LEGACY_MAILER_URL is declared and read nowhere, which IS safe to call unused: reading is something the scan can see everywhere.",
+  "must_find": [
+    {"kind": "env_read", "label": "SEARCH_API_KEY", "status": "uncertain"},
+    {"kind": "env_var", "label": "LEGACY_MAILER_URL", "status": "unused"},
+    {"kind": "env_var", "label": "DATABASE_URL", "status": "connected"},
+    {"kind": "env_read", "label": "STRIPE_SECRET_KEY", "status": "connected"}
+  ],
+  "must_not_find": [
+    {"kind": "env_read", "status": "unresolved"},
+    {"kind": "env_read", "label_contains": "not declared here"}
+  ]
+}

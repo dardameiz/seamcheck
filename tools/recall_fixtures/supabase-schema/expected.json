@@ -1,0 +1,15 @@
+{
+  "why": "A schema IS present, so a mistyped column, an unknown table and an unknown rpc are all evidenced claims. tasks.assignee_id is a typo for assigned_to - the quiet one, because PostgREST returns the row without the column and the client reads undefined.",
+  "must_find": [
+    {"kind": "db_column_use", "label": "tasks.assignee_id", "status": "unresolved"},
+    {"kind": "db_table_use", "label": "ghost_table", "status": "unresolved"},
+    {"kind": "db_function_use", "label": "get_nothing", "status": "unresolved"},
+    {"kind": "db_table_use", "label": "projects", "status": "connected"},
+    {"kind": "db_column_use", "label": "tasks.title", "status": "connected"},
+    {"kind": "db_policy", "label": "tasks", "status": "unresolved"}
+  ],
+  "must_not_find": [
+    {"kind": "db_column_use", "label": "projects.name", "status": "unresolved"},
+    {"kind": "db_table_use", "label": "tasks", "status": "unresolved"}
+  ]
+}

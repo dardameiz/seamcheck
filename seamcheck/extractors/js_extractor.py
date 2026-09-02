@@ -45,6 +45,20 @@ _HTTP_RECEIVERS = frozenset({
 })
 
 _DYNAMIC_NOTE = "Fetch target built at runtime -- cannot be statically resolved."
+_EXTERNAL_NOTE = (
+    "A request to another origin, so there is no route in this project for it to reach. "
+    "Recorded because it is a real outbound dependency; never checked against the route "
+    "table, because it was never going to be there."
+)
+
+
+def _is_external(target: str) -> bool:
+    """Whether this URL belongs to somebody else.
+
+    A protocol-relative `//cdn.example.com/x` counts too: it is the same request to the
+    same third party, written without the scheme.
+    """
+    return target.startswith(("http://", "https://", "//"))
 _PREFIX_NOTE = (
     "Only the part of this URL before the first runtime value is known. The route it "
     "reaches is not proven -- never read this as evidence that an endpoint is unused."
@@ -350,6 +364,22 @@ def _http_symbols(
         call_id = f"jscall:{path}:{line}"
 
         target, exact = _static_url(first_argument)
+        if target and _is_external(target):
+            # A call to somebody else's API. It is a real call, so the js_call is recorded
+            # - but it must never become a fetch_target, because a fetch_target is matched
+            # against THIS project's route table and anything that fails to match there is
+            # reported unresolved. That produced 47 findings on one project claiming that
+            # `https://zoom.us/oauth/token` and `https://registry.npmjs.org/...` were
+            # routes it had lost, which is not a thing anyone can act on and not a claim
+            # the scan is entitled to make.
+            symbols.append(
+                Symbol(
+                    id=call_id, kind="js_call", label=target, sub=basename, file=path,
+                    line=line, status=Status.CONNECTED,
+                    snippet=f'fetch("{target}")', chain=chain, note=_EXTERNAL_NOTE,
+                )
+            )
+            continue
         if target:
             status = Status.CONNECTED if exact else Status.UNCERTAIN
             snippet = f'fetch("{target}")' if exact else f'fetch("{target}" + <runtime value>)'
@@ -382,10 +412,28 @@ def _http_symbols(
     return symbols, edges
 
 
-def extract_js(entry_files: list[str], project_root: str) -> tuple[list[Symbol], list[Edge]]:
+def extract_js(
+    entry_files: list[str], project_root: str, extra_files: list[str] | None = None
+) -> tuple[list[Symbol], list[Edge]]:
+    """Every HTTP call in the project, and the endpoint literals worth recording.
+
+    `entry_files` and everything they import get the full treatment. `extra_files` - the
+    rest of the first-party tree, which exists because a Next.js page is routed to by the
+    filesystem and imported by nothing - is read for CALLS ONLY.
+
+    That asymmetry is measured, not stylistic. A path-shaped literal inside the entry graph
+    is plausibly an endpoint constant, which is why sightings are recorded at all. The same
+    literal anywhere in a monorepo is a string: reading them across the whole tree took one
+    project from 29% uncertain to 74% while adding eleven connected findings. Sightings are
+    the cheapest symbol to produce and the least worth producing at scale.
+    """
     symbols: list[Symbol] = []
     edges: list[Edge] = []
     seen_target_ids: set[str] = set()
+    # Kept apart from seen_target_ids so literals still de-duplicate against each other
+    # while never blocking a real call from claiming the same target.
+    literal_ids: set[str] = set()
+    pending_literals: list[Symbol] = []
 
     to_visit = [os.path.join(project_root, name) for name in entry_files]
     visited: set[str] = set()
@@ -410,9 +458,28 @@ def extract_js(entry_files: list[str], project_root: str) -> tuple[list[Symbol],
             found, found_edges = _http_symbols(ast, path, seen_target_ids)
             symbols += found
             edges += found_edges
-            sighted, _ = _url_literals(ast, path, seen_target_ids)
-            symbols += sighted
+            # Literals are DEFERRED to the end of the walk. A bare `'/api/teams'` sitting
+            # in a route definition is a sighting; an `axios.get('/api/teams')` in another
+            # file is a proven call. Emitting them as each file was parsed meant whichever
+            # file the walk happened to reach FIRST decided the status - so a route defined
+            # before its caller was read stayed uncertain, and the caller's evidence was
+            # thrown away. Order of traversal must never decide a verdict.
+            sighted, _ = _url_literals(ast, path, literal_ids)
+            pending_literals += sighted
 
+    # The rest of the first-party tree: calls only, no sightings, and no import walk -
+    # these files were found by walking the directory, so there is nothing left to follow.
+    remaining = [
+        path for path in dict.fromkeys(extra_files or [])
+        if path not in visited and path.endswith(_JS_EXTENSIONS) and os.path.isfile(path)
+    ]
+    for path, ast in _parse_files(remaining).items():
+        found, found_edges = _http_symbols(ast, path, seen_target_ids)
+        symbols += found
+        edges += found_edges
+
+    # Only the sightings no real call already accounted for.
+    symbols += [s for s in pending_literals if s.id not in seen_target_ids]
     return symbols, edges
 
 

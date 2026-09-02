@@ -1,0 +1,35 @@
+{
+  "why": "Every caller idiom the ecosystem actually uses, against a real route table. The last two lines are the trap: params.get() and Map.get() take path-shaped arguments and are not HTTP calls at all - reading .get() without checking the receiver reports both as requests. A path-shaped literal is recorded as an uncertain SIGHTING by design, so what must never appear is a js_call claiming it was requested, or a connected fetch_target.",
+  "must_find": [
+    {
+      "kind": "url",
+      "label_contains": "/api/teams",
+      "status": "connected"
+    },
+    {
+      "kind": "url",
+      "label_contains": "/settings/billing",
+      "status": "connected"
+    },
+    {
+      "kind": "url",
+      "label_contains": "/api/orphan",
+      "status": "uncertain"
+    }
+  ],
+  "must_not_find": [
+    {
+      "kind": "js_call",
+      "label_contains": "not-a-route-just-a-key"
+    },
+    {
+      "kind": "js_call",
+      "label_contains": "also-not-a-route"
+    },
+    {
+      "kind": "fetch_target",
+      "label_contains": "not-a-route",
+      "status": "connected"
+    }
+  ]
+}

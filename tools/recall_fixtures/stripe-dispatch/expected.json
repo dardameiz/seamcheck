@@ -1,0 +1,16 @@
+{
+  "why": "The webhook dispatches on two events. The code also creates refunds, which makes Stripe send charge.refunded - and nothing handles it, so the money moves and the record never changes. columns.js exists to keep the shape-only matcher dead: those five strings are columns, not events.",
+  "must_find": [
+    {"kind": "stripe_event", "label": "checkout.session.completed", "status": "connected"},
+    {"kind": "stripe_event", "label": "customer.subscription.updated", "status": "connected"},
+    {"kind": "stripe_event", "label": "charge.refunded", "status": "unresolved"},
+    {"kind": "stripe_webhook", "status": "connected"}
+  ],
+  "must_not_find": [
+    {"kind": "stripe_event", "label": "users.id"},
+    {"kind": "stripe_event", "label": "invoice.total"},
+    {"kind": "stripe_event", "label": "product.id"},
+    {"kind": "stripe_event", "label": "charge.amount"},
+    {"kind": "stripe_event", "label": "customer.name"}
+  ]
+}
