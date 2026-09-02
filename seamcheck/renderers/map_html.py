@@ -232,7 +232,12 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overf
 .offstage { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%);
             pointer-events:none; }
 .hud { position:absolute; z-index:6; display:flex; gap:8px; align-items:center; }
-.hud.tl { top:14px; left:14px; }
+/* The left corner holds the menu AND the page picker; the right holds Back, List and the
+   appearance button. Both were unbounded, so on anything narrower than a desk monitor the
+   List button sat on top of the page picker. The left is capped to what the right leaves,
+   and the picker truncates rather than pushing. */
+.hud.tl { top:14px; left:14px; max-width:calc(100% - 250px); flex-wrap:wrap; }
+.hud.tl > * { min-width:0; }
 .hud.tr { top:14px; right:14px; }
 .hud.bl { bottom:14px; left:14px; right:14px; flex-wrap:wrap; }
 .hud.br { bottom:14px; right:14px; flex-direction:column; }
@@ -620,18 +625,30 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
 .legend span { display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:6px; }
 
 /* Evidence arrives as a sheet over the canvas, not as a permanent rail stealing height. */
-.sheet { position:absolute; left:0; right:0; bottom:0; z-index:4; background:var(--panel);
+/* Above the filter pill, which is z-index 6 and pinned to the same bottom edge. The
+   sheet was 4, so on a phone the filters covered the evidence a tap had just opened -
+   the one thing the tap was for. Raised rather than the pill lowered: the sheet is a
+   response to a direct action and outranks a standing control. */
+.sheet { position:absolute; left:0; right:0; bottom:0; z-index:12; background:var(--panel);
          border-top:1px solid var(--line); padding:12px 14px 14px; max-height:52%;
          overflow-y:auto; box-shadow:0 -6px 24px -18px rgba(0,0,0,.6); }
 .sheet h2 { font-size:13px; margin:0 26px 6px 0; word-break:break-all; }
 .sheet .row { color:var(--muted); font-size:12px; margin-bottom:4px;
               font-family:var(--mono); word-break:break-all; }
+/* The line number is a coordinate someone is about to type into an editor. */
+.sheet .row .ln { color:var(--ink); font-weight:600; }
 .sheet .note { padding:0; margin-top:8px; font-family:inherit; }
 .acts { margin:8px 0 4px; }
 .acts button { padding:7px 11px; font-size:12.5px; border-radius:8px; cursor:pointer;
                border:1px solid var(--line); background:var(--bg); color:var(--sig); }
 .sheet .lbl { font-size:9.5px; text-transform:uppercase; letter-spacing:.09em;
               color:var(--muted); margin:14px 0 6px; }
+/* The NUMBER in a label is the thing being read - "3 hops", "12 from here" - and it was
+   the same dim grey as the word beside it. On a dark pack that is the difference between
+   a value and a caption. */
+.sheet .lbl b, .sheet .n { color:var(--ink); font-weight:700; font-size:11px;
+                           letter-spacing:.02em; }
+.sheet .row b { color:var(--ink); font-weight:600; }
 /* One row per hop, joined by a rule down the left, so the walk reads as a route. */
 .hop { border-left:2px solid var(--line); padding:0 0 9px 10px; position:relative; }
 .hop.at { border-left-color:var(--sig); }
@@ -640,7 +657,7 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
 /* The step number sits in the rule the hops hang off, so the column of numbers reads as
    an order rather than as part of each label. */
 .hop .hn { flex:none; width:16px; height:16px; margin-left:-19px; border-radius:50%;
-           background:var(--line); color:var(--ink); font-size:9px; font-weight:700;
+           background:var(--line-2); color:var(--ink); font-size:9.5px; font-weight:700;
            display:inline-flex; align-items:center; justify-content:center;
            letter-spacing:0; }
 .hop.at .hn { background:var(--sig); color:#fff; }
@@ -998,8 +1015,18 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
      control and nothing else; the readout drops to its own line under them rather than
      being run over by a button; and the zoom stacks ABOVE the pills instead of through
      them, because the pills wrap to two rows and the stack has to clear both. */
-  .hud.tl { top:12px; left:12px; }
-  .hud.tr { top:12px; right:12px; gap:6px; }
+  /* The comment above says this row holds the menu and the appearance control and
+     nothing else. Two things were added to it since and it stopped being true: the page
+     picker went into the left corner and the List toggle into the right, and at 390px
+     they overlapped by 36px - List sitting on top of the picker.
+     So the picker takes its OWN row. It is the widest control here and it carries the
+     longest text (a template path), which is exactly the thing that should not be
+     squeezed into a corner it has to share. */
+  .hud.tl { top:12px; left:12px; right:12px; flex-wrap:wrap; }
+  .hud.tl > .menuwrap { flex:none; }
+  .pagepick { flex-basis:100%; max-width:none; order:2; }
+  /* Clear of the right corner's own controls, which stay on row one. */
+  .hud.tr { top:12px; right:12px; gap:6px; z-index:7; }
   .menubtn { max-width:44vw; }
   /* The page picker on the glass now says which page this is, so the readout was the
      same sentence twice - and the second copy floated over a band heading. */
@@ -1014,7 +1041,6 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
   .mapsheet .mlab { font-size:11px; padding:13px 12px 7px; }
   .mapsheet .mfilters select, .mapsheet .msearch input { padding:12px 12px; font-size:15px; }
   .mapsheet .mfilters label > span { font-size:11px; }
-  .pagepick { max-width:44vw; }
   .pagepick select { height:36px; font-size:12px; }
   .zoom { left:auto; right:12px; top:auto;
           bottom:calc(var(--chrome-bottom, 62px) + 108px);
@@ -1054,6 +1080,9 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
   .filters, .legendbar {
     position:static; margin:0;
   }
+  /* While a sheet is open the pill is behind it anyway; hidden so it cannot peek out
+     around the sheet's edges on a short screen. */
+  body:has(.sheet:not([hidden])) .pill { display:none; }
   .pill {
     position:absolute; left:8px; right:8px; bottom:8px; z-index:6;
     /* Never more than half the screen, whatever it ends up holding: a control surface
@@ -2549,10 +2578,10 @@ function show(id) {
     ${n.file ? `<div class="row">${loc(n.file, n.line)}</div>` : ""}
     ${n.note ? `<div class="note">${esc(n.note)}</div>` : ""}
     ${why(n.kind, n.status)}
-    ${path.length ? `<div class="lbl">Path — browser to backend · ${path.length} hop${
+    ${path.length ? `<div class="lbl">Path — browser to backend · <b>${path.length}</b> hop${
       path.length === 1 ? "" : "s"}</div>` : ""}
     ${path.map((step, i) => hop(step, id, i + 1, path.length)).join("")}
-    ${reaches.length ? `<div class="lbl">Reaches — ${reaches.length} from here</div>` +
+    ${reaches.length ? `<div class="lbl">Reaches — <b>${reaches.length}</b> from here</div>` +
       reaches.map((step, i) => hop(step, id, i + 1, reaches.length)).join("") : ""}`;
   sheet.hidden = false;
   document.getElementById("iso").onclick = () => {
@@ -2784,7 +2813,9 @@ function absolute(file) { return ROOT ? ROOT + "/" + file : file; }
 
 function loc(file, line) {
   if (!file) return "";
-  const text = esc(file) + (line ? ":" + line : "");
+  // The line number carried as its own element: it is the coordinate someone is about to
+  // type into an editor, and it read as the same grey as the path around it.
+  const text = esc(file) + (line ? `:<span class="ln">${line}</span>` : "");
   const full = absolute(file) + (line ? ":" + line : "");
   if (!OPEN.href) {
     return `<span class="loc" data-copy="${esc(full)}" title="Click to copy">${text}</span>`;
