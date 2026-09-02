@@ -38,6 +38,25 @@ None of these throw. Nothing fails a test. That is exactly why they survive:
 <sub>**The red list is the point.** Every finding names the file and line on both sides of
 the seam, and says which evidence it has.</sub>
 
+### What it has actually found
+
+Not hypothetical. These came out of the 511,000-line Django app it is measured against, and
+**every one of them was reported as an ordinary row that looked like dead CSS**:
+
+| finding | what it really was |
+|---|---|
+| three dead selectors | timers fetching on a loop to fill elements **that exist in no template** — **~12,000 requests per second** at the app's target concurrency |
+| a dead `dom_attr` | the **level-up modal had been frozen since it shipped** — the only function writing it was never called, so it showed the page-load value through every level-up |
+| a selector that could never match | a lookup whose own comment said **"ORDER IS LOAD-BEARING"**, in six files, matching nothing |
+| duplicated writers | 1,248 lines of JavaScript deleted across 15 files — second copies left behind by refactors that never finished |
+
+**None of them threw. None failed a test. No error, no ticket** — which is exactly why they
+had all been running for years. A value that is quietly wrong and an element that is quietly
+dead do not announce themselves.
+
+The detail, with the numbers and the query that separated them from the cosmetic findings,
+is in [Field notes](#field-notes-from-the-measurement-project) below.
+
 ## Why I made it
 
 I was building a game — a fairly large Django app with a lot of hand-written JavaScript —
