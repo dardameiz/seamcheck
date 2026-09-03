@@ -131,6 +131,14 @@ records **every selector actually queried and whether it found anything**, every
 actually requested, and every class actually applied. That evidence is keyed to the commit,
 and it converts `uncertain` rows into answers instead of guesses.
 
+**It also settles the one finding no amount of reading can.** A multi-writer report says
+two files write the same element — a risk, not a defect: it becomes a defect when the two
+disagree. At runtime that has a signature, so the run watches every multi-writer element
+sit still for twelve seconds with nothing touching the page. A value that **moves** while
+the page is idle is the finding that is real. One that never moves says the writers
+coexist. One the page never rendered is **untested, not clean** — and is reported that way
+rather than as a pass.
+
 With one caveat it states rather than hides: **a page the run never visited leaves no trace,
 and looks exactly like a page that is broken.** So everything it promotes is labelled as
 observed, and `uncertain` going down is always traceable to a specific run over specific

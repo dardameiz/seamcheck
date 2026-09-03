@@ -42,8 +42,15 @@ def observe_pages(
     viewport: tuple[int, int] = (1440, 900),
     browser: str = "chromium",
     settle_ms: int = _SETTLE_MS,
+    watch: list[str] | None = None,
 ) -> list[Observation]:
-    """Visit each URL with the probe installed, and bring back what happened."""
+    """Visit each URL with the probe installed, and bring back what happened.
+
+    `watch` is a list of CSS selectors to sample while the page sits idle - the runtime
+    half of the multi-writer question. Two writers are a risk; they are a defect when
+    they disagree, and disagreement looks like a value moving with nothing touching the
+    page. Sampling is deliberately passive: read the text, change nothing.
+    """
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as error:
@@ -72,6 +79,7 @@ def observe_pages(
                 page.goto(url, wait_until="domcontentloaded", timeout=30_000)
                 page.wait_for_timeout(settle_ms)
                 recorded = page.evaluate("() => (window.__seamcheck||{}).observed || {}")
+                idle = _idle_sample(page, watch or [])
                 shot = ""
                 if directory:
                     name = _filename(url)
@@ -84,6 +92,7 @@ def observe_pages(
                     fetches=observed.get("fetches", {}),
                     classes=observed.get("classes", {}),
                     screenshot=shot,
+                    idle=idle,
                 ))
             except Exception as error:  # noqa: BLE001
                 # One page that will not load must not lose the twenty that did. The failure
@@ -91,12 +100,61 @@ def observe_pages(
                 # reader can tell "nothing happened here" from "never visited".
                 results.append(Observation(
                     page=url, selectors={}, fetches={}, classes={},
-                    screenshot=f"error: {error}"[:200],
+                    screenshot=f"error: {error}"[:200], idle={},
                 ))
             finally:
                 page.close()
         engine.close()
     return results
+
+
+def _idle_sample(page, watch: list[str]) -> dict[str, dict]:
+    """Read each watched element repeatedly with nothing touching the page.
+
+    `rendered` is the fact that decides how to read the rest: an element the page does not
+    render in this state is UNTESTED, not clean, and reporting it as steady would be the
+    false all-clear this tool exists to avoid. Ten of the reference project's twenty-four
+    were in that state.
+    """
+    if not watch:
+        return {}
+    from seamcheck.observe import IDLE_SAMPLES, IDLE_SECONDS
+
+    read = """(selectors) => {
+      const out = {};
+      for (const selector of selectors) {
+        let el = null;
+        try { el = document.querySelector(selector); } catch (e) { el = null; }
+        out[selector] = el ? (el.textContent || "").trim().slice(0, 120) : null;
+      }
+      return out;
+    }"""
+    rows: dict[str, dict] = {
+        selector: {"rendered": False, "moved": False, "samples": 0, "first": "", "last": ""}
+        for selector in watch
+    }
+    gap = max(1, int(IDLE_SECONDS * 1000 / IDLE_SAMPLES))
+    for turn in range(IDLE_SAMPLES):
+        if turn:
+            page.wait_for_timeout(gap)
+        try:
+            values = page.evaluate(read, watch)
+        except Exception:  # noqa: BLE001 - a page that navigated away ends the sample
+            break
+        for selector, value in values.items():
+            row = rows[selector]
+            row["samples"] += 1
+            if value is None:
+                continue
+            if not row["rendered"]:
+                row["rendered"] = True
+                row["first"] = value
+                row["last"] = value
+                continue
+            if value != row["last"]:
+                row["moved"] = True
+                row["last"] = value
+    return rows
 
 
 def _filename(url: str) -> str:

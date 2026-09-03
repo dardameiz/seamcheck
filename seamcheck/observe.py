@@ -97,6 +97,20 @@ PROBE = r"""
 """
 
 
+# What a multi-writer report cannot settle by reading, and a browser settles in twelve
+# seconds. A multi-writer is a RISK - two writers, whichever runs last wins - and it
+# becomes a defect only when the writers disagree. At runtime that has a signature: a
+# value that changes while nothing is touching the page.
+#
+# Measured on the reference project's 24 multi-writer findings, sampled 14 times over 12
+# idle seconds: 14 elements were on screen and not one moved (several coexist by explicit
+# design - `unlimited_pushes` has two writers whose monotonic guards cite each other), and
+# 10 were not rendered in the page's default state, so they are untested rather than
+# clean. Zero were caught fighting. Static detection proposes; an idle sample disposes.
+IDLE_SAMPLES = 14
+IDLE_SECONDS = 12
+
+
 @dataclasses.dataclass
 class Observation:
     """One page, exercised once."""
@@ -107,6 +121,9 @@ class Observation:
     fetches: dict[str, dict]
     classes: dict[str, dict]
     screenshot: str = ""
+    # selector -> {"rendered": bool, "moved": bool, "samples": n, "first": str,
+    #              "last": str}. Only the elements the caller asked to watch.
+    idle: dict[str, dict] = dataclasses.field(default_factory=dict)
 
 
 def store_path(repo_root: str, sha: str) -> pathlib.Path:
@@ -144,6 +161,7 @@ def load(repo_root: str, sha: str) -> list[Observation]:
             # Older files carry `boxes` - the geometry a view that no longer exists drew.
             # Read past it.
             screenshot=row.get("screenshot", ""),
+            idle=row.get("idle", {}),
         )
         for row in rows
     ]
@@ -160,4 +178,21 @@ def merge(observations: list[Observation]) -> dict[str, dict]:
                 into["hits"] += row.get("hits", 0)
                 if observation.page not in into["pages"]:
                     into["pages"].append(observation.page)
+    # Idle samples fold the other way round: MOVED on any page is moved, and rendered
+    # anywhere is rendered. A value that is steady on one page and drifting on another is
+    # drifting - that is exactly the bug, and the quiet page must not vote it away.
+    idle: dict[str, dict] = {}
+    for observation in observations:
+        for key, row in observation.idle.items():
+            into = idle.setdefault(key, {"rendered": False, "moved": False, "samples": 0,
+                                         "pages": [], "first": "", "last": ""})
+            into["rendered"] = into["rendered"] or bool(row.get("rendered"))
+            into["samples"] = max(into["samples"], int(row.get("samples") or 0))
+            if row.get("moved"):
+                into["moved"] = True
+                into["first"] = row.get("first", "")
+                into["last"] = row.get("last", "")
+            if observation.page not in into["pages"]:
+                into["pages"].append(observation.page)
+    out["idle"] = idle
     return out

@@ -23,6 +23,9 @@ _COLUMNS = [
     ("module", "Module"),
     ("js_call", "JS call"),
     ("dom_selector", "Selector"),
+    # Before the selectors, because it explains them: a region that never runs is why a
+    # dozen selectors below it point at nothing.
+    ("dead_region", "Dead region"),
     ("multi_writer_element", "Multi-writer"),
     ("dom_attr", "Element"),
     ("css_selector", "CSS"),
@@ -1249,7 +1252,8 @@ const COLS = MAPDATA.columns, COMMITS = MAPDATA.commits || [];
 // does not know what a `dom_attr` is and should not have to.
 const BANDS = [
   {id: "browser", label: "THE BROWSER \u2014 WHAT A PERSON TOUCHES", short: "THE BROWSER",
-   kinds: ["page", "module", "js_call", "dom_selector", "multi_writer_element",
+   kinds: ["page", "module", "js_call", "dom_selector", "dead_region",
+           "multi_writer_element",
            "dom_attr", "css_selector", "css_token_def", "css_token_use"]},
   {id: "seam", label: "THE SEAM \u2014 THE NETWORK BOUNDARY", short: "THE SEAM",
    kinds: ["fetch_target", "json_field"]},
@@ -2244,7 +2248,8 @@ const HOP_WORD = {
   page: "the page", module: "the file", js_call: "asks for", fetch_target: "crosses",
   url: "the route", view: "the handler", dom_selector: "looks for",
   dom_attr: "the element", css_selector: "styled by",
-  multi_writer_element: "all write", redis_key: "the key", db_table_use: "reads",
+  multi_writer_element: "all write", dead_region: "never runs",
+  redis_key: "the key", db_table_use: "reads",
   redis_key_use: "touches", 
   db_table: "the table", job_enqueue: "queues", job: "the worker",
 };
@@ -2254,6 +2259,7 @@ const KIND_WORD = {
   fetch_target: "request", url: "route", view: "handler", model: "model",
   dom_selector: "selector in js", dom_attr: "element in a template",
   multi_writer_element: "written by more than one file",
+  dead_region: "code that never runs",
   css_selector: "css rule", css_token_def: "design token", css_token_use: "var() use",
   json_field: "response field", url_reference: "link or reverse()",
   celery_task: "background task", celery_schedule: "scheduled",

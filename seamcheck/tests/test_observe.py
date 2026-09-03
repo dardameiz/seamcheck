@@ -144,3 +144,119 @@ class ProvenanceTests(SimpleTestCase):
         ]))
 
         self.assertIs(out.symbols[0].status, Status.UNCERTAIN)
+
+
+class IdleSampleTests(SimpleTestCase):
+    """The runtime half of a multi-writer report.
+
+    Two writers are a risk; they are a defect when they disagree, and disagreement looks
+    like a value changing while nothing touches the page. On the reference project's 24
+    findings: 14 on screen and steady, 10 not rendered at all, 0 caught fighting.
+    """
+
+    def _finding(self, label, sub="id"):
+        return _sym(f"multi_writer_element:{label}", "multi_writer_element", label, sub,
+                    status=Status.UNRESOLVED)
+
+    def _idle(self, rows):
+        return Observation(page="/arena/", selectors={}, fetches={}, classes={}, idle=rows)
+
+    def test_a_value_that_moves_on_an_idle_page_is_the_real_finding(self):
+        observed = merge([self._idle({"#level-name": {
+            "rendered": True, "moved": True, "samples": 14, "first": "6", "last": "7"}})])
+        graph = apply_observations(Graph(symbols=[self._finding("level-name")], edges=[]),
+                                   observed)
+        symbol = graph.symbols[0]
+        self.assertEqual(symbol.status, Status.UNRESOLVED)
+        self.assertIn("Observed disagreeing", symbol.note)
+        self.assertIn("'6'", symbol.note)
+        self.assertIn("'7'", symbol.note)
+
+    def test_a_steady_value_says_the_writers_coexist(self):
+        observed = merge([self._idle({"#level-name": {
+            "rendered": True, "moved": False, "samples": 14, "first": "6", "last": "6"}})])
+        graph = apply_observations(Graph(symbols=[self._finding("level-name")], edges=[]),
+                                   observed)
+        self.assertEqual(graph.symbols[0].status, Status.UNCERTAIN)
+        self.assertIn("never moved", graph.symbols[0].note)
+
+    def test_an_element_the_page_never_rendered_is_untested_not_clean(self):
+        # The mistake this guards against is the one the whole module is written around:
+        # silence about a path must never read as a pass.
+        observed = merge([self._idle({"#buy-band-total": {
+            "rendered": False, "moved": False, "samples": 14}})])
+        graph = apply_observations(Graph(symbols=[self._finding("buy-band-total")],
+                                        edges=[]), observed)
+        self.assertEqual(graph.symbols[0].status, Status.UNCERTAIN)
+        self.assertIn("untested, not clean", graph.symbols[0].note)
+
+    def test_moving_on_any_page_beats_steady_on_another(self):
+        # A value steady on one page and drifting on another is drifting. The quiet page
+        # must not vote the bug away.
+        folded = merge([
+            Observation(page="/a/", selectors={}, fetches={}, classes={},
+                        idle={"#n": {"rendered": True, "moved": False, "samples": 14}}),
+            Observation(page="/b/", selectors={}, fetches={}, classes={},
+                        idle={"#n": {"rendered": True, "moved": True, "samples": 14,
+                                     "first": "1", "last": "2"}}),
+        ])
+        self.assertTrue(folded["idle"]["#n"]["moved"])
+
+    def test_a_class_and_a_data_attribute_are_matched_in_their_own_shapes(self):
+        for sub, form in (("class", ".hot"), ("data", "[data-stat]")):
+            observed = merge([self._idle({form: {
+                "rendered": True, "moved": True, "samples": 14, "first": "a", "last": "b"}})])
+            label = form.strip(".[]").replace("data-", "")
+            graph = apply_observations(
+                Graph(symbols=[self._finding(label, sub=sub)], edges=[]), observed)
+            self.assertIn("Observed disagreeing", graph.symbols[0].note, form)
+
+    def test_no_idle_data_changes_nothing(self):
+        finding = self._finding("level-name")
+        graph = apply_observations(Graph(symbols=[finding], edges=[]), merge([_obs()]))
+        self.assertEqual(graph.symbols[0].note, finding.note)
+        self.assertEqual(graph.symbols[0].status, Status.UNRESOLVED)
+
+
+class IdleSampleInABrowserTests(SimpleTestCase):
+    """The sampler itself, in Chromium: does it see a value move, and only when it does."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        try:
+            import playwright.sync_api  # noqa: F401
+        except ImportError:  # pragma: no cover - depends on the optional extra
+            import unittest
+
+            raise unittest.SkipTest("playwright is not installed (the observe extra)") from None
+
+    def test_it_catches_two_writers_disagreeing_and_leaves_the_quiet_one_alone(self):
+        import textwrap
+        import unittest
+
+        from seamcheck.browser import BrowserUnavailable, observe_pages
+
+        page = pathlib.Path(tempfile.mkdtemp()) / "arena.html"
+        page.write_text(textwrap.dedent("""
+            <div id="steady">6</div>
+            <div id="drifting">6</div>
+            <script>
+              // Two writers that disagree, which is the bug: whichever ran last wins.
+              setInterval(() => { document.getElementById('drifting').textContent = '7'; }, 300);
+              setInterval(() => { document.getElementById('drifting').textContent = '6'; }, 500);
+            </script>
+        """), encoding="utf-8")
+        try:
+            observed = observe_pages([page.as_uri()], settle_ms=200,
+                                     watch=["#steady", "#drifting", "#never-rendered"])
+        except BrowserUnavailable as error:  # pragma: no cover - no browser downloaded
+            raise unittest.SkipTest(str(error)) from None
+        idle = observed[0].idle
+        self.assertTrue(idle["#drifting"]["moved"], idle)
+        self.assertFalse(idle["#steady"]["moved"], idle)
+        self.assertTrue(idle["#steady"]["rendered"])
+        # ...and an element the page does not render is untested, which is a third state
+        # and not a quiet pass.
+        self.assertFalse(idle["#never-rendered"]["rendered"])
+        self.assertFalse(idle["#never-rendered"]["moved"])

@@ -188,6 +188,7 @@ class Command(BaseCommand):
 
         repo_root = options["repo_root"]
         urls = list(options["observe"])
+        graph = None
         if not urls:
             bar = self._progress(options, api.SCAN_STEPS)
             graph = api.scan(repo_root, bar)
@@ -198,9 +199,21 @@ class Command(BaseCommand):
                     "No page URLs found in the graph to visit. Pass them explicitly: "
                     "seamcheck observe http://127.0.0.1:8080/ http://127.0.0.1:8080/store/"
                 )
+        # The elements two writers fight over, so the run can watch them sit still - or
+        # not. Static reading cannot settle a multi-writer report; a value that moves with
+        # nothing touching the page settles it in twelve seconds.
+        watch = self._multi_writer_selectors(graph, repo_root)
         self.stdout.write(f"Visiting {len(urls)} page(s) with the probe installed.")
+        if watch:
+            from seamcheck.observe import IDLE_SAMPLES, IDLE_SECONDS
+
+            self.stdout.write(
+                f"Watching {len(watch)} multi-writer element(s) on each page: "
+                f"{IDLE_SAMPLES} samples over {IDLE_SECONDS}s of idle, to see which ones "
+                f"move when nothing is touching them."
+            )
         try:
-            observations = observe_pages(urls, shots_dir=options["shots"])
+            observations = observe_pages(urls, shots_dir=options["shots"], watch=watch)
         except BrowserUnavailable as error:
             raise CommandError(str(error)) from error
 
@@ -219,6 +232,24 @@ class Command(BaseCommand):
         self.stdout.write(
             f"  {blind:>6,}  selectors that ran and found NOTHING - live nulls, not guesses"
         )
+        idle = folded.get("idle") or {}
+        if idle:
+            moved = [key for key, row in idle.items() if row.get("moved")]
+            unseen = [key for key, row in idle.items() if not row.get("rendered")]
+            steady = len(idle) - len(moved) - len(unseen)
+            self.stdout.write("")
+            self.stdout.write(
+                f"  {len(moved):>6,}  multi-writer element(s) MOVED on an idle page - "
+                f"the writers disagree, which is the finding that is real"
+            )
+            self.stdout.write(f"  {steady:>6,}  steady: the writers coexist")
+            self.stdout.write(
+                f"  {len(unseen):>6,}  not rendered in this state - untested, not clean"
+            )
+            for key in moved[:8]:
+                row = idle[key]
+                self.stdout.write(
+                    f"    {key}  {row.get('first', '')!r} -> {row.get('last', '')!r}")
         if failed:
             self.stdout.write(f"\n  {len(failed)} page(s) failed to load:")
             for o in failed[:5]:
@@ -228,6 +259,31 @@ class Command(BaseCommand):
             "  Evidence is keyed to this commit, and says nothing about pages the run did "
             "not visit."
         )
+
+    def _multi_writer_selectors(self, graph, repo_root: str, limit: int = 60) -> list[str]:
+        """The elements the scan says more than one file writes, as CSS selectors.
+
+        Scans if it has to: `seamcheck observe <url>` skips the scan, and the whole point
+        of the idle sample is to answer a question the scan asked. Capped, because reading
+        four hundred elements fourteen times is a minute of nothing much - the findings are
+        ordered by the scan, and the first sixty are the ones on screen.
+        """
+        try:
+            if graph is None:
+                graph = api.scan(repo_root)
+        except Exception:  # noqa: BLE001 - the run is still worth doing without it
+            return []
+        forms = {"id": "#{}", "class": ".{}", "data": "[data-{}]"}
+        out: list[str] = []
+        for symbol in graph.symbols:
+            if symbol.kind != "multi_writer_element" or symbol.label == "<dynamic>":
+                continue
+            shape = forms.get(symbol.sub.split(":")[0])
+            if shape:
+                selector = shape.format(symbol.label)
+                if selector not in out:
+                    out.append(selector)
+        return out[:limit]
 
     def _page_urls(self, graph, base_url: str) -> list[str]:
         """Routes a person can open: served by a view, not an API path, no parameters."""

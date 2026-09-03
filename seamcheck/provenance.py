@@ -53,19 +53,71 @@ def apply_observations(graph: Graph, observed: dict[str, dict]) -> Graph:
     found = {key for key, row in selectors.items() if row.get("hits")}
     missed = {key for key, row in selectors.items() if not row.get("hits")}
 
+    idle = observed.get("idle", {})
+
     updated: list[Symbol] = []
     for symbol in graph.symbols:
-        new = _observe_symbol(symbol, selectors, fetches, classes, found, missed)
+        new = _observe_symbol(symbol, selectors, fetches, classes, found, missed, idle)
         updated.append(new)
     return Graph(symbols=updated, edges=graph.edges, schema_version=graph.schema_version)
 
 
-def _observe_symbol(symbol, selectors, fetches, classes, found, missed):
+def _observe_symbol(symbol, selectors, fetches, classes, found, missed, idle=None):
     if symbol.kind == "dom_selector":
         return _observe_selector(symbol, selectors, found, missed, classes)
     if symbol.kind == "fetch_target":
         return _observe_fetch(symbol, fetches)
+    if symbol.kind == "multi_writer_element":
+        return _observe_multi_writer(symbol, idle or {})
     return symbol
+
+
+_MOVED_NOTE = (
+    "**Observed disagreeing.** With nothing touching the page, this value changed "
+    "{samples} samples apart - {before!r} became {after!r}. Two writers, and they do not "
+    "agree: whichever runs last wins, which is how a display bug survives being fixed in "
+    "one of them. This is the multi-writer finding that is real."
+)
+_STEADY_NOTE = (
+    "Sampled {samples} times on an idle page and never moved{where}. The writers coexist - "
+    "often by design; the one to look for is a value that drifts with the page idle. Still "
+    "worth knowing who owns this element before you change one of them."
+)
+_UNRENDERED_NOTE = (
+    "Not rendered in the state the browser observed, so the idle sample says nothing about "
+    "it: untested, not clean. Exercise the surface that draws this element - the modal, the "
+    "band, the lobby - and sample again."
+)
+
+
+def _observe_multi_writer(symbol, idle):
+    """The runtime half of a multi-writer report.
+
+    Static reading cannot settle one of these. Two writers are a RISK; they are a defect
+    when they disagree, and disagreement has a signature a browser can see: a value that
+    changes with nothing touching the page. So an idle sample is what turns "here are 98
+    things to read" into "here are the 3 that actually fight".
+    """
+    if not idle:
+        return symbol
+    for form in _selector_forms(symbol):
+        row = idle.get(form)
+        if not row:
+            continue
+        if row.get("moved"):
+            return replace(symbol, status=Status.UNRESOLVED, note=_MOVED_NOTE.format(
+                samples=row.get("samples", 0), before=row.get("first", ""),
+                after=row.get("last", "")))
+        if not row.get("rendered"):
+            return replace(symbol, status=Status.UNCERTAIN, note=_UNRENDERED_NOTE)
+        return replace(symbol, status=Status.UNCERTAIN, note=_STEADY_NOTE.format(
+            samples=row.get("samples", 0), where=_where(row)))
+    return symbol
+
+
+def _where(row):
+    pages = row.get("pages") or []
+    return f" on {pages[0]}" if len(pages) == 1 else ""
 
 
 def _selector_forms(symbol: Symbol) -> list[str]:

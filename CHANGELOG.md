@@ -199,6 +199,15 @@ reference project - the first time a release was tested the way a user meets it.
   invisible and every `getElementById` for one read as a query for nothing. The
   dead-region pass then turned that single miss into a claim about **161 unreachable
   lines that run perfectly well**, which is how a good finding kind earns distrust.
+- **Added** — **`seamcheck observe` settles multi-writer findings, which reading never
+  could.** Two files writing one element is a *risk*; it is a *defect* when they disagree,
+  and disagreement has a runtime signature: a value that changes while nothing is touching
+  the page. The run now watches every multi-writer element for twelve seconds of idle,
+  fourteen samples, and reports three states rather than one — **moved** (the writers
+  disagree, and this is the finding that is real, quoting the two values), **steady** (they
+  coexist, often by design), and **not rendered in this state** (untested, not clean,
+  which is the state 10 of the reference project's 24 were in). Console output counts the
+  three, and `moved` names the element and what it flickered between.
 - **Fixed** — **a multi-writer whose second writer never runs is not a fight.** Deleting
   one dead function on the reference project retired two multi-writer reports, because
   one of the two writers had been unreachable all along. Where a writer sits inside a dead
