@@ -334,3 +334,48 @@ class BemModifierTests(SimpleTestCase):
         edges = match_css_selectors([], [self._markup("orphan--cyan")], [], set())
         mine = [e for e in edges if e.from_id.endswith("orphan--cyan:page.html")]
         self.assertEqual([e.status for e in mine], [Status.UNRESOLVED])
+
+
+class WritersOfAMissingElementTests(SimpleTestCase):
+    """Two questions, and only one of them is about a race.
+
+    `store.js` carried the same block four times - "support both the old
+    `.modal-container` and the new `.push-store-glass`" - and `store.html` has twelve of
+    the new and zero of the old. Reported as a two-writer risk; the element could not be
+    found at all. The ABSENCE was the finding, and it is the more valuable of the two:
+    several writers of an element that exists is a flicker to watch for, several writers
+    of an element that does not exist is dead code to delete.
+    """
+
+    def _write(self, label, file, sub="id:write"):
+        return Symbol(id=f"dom_selector:{sub}:{label}:{file}", kind="dom_selector",
+                      label=label, sub=sub, file=file, line=3, status=Status.UNCERTAIN,
+                      snippet=f"{file} writes {label}", chain=[file, "fn"], note="")
+
+    def test_writers_of_an_element_nothing_declares_are_dead_branches(self):
+        found = detect_multi_writers(
+            [self._write("modal-container", "a/store.js"),
+             self._write("modal-container", "b/legacy.js")],
+            declared={("id", "push-store-glass")},
+        )
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].status, Status.UNRESOLVED)
+        self.assertIn("no template renders it", found[0].note)
+        self.assertIn("missing element", found[0].sub)
+
+    def test_writers_of_an_element_that_exists_are_still_a_race(self):
+        found = detect_multi_writers(
+            [self._write("level-name", "a/stats.js"),
+             self._write("level-name", "b/bridge.js")],
+            declared={("id", "level-name")},
+        )
+        self.assertEqual(len(found), 1)
+        self.assertIn("More than one file writes", found[0].note)
+        self.assertNotIn("missing element", found[0].sub)
+
+    def test_without_a_declared_set_nothing_changes(self):
+        # The caller that does not know what the markup declares gets the old report
+        # rather than a guess about absence.
+        found = detect_multi_writers(
+            [self._write("thing", "a.js"), self._write("thing", "b.js")])
+        self.assertIn("More than one file writes", found[0].note)

@@ -541,8 +541,16 @@ def run_scan(
     if dom_attrs or dom_selectors or css_symbols:
         selectors = [s for s in css_symbols if s.kind == "css_selector"]
         symbols += dom_attrs + dom_selectors + css_symbols
+        # What the markup actually declares - templates and the elements JavaScript
+        # builds - so "several files write this" can be told apart from "several files
+        # write something that does not exist".
+        declared_elements = {
+            (symbol.sub.split(":", 1)[0], symbol.label)
+            for symbol in dom_attrs + js_dom_attrs if symbol.label
+        }
         symbols += detect_multi_writers(
-            dom_writes, repo_root, frozenset(tailwind_build_classes or ()))
+            dom_writes, repo_root, frozenset(tailwind_build_classes or ()),
+            declared=declared_elements)
         # Element matching sees the JS-created ones; CSS matching deliberately does not. An
         # element JavaScript builds is often styled inline or by an injected stylesheet, so
         # demanding a hand-written rule for it trades one false finding for another.

@@ -194,6 +194,44 @@ def _py_receiver(func: ast.Attribute) -> str:
     return ""
 
 
+_PIPELINE_FACTORIES = ("pipeline", "multi")
+
+
+def _pipeline_names(tree: ast.AST) -> dict[str, str]:
+    """Locals holding a pipeline, mapped to the CLIENT they were made from.
+
+    `pipe = r.pipeline()` and `with r.pipeline() as pipe:`. By assignment rather than by
+    name: a variable is a pipeline because it came from `.pipeline()`; calling it `pipe`
+    proves nothing, and matching the name would count every `pipe` in an image-processing
+    module as a Redis client.
+
+    Mapped to the client rather than collected as a set, because a pipeline is not a
+    second connection - it IS `r`. Recording `pipe` as its own receiver made the
+    "touched through more than one client" check fire on every key that a pipeline and
+    its own client both touch, which is most of them.
+    """
+    found: dict[str, str] = {}
+
+    def source(node) -> str | None:
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr in _PIPELINE_FACTORIES):
+            return _py_receiver(node.func) or ""
+        return None
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            client = source(node.value)
+            if client is not None:
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        found[target.id] = client
+        elif isinstance(node, ast.withitem):
+            client = source(node.context_expr)
+            if client is not None and isinstance(node.optional_vars, ast.Name):
+                found[node.optional_vars.id] = client
+    return found
+
+
 def _scan_python(root: str) -> list[_Hit]:
     hits: list[_Hit] = []
     for here, subdirectories, names in os.walk(root):
@@ -211,6 +249,7 @@ def _scan_python(root: str) -> list[_Hit]:
                 continue
             rel = os.path.relpath(path, root)
             owners = owners_of(tree)
+            pipelines = _pipeline_names(tree)
             for node in ast.walk(tree):
                 if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
                     continue
@@ -218,7 +257,11 @@ def _scan_python(root: str) -> list[_Hit]:
                 if method not in _ALL or not node.args:
                     continue
                 receiver = _py_receiver(node.func)
-                if not _RECEIVER.search(receiver or ""):
+                if receiver in pipelines:
+                    # Reported as the client it came from, so a pipelined write and a
+                    # direct read are one client, which is what they are.
+                    receiver = pipelines[receiver] or receiver
+                elif not _RECEIVER.search(receiver or ""):
                     continue
                 pattern = _py_pattern(node.args[0])
                 if not pattern or not _looks_like_key(pattern):
@@ -264,6 +307,24 @@ def _js_pattern(node) -> str | None:
     return None
 
 
+def _js_pipeline_names(tree: dict) -> dict[str, str]:
+    """`const pipe = redis.pipeline()` / `redis.multi()`, mapped to the client."""
+    found: dict[str, str] = {}
+    for node, _ in _walk(tree):
+        if node.get("type") != "VariableDeclarator":
+            continue
+        name = (node.get("id") or {}).get("name")
+        init = node.get("init") or {}
+        if not name or init.get("type") != "CallExpression":
+            continue
+        callee = init.get("callee") or {}
+        if ((callee.get("property") or {}).get("name")) in _PIPELINE_FACTORIES:
+            owner = callee.get("object") or {}
+            found[name] = (owner.get("name")
+                           or ((owner.get("property") or {}).get("name")) or "")
+    return found
+
+
 def _scan_js(root: str) -> list[_Hit]:
     paths: list[str] = []
     for here, subdirectories, names in os.walk(root):
@@ -279,6 +340,7 @@ def _scan_js(root: str) -> list[_Hit]:
     hits: list[_Hit] = []
     for path, tree in iter_parsed(paths, report_failures=False):
         rel = os.path.relpath(path, root)
+        pipelines = _js_pipeline_names(tree)
         for node, _ in _walk(tree):
             if node.get("type") != "CallExpression":
                 continue
@@ -293,7 +355,9 @@ def _scan_js(root: str) -> list[_Hit]:
                 continue
             obj = callee.get("object") or {}
             receiver = obj.get("name") or ((obj.get("property") or {}).get("name")) or ""
-            if not _RECEIVER.search(receiver):
+            if receiver in pipelines:
+                receiver = pipelines[receiver] or receiver
+            elif not _RECEIVER.search(receiver):
                 continue
             pattern = _js_pattern(args[0])
             if not pattern or not _looks_like_key(pattern):

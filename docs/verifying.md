@@ -85,6 +85,26 @@ recorded reasons still read as live defects while the tool no longer makes those
 one direction; the other direction is on you. **Re-verify a sample before quoting a
 precision figure**, and prefer fresh labels to a large old file.
 
+## Three traps in the script you write to check it
+
+Verification is usually a script, and a script fails in ways a person does not.
+
+**A failed search and a true negative look identical.** `grep --include=*.js` under zsh
+with no match errors *before* grep runs, prints to stderr, and returns nothing — which
+reads exactly like "this class is referenced nowhere". A live stylesheet was declared
+orphaned that way. **Anything that self-verifies must assert the search RAN**: count the
+files it opened, and fail loudly when that count is zero.
+
+**A grep for a name matches the comment you just wrote.** Three removal scripts aborted on
+`assert 'name' not in source` after a *correct* edit, because the edit left a comment
+saying which name had been removed. Assert on the code form — the call, the selector, the
+attribute — or strip comments before asserting.
+
+**A brace count is not a syntax check.** A regex that prunes CSS rules can balance 59
+braces against 59 and still produce `Unexpected }`, because the rule it cut sat inside an
+`@media` block. Anything that edits a language must re-parse its own output before
+writing it.
+
 ## What to do with a false claim
 
 File the *cause*, not the instance. One recorded reason is worth more than a hundred

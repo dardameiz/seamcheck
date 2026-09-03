@@ -260,8 +260,44 @@ reference project - the first time a release was tested the way a user meets it.
   gone. **No true finding was lost by either fix** - the true count is unchanged at 74.
   Across the corpus: routes **2,716 → 2,782** and `uncertain` **246 → 72**.
 
+- **Fixed** — **a command sent through a pipeline is a command.** `r.pipeline()` returns
+  an object whose method calls are the same command set, and the receiver test matched the
+  client by *name* - so `pipe.set(...)`, `pipe.hincrby(...)` and `hist_pipe.hset(...)` were
+  invisible. Pipelining is not an edge case in the reference project, it is the house
+  style: the page-render path alone queues 30+ operations on one pipe, so the lens read the
+  cold paths correctly and mis-reported the hottest ones. Followed by **assignment** -
+  `pipe = r.pipeline()`, `with r.pipeline() as pipe:` - not by name, so a `pipe` in an
+  image-processing module is still not a Redis client. A pipeline is also reported as the
+  client it came from: counting it as a second connection made the "touched through more
+  than one client" check fire on sixteen keys that only ever had one.
+
+  On the reference project: **185 → 240 keys** seen, and four keys the cleanup pass had
+  verified by hand (`admin:config_sync_lock`, `admin:global_stats`,
+  `analytics:history:concurrent`, `global:mode_switch_occurred`) went from *"read here and
+  written nowhere"* to connected.
+- **Fixed** — **several writers of an element that does not exist is dead code, not a
+  race.** A multi-writer finding is a flicker risk *when the element exists*; when nothing
+  renders it and no script builds it, every branch is unreachable and the surviving one is
+  canonical - actionable immediately, which the race version is not.
+- **Fixed** — **one row per place.** `itemPurchaseModal` was listed four times in one
+  report, on one line: a name read and written on the same line is two symbols and one
+  thing to look at. 12% of one surface's rows were repeats. The graph keeps every symbol;
+  a list a person reads keeps one row per `(kind, label, file, line)`, worst status first.
+
 Known open, recorded rather than hidden:
 
+- **A multi-writer split needs PAGE scoping to be worth much.** Globally, only 2 of the
+  reference project's 91 multi-writer findings name an element nothing declares. The
+  valuable case is narrower and this does not catch it: `store.js` carries four branches
+  for `.modal-container`, an element that exists in `push_arena.html` and
+  `challenges.html` - pages `store.js` never runs on - so a project-wide existence test
+  says it exists. Which templates load which scripts is statically knowable, but the walk
+  that computes it costs ~13 s and is deliberately kept off the CI path.
+- **`redis_key` reported `unused` while an incoming edge says `connected` is NOT a
+  contradiction**, and the invariant proposed for it would have been wrong. `unused` on a
+  key means *written and never read*; the incoming edges are the writes. Checked on all 32
+  such keys in the reference project: **none has an incoming read.** Recorded because the
+  rule sounds right and is not.
 - **`fastapi` scores 3% and `nextjs` 25% on the labelled set**, against `django` 73%. The
   recorded reasons are consistent: classes a library applies at runtime (highlight.js
   emits `hljs-*`; TipTap sets `data-type`), Tailwind variant classes in Svelte markup, and

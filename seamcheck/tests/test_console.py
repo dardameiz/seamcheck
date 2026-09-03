@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 from django.test import SimpleTestCase
 
 from seamcheck.console import build_console
@@ -99,3 +101,48 @@ class BackendSectionTitleTests(SimpleTestCase):
 
     def test_an_empty_graph_is_not_django(self):
         self.assertEqual(self._title(), "Backend Internals")
+
+
+class OneRowPerPlaceTests(SimpleTestCase):
+    """`itemPurchaseModal` appeared four times in one report, on one line.
+
+    A name read and written on the same line is two symbols and one thing to look at.
+    Twelve per cent of one surface's rows were repeats, and a count nobody trusts is a
+    report nobody reads.
+    """
+
+    def _symbol(self, symbol_id, status=Status.UNRESOLVED):
+        return Symbol(id=symbol_id, kind="dom_selector", label="itemPurchaseModal",
+                      sub="id:read", file="store.js", line=316, status=status,
+                      snippet="getElementById('itemPurchaseModal')", chain=[], note="")
+
+    def test_the_same_place_is_listed_once(self):
+        from seamcheck.console import build_console
+        from seamcheck.report import build_report
+
+        graph = Graph(symbols=[self._symbol(f"dom_selector:id:x{i}") for i in range(4)],
+                      edges=[])
+        console = build_console(graph, build_report(graph=graph, diff=None, entries=[],
+                                                    git_sha="0" * 12))
+        # Per section: one finding legitimately appears in its themed list and in the
+        # findings list, and that is two places to meet it rather than two findings.
+        for section in console.sections:
+            rows = [r for r in section.rows if r.label == "itemPurchaseModal"]
+            self.assertLessEqual(len(rows), 1, f"{section.key}: {[r.id for r in rows]}")
+        self.assertTrue(any(r.label == "itemPurchaseModal"
+                            for section in console.sections for r in section.rows))
+
+    def test_two_different_lines_are_two_rows(self):
+        from seamcheck.console import build_console
+        from seamcheck.report import build_report
+
+        one = self._symbol("dom_selector:id:a")
+        two = replace(self._symbol("dom_selector:id:b"), line=900)
+        graph = Graph(symbols=[one, two], edges=[])
+        console = build_console(graph, build_report(graph=graph, diff=None, entries=[],
+                                                    git_sha="0" * 12))
+        for section in console.sections:
+            lines = sorted({r.line for r in section.rows
+                            if r.label == "itemPurchaseModal"})
+            if lines:
+                self.assertEqual(lines, [316, 900], section.key)

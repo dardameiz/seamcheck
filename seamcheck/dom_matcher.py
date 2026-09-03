@@ -278,10 +278,20 @@ def _one_spelling(path: str, repo_root: str = "") -> str:
     return cleaned.replace(os.sep, "/")
 
 
+_MISSING_ELEMENT_NOTE = (
+    "{count} files write this element, and no template renders it and no script builds "
+    "it. That is not a race between two writers - every one of these branches is dead, "
+    "and whichever one you were about to declare canonical is the only thing to keep. "
+    "This shape is what a codebase refactored more than once leaves behind: the fallback "
+    "reads as plausible because the element it names still exists on some OTHER page."
+)
+
+
 def detect_multi_writers(
     dom_selectors: list[Symbol],
     repo_root: str = "",
     utility_classes: frozenset[str] | None = None,
+    declared: set[tuple[str, str]] | None = None,
 ) -> list[Symbol]:
     # Whole paths, not basenames: the directory is what tells a family apart from a fight,
     # and two same-named files in different directories are two writers either way. The
@@ -334,19 +344,27 @@ def detect_multi_writers(
             and top_count / len(file_paths) >= _FAMILY_CONCENTRATION
         )
 
+        # Two questions, and only one of them is about a race. If the element exists,
+        # several writers are a flicker risk that a runtime check can settle. If it
+        # exists NOWHERE, every writer is unreachable and the finding is dead code -
+        # actionable on the spot, and the more valuable of the two.
+        absent = (declared is not None
+                  and (_base_sub(sample), label) not in declared)
+
         flagged.append(
             Symbol(
                 id=f"multi_writer_element:{label}",
                 kind="multi_writer_element",
                 label=label,
-                sub=_base_sub(sample),
+                sub=("writers of a missing element" if absent else _base_sub(sample)),
                 file=sample.file,
                 line=sample.line,
-                status=Status.UNCERTAIN if family else Status.UNRESOLVED,
+                status=Status.UNCERTAIN if (family and not absent) else Status.UNRESOLVED,
                 snippet=sample.snippet,
                 chain=ordered,
                 note=(
-                    _FAMILY_NOTE.format(count=len(file_paths), top=top_count,
+                    _MISSING_ELEMENT_NOTE.format(count=len(file_paths)) if absent
+                    else _FAMILY_NOTE.format(count=len(file_paths), top=top_count,
                                        directory=top_directory or 'one directory')
                     if family
                     else f"{_MULTI_WRITER_NOTE} Writers: {', '.join(ordered)}."

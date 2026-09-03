@@ -114,7 +114,20 @@ def _rows(graph: Graph, kinds: tuple[str, ...], *, findings_only: bool = False) 
     # Worst first, then by location, so the top of a long list is the part worth reading.
     severity = {"unresolved": 0, "unused": 1, "uncertain": 2, "connected": 3}
     rows.sort(key=lambda r: (severity.get(r.status, 4), r.file or "", r.line or -1, r.label))
-    return rows
+    # One row per PLACE. A name read and written on one line is two symbols and one thing
+    # to look at, and `itemPurchaseModal` appeared four times in a single report - 12% of
+    # one surface's rows were repeats. The graph keeps every symbol; a list a person reads
+    # keeps one per (kind, label, file, line), the worst status first so the severe one
+    # survives the fold.
+    seen: set[tuple[str, str, str, int | None]] = set()
+    folded: list[Row] = []
+    for row in rows:
+        where = (row.kind, row.label, row.file or "", row.line)
+        if where in seen:
+            continue
+        seen.add(where)
+        folded.append(row)
+    return folded
 
 
 # Kinds only Django produces. Their presence is evidence of the framework, which is a
