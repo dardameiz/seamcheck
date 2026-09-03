@@ -236,6 +236,109 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class RowsArriveWhenOpened(SimpleTestCase):
+    """A section's rows and an observed page's boxes are chunks, read on first look.
+
+    Its own class: the harness above is inherited by every group of browser tests, and
+    a test defined on it runs once per group.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        try:
+            from playwright.sync_api import sync_playwright  # noqa: F401
+        except ImportError:  # pragma: no cover - depends on the optional extra
+            raise unittest.SkipTest("playwright is not installed (the observe extra)") from None
+
+    def _lazy_document(self):
+        """A findings section and an observed page both too long to ride inline."""
+        from seamcheck.console import Console, Row, Section
+        from seamcheck.mapdata import build_map
+        from seamcheck.renderers.map_html import render_document
+
+        graph = _fixture_graph()
+        connectivity = build_map(graph, {"orders-main": {s.id for s in graph.symbols}},
+                                 git_sha="0" * 12)
+        rows = [Row(id=f"f{i}", label=f"lazy-row-{i}", kind="url", status="unresolved",
+                    file="app/views.py", line=i, note="n", snippet="") for i in range(80)]
+        console = Console(git_sha="0" * 12, generated_at="", baseline_sha=None, backend={},
+                          frontend={}, counts={}, groups=[],
+                          sections=[Section("findings", "Findings", "b", rows)])
+        boxes = [{"x": 10 * i, "y": 5, "w": 8, "h": 8, "tag": "div", "id": "", "cls": "lazy-box"}
+                 for i in range(300)]
+        observed = {"at": "", "current": True,
+                    "pages": [{"page": "orders", "screenshot": None, "boxes": boxes}]}
+        files = [{"path": f"app/mod_{i}/views.py", "counts": {"connected": 1},
+                  "declarations": 2, "known": 1} for i in range(120)]
+        return render_document(connectivity, console=console, observed=observed, files=files)
+
+    def _opened_lazily(self, url: str) -> dict:
+        """Open the findings list, then the observed page, and report what each drew."""
+        from playwright.sync_api import sync_playwright
+
+        errors: list[str] = []
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch()
+            except Exception as error:  # pragma: no cover - no browser downloaded
+                raise unittest.SkipTest(f"no chromium: {error}") from None
+            page = browser.new_page()
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.goto(url, wait_until="load")
+            page.wait_for_timeout(250)
+            page.evaluate("() => { if (window.setSheet) setSheet(true); }")
+            _open_lens(page, "findings")
+            page.wait_for_function("() => document.querySelectorAll('#panel .row').length > 0")
+            # The list pages at 60 and says how many there are; the count is the proof
+            # the whole chunk arrived, not the rows on screen.
+            rows = page.evaluate("() => document.querySelectorAll('#panel .row').length")
+            more = page.evaluate("() => (document.getElementById('cmore') || {}).textContent || ''")
+            head = page.evaluate("() => document.querySelector('#panel h2').textContent")
+            _open_lens(page, "page")
+            page.wait_for_function("() => document.querySelectorAll('#panel .obshot .ob').length > 0")
+            boxes = page.evaluate("() => document.querySelectorAll('#panel .obshot .ob').length")
+            _open_lens(page, "files")
+            page.wait_for_function("() => document.querySelectorAll('#panel .tree .fl').length > 0")
+            files = page.evaluate("() => document.querySelectorAll('#panel .tree .fl').length")
+            # A click on a file draws it on the map; the page it lands on comes from the
+            # same chunk as the list, so the lookup must be there by now.
+            # The tree opens folded, so the row is reached by script rather than by eye.
+            page.evaluate("() => document.querySelector('#panel .tree .fl').click()")
+            page.wait_for_timeout(300)
+            crumb = page.evaluate("() => document.getElementById('crumb').textContent")
+            browser.close()
+        return {"rows": rows, "more": more, "head": head, "boxes": boxes, "files": files,
+                "crumb": crumb, "errors": errors}
+
+    def test_a_section_and_an_observed_page_arrive_when_opened(self):
+        """Their rows are chunks now. Both forms of the map must still draw them, after a
+        moment that says it is loading rather than a panel that stays empty."""
+        from seamcheck.api import write_map_document
+
+        document = self._lazy_document()
+        index, _ = document.bundle()
+        self.assertNotIn("lazy-row-79", index)
+        self.assertNotIn("lazy-box", index)
+        self.assertNotIn("mod_119", index)
+
+        folder = pathlib.Path(tempfile.mkdtemp())
+        single = folder / "map.html"
+        single.write_text(document.single_file(), encoding="utf-8")
+        bundled, _ = write_map_document(document, str(folder / "bundle") + "/")
+
+        for url in (single.as_uri(), pathlib.Path(bundled).as_uri()):
+            with self.subTest(url=url):
+                state = self._opened_lazily(url)
+                self.assertEqual(state["errors"], [])
+                self.assertEqual(state["head"], "Findings")
+                self.assertEqual(state["rows"], 60)
+                self.assertIn("60 of 80", state["more"])
+                self.assertEqual(state["boxes"], 300)
+                self.assertEqual(state["files"], 120)
+                self.assertIn("app/mod_", state["crumb"])
+
+
 class TrendChartRenders(MapRunsInABrowser):
     """The series is the sentence no tool in this category can say; it has to draw."""
 

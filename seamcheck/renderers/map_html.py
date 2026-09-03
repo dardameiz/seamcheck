@@ -1518,9 +1518,31 @@ const crumb = document.getElementById("crumb");
 // the drawn pages. The canvas can only show what a page entry reaches, so counting what
 // it drew would always report "210 of 210" and quietly hide the 464 symbols in that file
 // that no page reaches at all. Those are exactly the ones worth knowing about.
-const FILE_TOTALS = new Map(
-  FILES.map(f => [f.path, Object.values(f.counts || {}).reduce((a, n) => a + n, 0)])
-);
+//
+// The list itself is a chunk, read when the Files view is opened (`withFiles`); a file
+// is only ever picked from that view, so the totals are there by the time the breadcrumb
+// needs them. Until then the map is drawn with the count alone.
+const FILE_TOTALS = new Map();
+function indexFiles() {
+  if (!FILES.list || FILE_TOTALS.size) return;
+  FILES.list.forEach(f =>
+    FILE_TOTALS.set(f.path, Object.values(f.counts || {}).reduce((a, n) => a + n, 0)));
+}
+indexFiles();
+function withFiles(drawn) {
+  if (FILES.list || !FILES.chunk) return true;
+  const at = mode;
+  readChunk(FILES.chunk).then(body => {
+    if (!FILES.list) {
+      FILES.list = (body && body.list) || [];
+      FILES.filePage = (body && body.filePage) || {};
+    }
+    dropChunk(FILES.chunk);
+    indexFiles();
+    if (mode === at) drawn();
+  }, reportFailure);
+  return false;
+}
 
 // The pages a reader recognises, each holding the bundles it loads. A scrolling rail of
 // 34 rows cost more than half a phone screen; an optgroup says the same thing in one
@@ -3528,12 +3550,27 @@ const OPENS_ON = "overview";
 const MENU = ["overview", "map", "page", "findings", "files", "changes", "report"];
 const SECTION_BY_KEY = Object.fromEntries((D.sections || []).map(sec => [sec.key, sec]));
 
+// A section's rows are a chunk, read the first time the section is opened. Until they
+// are in, the panel says so; when they land the panel is drawn again - only if the
+// reader is still looking at the same thing, so a chunk arriving late never overwrites
+// a view they have since moved on to.
+function withRows(sec, drawn) {
+  if (!sec || sec.rows || !sec.chunk) return true;
+  const at = mode;
+  readChunk(sec.chunk).then(rows => {
+    if (!sec.rows) sec.rows = rows || [];
+    dropChunk(sec.chunk);
+    if (mode === at) drawn();
+  }, reportFailure);
+  return false;
+}
+
 function menuCount(key) {
   if (key === "page") return OBS_PAGES.length || null;
-  if (key === "files") return FILES.length;
+  if (key === "files") return FILES.count;
   const sec = SECTION_BY_KEY[key];
   if (!sec || sec.unavailable) return null;
-  return sec.total ?? sec.rows.length;
+  return sec.total ?? (sec.rows || []).length;
 }
 
 const TITLES = {overview: "Overview", map: "Map", files: "Files",
@@ -3841,7 +3878,7 @@ const STATES = {
 function treeHtml() {
   const root = {dirs: new Map(), files: []};
   const needle = fileQuery.toLowerCase();
-  const shown = FILES.filter(f => !needle || f.path.toLowerCase().includes(needle));
+  const shown = (FILES.list || []).filter(f => !needle || f.path.toLowerCase().includes(needle));
   shown.forEach(f => {
     const parts = f.path.split("/");
     let node = root;
@@ -3885,7 +3922,7 @@ function treeHtml() {
     file's own declarations appear in the graph at all — that is coverage, not a finding:
     a helper that makes no request and touches no element has nothing to model.</p>
     <div class="tools"><input id="fq" type="search"
-      placeholder="Filter ${shown.length} of ${FILES.length} files" value="${esc(fileQuery)}"></div>
+      placeholder="Filter ${shown.length} of ${FILES.count} files" value="${esc(fileQuery)}"></div>
     <div class="tree">${walk(root, null, 0)}</div>`;
 }
 
@@ -3893,7 +3930,7 @@ function fileTabsHtml() {
   const all = INVENTORY ? INVENTORY.files.toLocaleString() : "\u2026";
   return `<div class="tabs">
     <button type="button" class="tab${fileTab === "scanned" ? " on" : ""}" data-tab="scanned">
-      Scanned <b>${FILES.length.toLocaleString()}</b></button>
+      Scanned <b>${n(FILES.count)}</b></button>
     <button type="button" class="tab${fileTab === "all" ? " on" : ""}" data-tab="all">
       All files <b>${all}</b></button>
   </div>`;
@@ -4059,6 +4096,17 @@ function observedHtml() {
       pages in a real browser and writes down where every element ended up.</div>`;
   }
   const o = OBS_PAGES[Math.min(observedAt, OBS_PAGES.length - 1)];
+  if (!o.boxes && o.chunk) {
+    // The geometry of a page is read when the page is picked, not with the map.
+    const at = observedAt;
+    readChunk(o.chunk).then(b => {
+      if (!o.boxes) o.boxes = b || [];
+      dropChunk(o.chunk);
+      if (mode === "page" && observedAt === at) renderPanel();
+    }, reportFailure);
+    return `<h2>The page a browser saw</h2>
+      <div class="gap">Loading ${esc(o.page)} — ${n(o.count || 0)} elements…</div>`;
+  }
   const boxes = o.boxes || [];
   const w = Math.max(320, ...boxes.map(b => b.x + b.w));
   const h = Math.max(240, ...boxes.map(b => b.y + b.h));
@@ -4110,13 +4158,18 @@ function wireObserved() {
 // Which page shows the most of one file. A file's symbols are spread across the pages
 // that load it, and only one page can be drawn at a time.
 function bestPageFor(path) {
-  const at = (MAPDATA.filePage || {})[path];
+  const at = (FILES.filePage || {})[path];
   return typeof at === "number" ? at : current;
 }
 
 function renderPanel() {
   if (mode === "files") {
     const all = fileTab === "all";
+    if (!all && !withFiles(renderPanel)) {
+      panel.innerHTML = `<h2>Files</h2>${fileTabsHtml()}
+        <div class="gap">Loading ${n(FILES.count)} files…</div>`;
+      return;
+    }
     panel.innerHTML = all ? inventoryHtml() : treeHtml();
     panel.querySelectorAll(".tab[data-tab]").forEach(el => {
       el.onclick = () => {
@@ -4198,7 +4251,11 @@ function renderPanel() {
         }).toString();
     return;
   }
-  if (mode === "changes") { panel.innerHTML = changesHtml(); return; }
+  if (mode === "changes") {
+    withRows(SECTION_BY_KEY.changes, renderPanel);
+    panel.innerHTML = changesHtml();
+    return;
+  }
   if (mode === "map") { panel.innerHTML = mapListHtml(); return; }
   const sec = D.sections.find(x => x.key === mode);
   // No section owns this view. Returning left whatever the panel last held on screen -
@@ -4207,6 +4264,11 @@ function renderPanel() {
   if (sec.unavailable) {
     panel.innerHTML = `<h2>${esc(sec.title)}</h2><p class="blurb">${esc(sec.blurb)}</p>
       <div class="gap">${esc(sec.unavailable)}</div>`;
+    return;
+  }
+  if (!withRows(sec, renderPanel)) {
+    panel.innerHTML = `<h2>${esc(sec.title)}</h2><p class="blurb">${esc(sec.blurb)}</p>
+      <div class="gap">Loading ${n(sec.total || 0)} rows…</div>`;
     return;
   }
   // Offer only statuses this section actually contains. A findings list holds nothing
@@ -4742,7 +4804,7 @@ class MapDocument:
         return index, {f"{prefix}{c[0]}.js": _asset(c) for c in self.chunks}
 
 
-def _payload(connectivity_map: ConnectivityMap) -> tuple[str, list[Chunk]]:
+def _payload(connectivity_map: ConnectivityMap) -> tuple[str, list[Chunk], dict[str, int]]:
     """The map as (inline meta, deferred chunks).
 
     The meta is what the page needs before a reader touches anything: the string
@@ -4879,10 +4941,13 @@ def _payload(connectivity_map: ConnectivityMap) -> tuple[str, list[Chunk]]:
         "files": files.values,
         "langs": langs.values,
         "services": services.values,
-        "filePage": {path: index for path, (index, _) in file_best.items()},
         "pages": meta_pages,
     }
-    return _json(meta), chunks
+    # Which page draws most of each file. Read only when a file is picked from the Files
+    # view, so it travels with that list (see _files_lazy) rather than in the manifest -
+    # 53 KB of the game's index for a lookup made after a click.
+    file_page = {path: index for path, (index, _) in file_best.items()}
+    return _json(meta), chunks, file_page
 
 
 def _why_reasons() -> dict:
@@ -4892,8 +4957,16 @@ def _why_reasons() -> dict:
     return WHY_HELP
 
 
-def _console_payload(console) -> str:
-    """The review sections, or an empty shell so the page still renders without them."""
+def _console_payload(console, chunks: list[Chunk] | None = None) -> str:
+    """The review sections, or an empty shell so the page still renders without them.
+
+    The rows of a section are not read until that section is opened, so they ride as a
+    chunk `c<key>` (appended to `chunks`) and the section carries only its counts. On the
+    game the rows were 800 KB of the 2.2 MB the page had to parse before it could draw
+    anything, and most readers never open the list. A section too small to be worth a
+    round trip keeps its rows inline, and a caller that passes no chunk list gets the
+    old shape - rows in place - which is what the CLI's own readers still expect.
+    """
     from dataclasses import asdict
 
     if console is None:
@@ -4930,6 +5003,10 @@ def _console_payload(console) -> str:
         for row in rows:
             totals[row.get("status")] = totals.get(row.get("status"), 0) + 1
         out["status_totals"] = totals
+        if chunks is not None and len(_json(out["rows"])) >= _CHUNK_INLINE_LIMIT:
+            chunks.append(_chunk("c" + str(out["key"]), out["rows"]))
+            out["rows"] = None
+            out["chunk"] = "c" + str(out["key"])
         return out
 
     data = {
@@ -4943,6 +5020,51 @@ def _console_payload(console) -> str:
         "sections": [_section(section) for section in console.sections],
     }
     return json.dumps(data).replace("</", "<\\/")
+
+
+def _observed_lazy(observed, chunks: list[Chunk]):
+    """The observed pages with their boxes moved into chunks `o<i>`.
+
+    Every box of every page the browser saw was inline - 843 KB for 162 pages on the game,
+    read only when one page is picked from the dropdown. The page keeps its name, its
+    screenshot and how many boxes it has; the geometry arrives when it is looked at.
+    The caller's dict is left as it was.
+    """
+    if not observed or not isinstance(observed, dict):
+        return observed or []
+    pages = []
+    for i, page in enumerate(observed.get("pages") or []):
+        page = dict(page)
+        boxes = page.get("boxes") or []
+        page["count"] = len(boxes)
+        # Every page, not only the long ones: 107 short pages that each stayed under the
+        # inline limit still added up to 100 KB, and nothing reads a box until its page
+        # is picked. An inline chunk costs no parse at all, so there is nothing to save.
+        if boxes:
+            chunks.append(_chunk(f"o{i}", boxes))
+            page["boxes"] = None
+            page["chunk"] = f"o{i}"
+        pages.append(page)
+    return {**observed, "pages": pages}
+
+
+def _files_lazy(files, chunks: list[Chunk], file_page: dict[str, int] | None = None) -> dict:
+    """The scanned-file list as a count in the page and a chunk `files` beside it.
+
+    986 files were 130 KB of the game's index and the list is read by one view. The
+    count stays, for the menu badge; the tree, and the file-to-page lookup a click on it
+    needs, are read when the view is opened. A short list rides in place, so a small map
+    has nothing to wait for.
+    """
+    files = list(files or [])
+    body = {"list": files, "filePage": file_page or {}}
+    meta: dict = {"count": len(files)}
+    if len(_json(body)) >= _CHUNK_INLINE_LIMIT:
+        chunks.append(_chunk("files", body))
+        meta["chunk"] = "files"
+    else:
+        meta.update(body)
+    return meta
 
 
 def _js(value) -> str:
@@ -4974,7 +5096,7 @@ def render_document(connectivity_map: ConnectivityMap, console=None, files=None,
         if connectivity_map.baseline_sha
         else "current"
     )
-    meta, chunks = _payload(connectivity_map)
+    meta, chunks, file_page = _payload(connectivity_map)
     legend = "".join(
         f'<div><span style="background:{colour}"></span>{name}</div>'
         for name, colour in (
@@ -5105,10 +5227,10 @@ def render_document(connectivity_map: ConnectivityMap, console=None, files=None,
         '<div id="dbody"></div></aside>',
         "</main></div></div>",
         f"<script>const MAPDATA={meta};</script>",
-        f"<script>const CONSOLE={_console_payload(console)};</script>",
+        f"<script>const CONSOLE={_console_payload(console, chunks)};</script>",
         f"<script>const SERIES={_js(series or {'entries': []})};</script>",
-        f"<script>const FILES={_js(files or [])};</script>",
-        f"<script>const OBSERVED={_js(observed or [])};</script>",
+        f"<script>const FILES={_js(_files_lazy(files, chunks, file_page))};</script>",
+        f"<script>const OBSERVED={_js(_observed_lazy(observed, chunks))};</script>",
         # Locations are stored relative to the repo; an editor URL needs an absolute
         # path. Ship the root once and let the page join, rather than absolutising
         # every one of tens of thousands of rows.

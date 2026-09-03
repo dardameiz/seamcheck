@@ -708,7 +708,7 @@ class FilesViewTests(SimpleTestCase):
 
         self.assertIn("symbols`", out)
         self.assertIn("the rest are not reached from any page", out)
-        self.assertIn("const FILE_TOTALS = new Map(\n  FILES.map(", out)
+        self.assertIn("FILE_TOTALS.set(f.path, Object.values(f.counts || {})", out)
 
 
 class PathNumberingTests(SimpleTestCase):

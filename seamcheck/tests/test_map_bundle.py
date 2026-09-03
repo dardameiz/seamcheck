@@ -12,6 +12,8 @@ a rewrite but a foreign one refused; and the assets served beside the map.
 
 from __future__ import annotations
 
+import base64
+import gzip
 import pathlib
 import tempfile
 import threading
@@ -191,3 +193,97 @@ class ServingTheBundle(SimpleTestCase):
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         raise urllib.error.HTTPError(req.full_url, code, msg, headers, fp)
+
+
+def _console(rows_in_findings: int, rows_in_changes: int = 2):
+    from seamcheck.console import Console, Row, Section
+
+    def rows(count, prefix):
+        return [Row(id=f"{prefix}{i}", label=f"{prefix}-label-{i}", kind="url",
+                    status="unresolved" if i % 2 else "unused", file=f"app/views_{i}.py",
+                    line=i, note="nobody reaches this route from any page", snippet="x = 1")
+                for i in range(count)]
+
+    return Console(
+        git_sha="abc123def456", generated_at="2026-08-30T00:00:00", baseline_sha=None,
+        backend={}, frontend={}, counts={}, groups=[],
+        sections=[Section("findings", "Findings", "what is wrong", rows(rows_in_findings, "f")),
+                  Section("changes", "Changes", "what moved", rows(rows_in_changes, "c"))],
+    )
+
+
+def _observed(boxes: int):
+    box = {"x": 1, "y": 2, "w": 30, "h": 40, "tag": "div", "id": "", "cls": "card"}
+    return {"at": "2026-08-30T00:00:00", "current": True,
+            "pages": [{"page": "index", "screenshot": None, "boxes": [dict(box) for _ in range(boxes)]},
+                      {"page": "tiny", "screenshot": None, "boxes": [dict(box)]}]}
+
+
+class LazySections(SimpleTestCase):
+    """Rows and boxes are read when a section or a page is opened, not with the map.
+
+    On the game the section rows were 800 KB and the observed boxes 843 KB of a 2.2 MB
+    index - three quarters of what the browser had to parse before drawing anything,
+    for lists most readers never open.
+    """
+
+    def test_a_long_section_leaves_only_its_counts_in_the_page(self):
+        document = map_html.render_document(_map(), console=_console(60))
+        index, assets = document.bundle()
+
+        self.assertIn('"key": "findings"', index.replace('":"', '": "'))
+        self.assertNotIn("f-label-59", index, "the rows are still inline")
+        self.assertIn('"total":60', index.replace(" ", ""))
+        self.assertIn('"chunk":"cfindings"', index.replace(" ", ""))
+        self.assertIn("data/cfindings.js", assets)
+        name, enc, text = next(c for c in document.chunks if c[0] == "cfindings")
+        self.assertEqual(enc, "gz")
+        self.assertIn(b"f-label-59", gzip.decompress(base64.b64decode(text)))
+
+    def test_a_short_section_keeps_its_rows_in_the_page(self):
+        index, assets = map_html.render_document(_map(), console=_console(60)).bundle()
+
+        self.assertIn("c-label-1", index)
+        self.assertNotIn("data/cchanges.js", assets)
+
+    def test_the_cli_shape_still_carries_the_rows(self):
+        # Callers that read the payload without a chunk list - the CLI's own renderers -
+        # get the rows in place, as before.
+        payload = map_html._console_payload(_console(60))
+        self.assertIn("f-label-59", payload)
+        self.assertNotIn('"chunk"', payload)
+
+    def test_an_observed_page_keeps_its_name_and_count_and_moves_its_boxes(self):
+        observed = _observed(300)
+        self.assertEqual(map_html.render_document(_map(), observed=[]).bundle()[0].count("data/o"), 0)
+        document = map_html.render_document(_map(), observed=observed)
+        index, assets = document.bundle()
+
+        self.assertIn('"page":"index"', index.replace(" ", ""))
+        self.assertIn('"count":300', index.replace(" ", ""))
+        self.assertIn('"chunk":"o0"', index.replace(" ", ""))
+        self.assertIn("data/o0.js", assets)
+        # Every page's boxes go, even one: 107 short pages were still 100 KB together.
+        self.assertIn("data/o1.js", assets)
+        self.assertIn('"count":1', index.replace(" ", ""))
+        # The caller's record is untouched: it is written to disk after the map.
+        self.assertEqual(len(observed["pages"][0]["boxes"]), 300)
+
+    def test_a_long_file_list_is_a_count_in_the_page_and_a_chunk_beside_it(self):
+        files = [{"path": f"app/module_{i}/views.py", "counts": {"connected": i},
+                  "declarations": i, "known": i} for i in range(120)]
+        document = map_html.render_document(_map(), files=files)
+        index, assets = document.bundle()
+
+        self.assertIn('"count":120', index.replace(" ", ""))
+        self.assertIn('"chunk":"files"', index.replace(" ", ""))
+        self.assertNotIn("module_119", index)
+        self.assertIn("data/files.js", assets)
+
+    def test_a_short_file_list_stays_in_the_page(self):
+        files = [{"path": "a/b.py", "counts": {"connected": 1}, "declarations": 1, "known": 1}]
+        index, assets = map_html.render_document(_map(), files=files).bundle()
+
+        self.assertIn('"count":1', index.replace(" ", ""))
+        self.assertIn("a/b.py", index)
+        self.assertNotIn("data/files.js", assets)

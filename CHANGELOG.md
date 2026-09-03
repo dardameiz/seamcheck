@@ -33,6 +33,18 @@ backend that answered `uncertain` everywhere would score 100% precision and be u
   heap, biggest page (832k symbols) drawn in 1.6 s at 193 MB, no console errors. The
   55 MB search chunk at that size is the next thing to shard.
 
+- **What the page reads on demand now includes the lists, not only the graph.** The
+  rows of every review section (`c<key>`), the boxes of every observed page (`o<i>`) and
+  the scanned-file tree with its file-to-page lookup (`files`) are chunks too, read the
+  first time a section, a page or the Files view is opened - a panel says "Loading N
+  rows…" for the moment it takes, and is drawn again only if the reader is still on it.
+  Counts stay in the page, so the menu badges and the overview are as before. Three
+  quarters of the game's index was those lists, for views most readers never open:
+  pointlessbutton **index.html 386 KB** instead of 2.2 MB (5.5 MB two releases ago),
+  first draw in 0.36 s at 10 MB heap. Synthetic 3.7M symbols: index.html 6.3 MB instead
+  of 9 MB, of which 6 MB is the manifest's per-page rows and file string table - the
+  next cut.
+
 - **A scan of a 21,000-file monorepo no longer loses every JavaScript symbol.** The
   parser writes one JSON line per file to a pipe; on macOS those writes are asynchronous
   and unbounded, and at 2.6 GB of output (n8n) node died with `write ENOBUFS` - the whole
