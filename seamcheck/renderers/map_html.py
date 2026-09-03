@@ -8,6 +8,8 @@ hide the one relationship the map exists to show.
 
 from __future__ import annotations
 
+import base64
+import gzip
 import html as html_lib
 import json
 
@@ -1248,31 +1250,109 @@ const BANDS = [
            "graphql_field", "graphql_selection",
            "job", "job_enqueue", "job_schedule", "env_var", "env_read"]},
 ];
-const PAGES = (() => {
-  const F = MAPDATA.fields, K = MAPDATA.kinds, S_ = MAPDATA.statuses, FI = MAPDATA.files;
+// Nodes arrive as arrays against string tables, and they arrive LATE: each page's rows
+// sit in an inert <script type="text/plain"> block until the page is drawn, so a map of
+// 700,000 symbols costs the browser one page's worth of objects, not all of them. PAGES
+// holds the manifest for every page from the start - name, counts, which layer - and
+// `nodes` is null until ensurePage() has decoded that page's chunk. draw() loads its own
+// page, so nothing else in this file has to know a page can be absent.
+const PAGES = MAPDATA.pages.map(p => ({...p, nodes: null, edges: null, detailed: false}));
+const NODE_FIELDS = MAPDATA.fields, DETAIL_FIELDS = MAPDATA.detail || [];
+const byId = new Map();
+const CHUNKS = new Map();
+
+function inflateNode(row) {
+  const K = MAPDATA.kinds, S_ = MAPDATA.statuses, FI = MAPDATA.files;
   const LA = MAPDATA.langs || [], SV = MAPDATA.services || [];
-  const inflate = row => {
-    const n = {};
-    F.forEach((field, i) => {
-      const v = row[i];
-      n[field] = field === "kind" ? K[v]
-        : field === "status" ? S_[v]
-        : field === "file" ? (FI[v] || "")
-        : field === "lang" ? (LA[v] || "")
-        : field === "service" ? (SV[v] || "")
-        : (v == null ? (field === "line" ? null : "") : v);
+  const n = {note: "", snippet: "", context: ""};
+  NODE_FIELDS.forEach((field, i) => {
+    const v = row[i];
+    n[field] = field === "kind" ? K[v]
+      : field === "status" ? S_[v]
+      : field === "file" ? (FI[v] || "")
+      : field === "lang" ? (LA[v] || "")
+      : field === "service" ? (SV[v] || "")
+      : (v == null ? (field === "line" ? null : "") : v);
+  });
+  return n;
+}
+
+// One chunk, decoded once. gzip+base64 goes through a data: URL and DecompressionStream,
+// which is the one path that works when the map is opened as a file - reading a
+// sibling file is refused there, and a module script never runs. The text is dropped
+// from the DOM once read: the base64 alone was 20 MB on a real map.
+function readChunk(name) {
+  if (CHUNKS.has(name)) return CHUNKS.get(name);
+  const el = document.querySelector(`script[type="text/plain"][data-chunk="${name}"]`);
+  let promise;
+  if (!el) promise = Promise.resolve(null);
+  else if (el.dataset.enc === "gz") {
+    if (typeof DecompressionStream === "undefined") {
+      promise = Promise.reject(new Error("This browser cannot unpack the map (no DecompressionStream)."
+        + " Chrome 80, Safari 16.4 or Firefox 113 and later can."));
+    } else {
+      const text = el.textContent;
+      promise = fetch("data:application/octet-stream;base64," + text)
+        .then(r => new Response(r.body.pipeThrough(new DecompressionStream("gzip"))).text())
+        .then(JSON.parse);
+    }
+  } else promise = Promise.resolve(JSON.parse(el.textContent));
+  promise.then(() => { if (el) el.textContent = ""; }, () => {});
+  CHUNKS.set(name, promise);
+  return promise;
+}
+
+function ensurePage(index) {
+  const p = PAGES[index];
+  if (!p) return Promise.resolve(null);
+  if (p.nodes) return Promise.resolve(p);
+  return readChunk("p" + index).then(data => {
+    if (p.nodes) return p;
+    const S_ = MAPDATA.statuses;
+    p.nodes = (data ? data.nodes : []).map(inflateNode);
+    p.edges = (data ? data.edges : []).map(e => ({source: e[0], target: e[1], status: S_[e[2]]}));
+    // A service page shares its nodes with the pages they came from; whichever loaded
+    // first owns the object in byId, and the other page points at the same one so a
+    // detail loaded through either is seen by both.
+    p.nodes = p.nodes.map(n => {
+      const had = byId.get(n.id);
+      if (had) return had;
+      byId.set(n.id, n);
+      return n;
     });
-    return n;
-  };
-  return MAPDATA.pages.map(p => ({
-    ...p,
-    nodes: p.nodes.map(inflate),
-    edges: p.edges.map(e => ({source: e[0], target: e[1], status: S_[e[2]]})),
-  }));
-})();
-// The raw rows are 90% of this file and nothing reads them again once inflated; keeping
-// them alive doubled the heap of a 50,000-row map. The rest of MAPDATA is small.
-MAPDATA.pages = null;
+    return p;
+  });
+}
+
+// The long strings - note, snippet, context - are a third of the bytes and are read
+// only when a sheet or the code box opens, so they come in a chunk of their own.
+function ensureDetail(index) {
+  const p = PAGES[index];
+  if (!p) return Promise.resolve(null);
+  if (p.detailed) return Promise.resolve(p);
+  return ensurePage(index).then(() => readChunk("d" + index)).then(cols => {
+    if (p.detailed) return p;
+    if (cols) {
+      DETAIL_FIELDS.forEach(field => {
+        const values = cols[field] || [];
+        p.nodes.forEach((n, i) => { if (values[i]) n[field] = values[i]; });
+      });
+    }
+    p.detailed = true;
+    return p;
+  });
+}
+
+// Which page a node id lives on, among the pages loaded so far - and the current page
+// first, because that is where a reader is looking.
+function pageIndexOf(id) {
+  if (PAGES[current] && PAGES[current].nodes && PAGES[current].nodes.some(n => n.id === id)) return current;
+  for (let i = 0; i < PAGES.length; i++) {
+    const p = PAGES[i];
+    if (p.nodes && p.nodes.some(n => n.id === id)) return i;
+  }
+  return current;
+}
 // Which changed-set is in force. Starts as the whole-run diff, and a commit selection
 // replaces it - so "what changed" always means the thing the reader picked, never a
 // blend of a commit and a branch.
@@ -1350,7 +1430,7 @@ const LAYER_KINDS = {
 // A layer only offers itself when the scan actually found that service.
 function layersPresent() {
   const kinds = new Set();
-  PAGES.forEach(p => p.nodes.forEach(n => kinds.add(n.kind)));
+  PAGES.forEach(p => p.ks.forEach(([k]) => kinds.add(MAPDATA.kinds[k])));
   return LAYERS.filter(([key]) => {
     if (!key) return true;
     const want = LAYER_KINDS[key] || SECTION_KINDS[key];
@@ -1365,27 +1445,21 @@ let layer = "";
 // selected drew an empty canvas and looked broken. A service layer is global, so it gets
 // a synthetic page unioned across every page in the map.
 const SERVICE_LAYERS = new Set(["stripe", "celery", "graphql"]);
-let _servicePage = null, _servicePageFor = null;
+const LAYER_PAGE = new Map(PAGES.map((p, i) => [p.layer, i]).filter(([k]) => k));
+// A page with nothing in it, for a service the scan found no trace of.
+const EMPTY_PAGE = {page: "", title: "", where: "", layer: "", n: 0, st: {}, ks: [],
+                    nodes: [], edges: [], detailed: true};
+
+function currentPageIndex() {
+  if (!SERVICE_LAYERS.has(layer)) return current;
+  return LAYER_PAGE.has(layer) ? LAYER_PAGE.get(layer) : -1;
+}
 
 function currentPage() {
-  if (!SERVICE_LAYERS.has(layer)) return PAGES[current];
-  if (_servicePageFor === layer) return _servicePage;
-  const want = LAYER_KINDS[layer];
-  const ids = new Set(), nodes = [];
-  PAGES.forEach(p => p.nodes.forEach(n => {
-    if (want.has(n.kind) && !ids.has(n.id)) { ids.add(n.id); nodes.push(n); }
-  }));
-  const seen = new Set(), edges = [];
-  PAGES.forEach(p => p.edges.forEach(e => {
-    const key = e.source + "\u0000" + e.target;
-    if (ids.has(e.source) && ids.has(e.target) && !seen.has(key)) {
-      seen.add(key); edges.push(e);
-    }
-  }));
+  const i = currentPageIndex();
+  if (i >= 0) return PAGES[i];
   const title = (LAYERS.find(([k]) => k === layer) || [, layer])[1];
-  _servicePage = {page: layer, title: title, where: "", nodes: nodes, edges: edges};
-  _servicePageFor = layer;
-  return _servicePage;
+  return {...EMPTY_PAGE, page: layer, title: title};
 }
 
 // Empty means "every status". A Set rather than a single value because "show me the
@@ -1406,8 +1480,6 @@ const sheet = document.getElementById("detail");
 const dbody = document.getElementById("dbody");
 const pages = document.getElementById("pg");
 const crumb = document.getElementById("crumb");
-const byId = new Map();
-PAGES.forEach(p => p.nodes.forEach(n => byId.set(n.id, n)));
 
 // How many symbols each file has in the whole scan, so the breadcrumb can say "210 of
 // 674" rather than showing 210 boxes and letting a reader conclude that is all of it.
@@ -1438,6 +1510,7 @@ function pageLabel(p) {
   if (!_labelCounts) {
     _labelCounts = {};
     PAGES.forEach(other => {
+      if (other.layer) return;
       const w = (other.where || "").split(" - ")[0].trim();
       const t = other.title || other.page;
       _labelCounts[!w || t === w ? t : `${t} · ${w}`] = (_labelCounts[!w || t === w ? t : `${t} · ${w}`] || 0) + 1;
@@ -1452,7 +1525,8 @@ function fillPages(counts) {
   // "base-main — 392 nodes" - the name of a build artefact and a number. On a phone the
   // heading is the first thing to truncate, so the only legible part named nothing.
   const out = PAGES.map((p, i) => {
-    const drawn = lensed(p).length;
+    if (p.layer) return "";
+    const drawn = lensedCount(p);
     const tail = counts ? `${counts[i]} changed` : `${drawn} node${drawn === 1 ? "" : "s"}`;
     return `<option value="${i}">${esc(pageLabel(p))} — ${tail}</option>`;
   });
@@ -1643,13 +1717,22 @@ applyTheme();
 // The nodes a page contributes under the current lens AND status filter. One function,
 // because the page selector's count and the canvas must agree: a dropdown that promises
 // "16 nodes" over a canvas showing two is the tool lying about its own view.
-function lensed(p) {
+function lensAllows(kind, status) {
   const kinds = SECTION_KINDS[mode];
   const only = layer ? (LAYER_KINDS[layer] || SECTION_KINDS[layer]) : null;
-  return p.nodes.filter(n =>
-    (!kinds || n.kind === "page" || kinds.has(n.kind)) &&
-    (!only || only.has(n.kind)) &&
-    (!statusFilter.size || n.kind === "page" || statusFilter.has(n.status)));
+  return (!kinds || kind === "page" || kinds.has(kind)) &&
+    (!only || only.has(kind)) &&
+    (!statusFilter.size || kind === "page" || statusFilter.has(status));
+}
+function lensed(p) {
+  return (p.nodes || []).filter(n => lensAllows(n.kind, n.status));
+}
+// The same count from the manifest, for a page that is not loaded: the picker lists
+// every page and must not decode 60 chunks to number them.
+function lensedCount(p) {
+  if (p.nodes) return lensed(p).length;
+  return p.ks.reduce((sum, [k, st, n]) =>
+    sum + (lensAllows(MAPDATA.kinds[k], MAPDATA.statuses[st]) ? n : 0), 0);
 }
 
 // Which nodes to draw. Without a focus a page shows only its modules - one page here
@@ -2121,19 +2204,26 @@ const hit = n => !query || (n.label + " " + n.file).toLowerCase().includes(query
 //
 // Built once, lazily: 37,000 nodes is a list worth keeping, and worth not building for a
 // reader who never types anything.
-let _index = null;
-function searchIndex() {
+let _index = null, _indexLoading = null;
+// Synchronous once loaded; before that it returns an empty list and starts the load,
+// and `then` runs the caller again when the rows are in. The box shows "Opening the
+// index…" for the one pause a reader will ever see from it.
+function searchIndex(then) {
   if (_index) return _index;
-  const seen = new Set();
-  _index = [];
-  PAGES.forEach((p, page) => p.nodes.forEach(n => {
-    if (n.kind === "page" || seen.has(n.id)) return;
-    seen.add(n.id);
-    _index.push({id: n.id, label: n.label, kind: n.kind, status: n.status,
-                 file: n.file, line: n.line, page: page,
-                 hay: (n.label + " " + (n.file || "") + " " + n.kind).toLowerCase()});
-  }));
-  return _index;
+  if (!_indexLoading) {
+    _indexLoading = readChunk("search").then(rows => {
+      const K = MAPDATA.kinds, S_ = MAPDATA.statuses, FI = MAPDATA.files;
+      _index = (rows || []).map(r => {
+        const file = FI[r[4]] || "", kind = K[r[2]];
+        return {id: r[0], label: r[1], kind: kind, status: S_[r[3]], file: file,
+                line: r[5], page: r[6],
+                hay: (r[1] + " " + file + " " + kind).toLowerCase()};
+      });
+      return _index;
+    });
+  }
+  if (then) _indexLoading.then(then, () => {});
+  return [];
 }
 
 // Ranked, because a substring match puts "cart" behind "shopping-cart-badge-count" and a
@@ -2170,8 +2260,7 @@ function jumpTo(id, page) {
   if (SECTION_KINDS[mode] === undefined) switchTo("map");
   asList = false;
   lit = id;
-  draw();
-  show(id);
+  return ensurePage(current).then(() => { draw(); show(id); });
 }
 
 // How many nodes the filter box matched, said out loud. Fading is only meaningful when
@@ -2191,7 +2280,7 @@ function reportMatches(drawn, matched) {
 // unresolved, so "Stripe + unresolved" is legitimately empty - and has to SAY so, naming
 // the filters that emptied it, because the reader set them one at a time and cannot see
 // the combination.
-function reportEmpty(count) {
+function nothingBox() {
   let box = document.getElementById("nothing");
   if (!box) {
     box = document.createElement("div");
@@ -2199,6 +2288,22 @@ function reportEmpty(count) {
     box.className = "nothing";
     (document.querySelector(".main") || document.body).appendChild(box);
   }
+  return box;
+}
+function reportOpening(p) {
+  const box = nothingBox();
+  box.hidden = false;
+  box.innerHTML = `<b>Opening ${esc(p.title || p.page)}…</b>
+    <span>${p.n.toLocaleString()} symbols</span>`;
+}
+function reportFailure(err) {
+  const box = nothingBox();
+  box.hidden = false;
+  box.innerHTML = `<b>This page could not be opened.</b><span>${esc(String(err && err.message || err))}</span>`;
+  console.error("SC-MAP-CHUNK", err);
+}
+function reportEmpty(count) {
+  const box = nothingBox();
   box.hidden = count > 0;
   if (count > 0) return;
   // A commit filter empties the canvas far more often than the others, because most
@@ -2252,9 +2357,25 @@ function layoutFor(p) {
   return _layout;
 }
 
+let _drawWaiting = -1;
 function draw() {
   const p = currentPage();
   if (!p) return;
+  if (!p.nodes) {
+    // The page's rows are still text in the document. Decode them, then draw for real;
+    // every caller of draw() gets this for free and none of them has to wait.
+    const want = currentPageIndex();
+    if (_drawWaiting !== want) {
+      _drawWaiting = want;
+      svg.innerHTML = "";
+      reportOpening(p);
+      ensurePage(want).then(() => {
+        _drawWaiting = -1;
+        if (currentPageIndex() === want) { draw(); if (window.syncChrome) syncChrome(); }
+      }, err => { _drawWaiting = -1; reportFailure(err); });
+    }
+    return;
+  }
   readPack();
   pages.value = String(current);
   const here = p.where ? `${p.title} · ${p.where}` : p.title;
@@ -2285,7 +2406,8 @@ function draw() {
   // A commit that touched only files the scan does not read has an empty changed set.
   // Drawing that as a bare page node reads as a broken map rather than as an answer.
   if (only && !Object.keys(CHANGED).length) {
-    svg.innerHTML = `<text x="20" y="40" class="col">nothing the scan reads changed in this commit</text>`;
+    svg.innerHTML = "";
+    reportEmpty(0);
     return;
   }
   // Filters that exclude everything draw an empty canvas, which is indistinguishable from
@@ -2719,11 +2841,15 @@ function highlight(line) {
 function findingsIn(file) {
   // Every other thing the scan claims about this file, so the gutter can mark them.
   const marks = new Map();
-  PAGES.forEach(p => p.nodes.forEach(node => {
+  const mark = node => {
     if (node.file === file && node.line && node.status !== "connected") {
       marks.set(node.line, node.status);
     }
-  }));
+  };
+  // The search index is one row per symbol in the whole scan; until a reader has typed
+  // something it is not loaded, and the loaded pages are what there is.
+  if (_index) _index.forEach(mark);
+  else PAGES.forEach(p => (p.nodes || []).forEach(mark));
   return marks;
 }
 
@@ -2794,6 +2920,7 @@ function renderSource(file, text, line, title, label) {
 
 async function showCode(id) {
   const n = byId.get(id); if (!n) return;
+  await ensureDetail(pageIndexOf(id));
   const title = n.label + (n.file ? "  —  " + n.file + (n.line ? ":" + n.line : "") : "");
   codebox.hidden = false;
   document.getElementById("codetitle").textContent = title;
@@ -2844,6 +2971,12 @@ function deduper() {
 
 function show(id) {
   const n = byId.get(id); if (!n) return;
+  const at = pageIndexOf(id);
+  if (!PAGES[at].detailed) {
+    // The note and the code behind each hop are in the detail chunk; open it, then show.
+    ensureDetail(at).then(() => show(id), reportFailure);
+    return;
+  }
   const ch = CHANGED[id];
   const {inbound, outbound} = routes(id);
   const take = deduper();
@@ -3083,9 +3216,14 @@ function hideResults() { const box = document.getElementById("found"); if (box) 
 
 function showResults(term) {
   if (!term || term.length < 2) { hideResults(); return; }
-  const found = searchEverywhere(term);
   const box = resultsBox();
   box.hidden = false;
+  if (!_index) {
+    searchIndex(() => { if (query === term) showResults(term); });
+    box.innerHTML = `<div class="gap">Opening the index…</div>`;
+    return;
+  }
+  const found = searchEverywhere(term);
   if (!found.length) {
     box.innerHTML = `<div class="gap">Nothing in this scan is called “${esc(term)}”.</div>`;
     return;
@@ -3119,7 +3257,7 @@ function fillPicker() {
   // draws an empty canvas that reads as a broken filter. The count belongs in the list, so
   // the choice is informed before it is made rather than explained afterwards.
   COMMITS.forEach((c, i) => {
-    const n = countsFor(c.changed || {});
+    const n = c.counts || countsFor(c.changed || {});
     const total = n.added + n.removed + n.status;
     const tail = !c.baseline ? " · earliest scan" : total ? ` · ${total} changed` : " · no change";
     opts.push(
@@ -3135,12 +3273,24 @@ function fillPicker() {
 
 function selectCommit(index) {
   const c = COMMITS[index];
+  if (c && !c.changed) {
+    // What each commit changed, by id, is sized by the history and lives in a chunk
+    // until a commit is picked.
+    readChunk("commits").then(list => {
+      COMMITS.forEach((k, i) => {
+        const got = (list || [])[i] || {};
+        k.changed = got.changed || {}; k.changes = got.changes || [];
+      });
+      if (String(picker.value) === String(index)) selectCommit(index);
+    }, reportFailure);
+    return;
+  }
   if (!c) {
     CHANGED = MAPDATA.changed; only = false;
     note.textContent = ""; gone.innerHTML = "";
   } else {
     CHANGED = c.changed; only = true;
-    const n = countsFor(c.changed);
+    const n = c.counts || countsFor(c.changed);
     const total = n.added + n.removed + n.status;
     note.textContent = !c.baseline
       ? `${when(c.date)} — earliest scanned commit, nothing before it to compare against.`
@@ -3160,7 +3310,7 @@ function selectCommit(index) {
   }
   // Every page says how much of this commit is in it, so the picker itself shows where
   // to look instead of making a reader open each page to find out.
-  fillPages(only ? PAGES.map(p => p.nodes.filter(n => CHANGED[n.id]).length) : null);
+  fillPages(only ? (c.perPage || PAGES.map(p => lensed(p).filter(n => CHANGED[n.id]).length)) : null);
   focus = null; view = {x:0, y:0, k:1};
   closeSheet();
   draw();
@@ -3867,12 +4017,8 @@ function wireObserved() {
 // Which page shows the most of one file. A file's symbols are spread across the pages
 // that load it, and only one page can be drawn at a time.
 function bestPageFor(path) {
-  let best = current, most = -1;
-  PAGES.forEach((p, i) => {
-    const n = p.nodes.reduce((count, node) => count + (node.file === path ? 1 : 0), 0);
-    if (n > most) { most = n; best = i; }
-  });
-  return best;
+  const at = (MAPDATA.filePage || {})[path];
+  return typeof at === "number" ? at : current;
 }
 
 function renderPanel() {
@@ -4065,6 +4211,11 @@ function trendChart(entries) {
 // node-link drawing, and it loses nothing - each row IS what the canvas would show.
 function mapListHtml() {
   const p = currentPage();
+  if (p && !p.nodes) {
+    const want = currentPageIndex();
+    ensurePage(want).then(() => { if (currentPageIndex() === want && asList) renderPanel(); }, reportFailure);
+    return `<h2>${esc(p.title || p.page)}</h2><p class="blurb">Opening…</p>`;
+  }
   const rows = p ? lensed(p).filter(n => n.kind !== "page") : [];
   const where = p ? (p.where ? `${p.title} · ${p.where}` : p.title) : "";
   const head = `<h2>${esc(where || "Map")}</h2>`;
@@ -4320,8 +4471,7 @@ ly.onchange = e => {
     if (!key.hidden) {
       const counts = {};
       const p = typeof currentPage === "function" ? currentPage() : null;
-      const pool = p ? p.nodes : [];
-      pool.forEach(n => { counts[n.status] = (counts[n.status] || 0) + 1; });
+      Object.assign(counts, p ? p.st : {});
       key.querySelectorAll(".seg button[data-status]").forEach(btn => {
         const st = btn.dataset.status;
         if (!st) return;
@@ -4373,8 +4523,26 @@ def _esc(value) -> str:
 # So nodes travel as arrays in a fixed order against three string tables, and the page
 # expands them back into exactly the objects the rest of the script already reads. The
 # decode is one pass at load; nothing downstream knows the difference.
-_NODE_FIELDS = ("id", "label", "kind", "status", "file", "line", "note", "snippet",
-                "context", "lang", "service")
+# What a node row carries on the wire. The three long strings - note, snippet, context -
+# are not here: they were 34% of a real map's bytes and are read only when a sheet or the
+# code box opens, so they travel in a detail chunk of their own (see _payload).
+_NODE_FIELDS = ("id", "label", "kind", "status", "file", "line", "lang", "service")
+_DETAIL_FIELDS = ("note", "snippet", "context")
+
+# A service does not live on a page: a Stripe webhook is reached by Stripe and a Celery
+# task by a worker. Each gets a page of its own, unioned across the map, hidden from the
+# page picker and drawn when its layer is chosen. Built here rather than in the browser
+# so it loads like any other page instead of needing every page's rows at once.
+_SERVICE_LAYERS = (
+    ("stripe", "Stripe", ("stripe_webhook", "stripe_event")),
+    ("celery", "Celery", ("celery_task", "celery_schedule")),
+    ("graphql", "GraphQL", ("graphql_field", "graphql_selection")),
+)
+
+# Below this a chunk is plain JSON, so a small map stays readable in the markup and the
+# fixture tests can grep it; above it, gzip + base64. The crossover is where the base64
+# overhead (4/3) is paid back several times over by the compression.
+_CHUNK_INLINE_LIMIT = 4 * 1024
 
 
 class _Table:
@@ -4391,49 +4559,152 @@ class _Table:
         return self._index[value]
 
 
-def _payload(connectivity_map: ConnectivityMap) -> str:
+def _json(value) -> str:
+    # </script> inside JSON would close the tag early; escaping the slash is the
+    # standard defence and stays valid JSON.
+    return json.dumps(value, separators=(",", ":")).replace("</", "<\\/")
+
+
+def _chunk(name: str, value) -> str:
+    """One block of data the page decodes on demand.
+
+    `type="text/plain"` makes the parser skip it: nothing is evaluated, nothing is
+    allocated beyond the text itself, until a reader asks for the page it belongs to.
+    Above the inline limit the JSON is gzipped and base64'd - `DecompressionStream`
+    reads it back from a `data:` URL, which is the one loader that works from `file://`
+    (a `<script src>` needs a sibling file, and reading one from a page is refused).
+    """
+    text = _json(value)
+    if len(text) < _CHUNK_INLINE_LIMIT:
+        return f'<script type="text/plain" data-chunk="{name}" data-enc="json">{text}</script>'
+    packed = gzip.compress(text.encode("utf-8"), compresslevel=6, mtime=0)
+    return (f'<script type="text/plain" data-chunk="{name}" data-enc="gz">'
+            f'{base64.b64encode(packed).decode("ascii")}</script>')
+
+
+def _payload(connectivity_map: ConnectivityMap) -> tuple[str, str]:
+    """The map as (inline meta, deferred chunks).
+
+    The meta is what the page needs before a reader touches anything: the string
+    tables, one row of counts per page, which page shows most of each file, and what
+    each commit changed per page. Everything sized by the number of symbols - the rows,
+    the long strings, the search index, the commit diffs - is a chunk.
+    """
     kinds, statuses, files = _Table(), _Table(), _Table()
     # Interned like the others: a repository has a handful of languages and services, and
     # every node repeats one of each.
     langs, services = _Table(), _Table()
+    changed = connectivity_map.changed
+    commits = connectivity_map.commits or []
 
     def _row(node):
-        # Trailing empties are dropped, not sent as "": most nodes carry no note and the
-        # buckets carry no source context at all.
+        # Trailing empties are dropped, not sent as "": most nodes carry no language or
+        # service, and a bucket carries no file.
         row = [
             node.id, node.label, kinds(node.kind), statuses(node.status),
-            files(node.file or ""), node.line, node.note, node.snippet, node.context,
+            files(node.file or ""), node.line,
             langs(node.lang or ""), services(node.service or ""),
         ]
         while len(row) > 4 and not row[-1]:
             row.pop()
         return row
 
-    pages = [
-        {
-            "page": page.page,
-            "title": page.title or page.page,
-            "where": page.where,
-            "nodes": [_row(node) for node in page.nodes],
-            "edges": [[e.source, e.target, statuses(e.status)] for e in page.edges],
-        }
-        for page in connectivity_map.pages
-    ]
-    data = {
+    pages = [(page.page, page.title or page.page, page.where, "", page.nodes, page.edges)
+             for page in connectivity_map.pages]
+    for key, title, wanted in _SERVICE_LAYERS:
+        want = set(wanted)
+        seen: dict[str, object] = {}
+        for page in connectivity_map.pages:
+            for node in page.nodes:
+                if node.kind in want and node.id not in seen:
+                    seen[node.id] = node
+        if not seen:
+            continue
+        edges, seen_edges = [], set()
+        for page in connectivity_map.pages:
+            for e in page.edges:
+                pair = (e.source, e.target)
+                if e.source in seen and e.target in seen and pair not in seen_edges:
+                    seen_edges.add(pair)
+                    edges.append(e)
+        pages.append((f"layer:{key}", title, "", key, list(seen.values()), edges))
+
+    meta_pages, chunks = [], []
+    file_best: dict[str, tuple[int, int]] = {}
+    search_rows, in_search = [], set()
+    per_page_changed = []
+    commit_per_page = [[] for _ in commits]
+    for index, (name, title, where, layer, nodes, edges) in enumerate(pages):
+        rows = [_row(node) for node in nodes]
+        by_status: dict[str, int] = {}
+        by_kind_status: dict[tuple[int, int], int] = {}
+        file_counts: dict[str, int] = {}
+        changed_here = 0
+        commit_here = [0] * len(commits)
+        for node, row in zip(nodes, rows, strict=True):
+            by_status[node.status] = by_status.get(node.status, 0) + 1
+            ks = (row[2], row[3])
+            by_kind_status[ks] = by_kind_status.get(ks, 0) + 1
+            if node.file:
+                file_counts[node.file] = file_counts.get(node.file, 0) + 1
+            if node.id in changed:
+                changed_here += 1
+            for c, commit in enumerate(commits):
+                if node.id in (commit.get("changed") or {}):
+                    commit_here[c] += 1
+            if node.kind != "page" and node.id not in in_search and not layer:
+                in_search.add(node.id)
+                search_rows.append([node.id, node.label, row[2], row[3],
+                                    files(node.file or ""), node.line, index])
+        if not layer:
+            for path, n in file_counts.items():
+                if n > file_best.get(path, (-1, 0))[1]:
+                    file_best[path] = (index, n)
+        per_page_changed.append(changed_here)
+        for c, n in enumerate(commit_here):
+            commit_per_page[c].append(n)
+        meta_pages.append({
+            "page": name, "title": title, "where": where, "layer": layer,
+            "n": len(nodes), "st": by_status,
+            "ks": [[k, st, n] for (k, st), n in by_kind_status.items()],
+        })
+        chunks.append(_chunk(f"p{index}", {
+            "nodes": rows,
+            "edges": [[e.source, e.target, statuses(e.status)] for e in edges],
+        }))
+        chunks.append(_chunk(f"d{index}", {
+            field: [getattr(node, field) or "" for node in nodes] for field in _DETAIL_FIELDS
+        }))
+    chunks.append(_chunk("search", search_rows))
+    chunks.append(_chunk("commits", [
+        {"changed": c.get("changed") or {}, "changes": c.get("changes") or []}
+        for c in commits
+    ]))
+    meta_commits = []
+    for c, commit in enumerate(commits):
+        counts = {"added": 0, "removed": 0, "status": 0}
+        for kind in (commit.get("changed") or {}).values():
+            counts[kind] = counts.get(kind, 0) + 1
+        meta_commits.append({
+            key: commit.get(key) for key in ("sha", "subject", "date", "symbols",
+                                             "baseline", "head", "change_total")
+        } | {"counts": counts, "perPage": commit_per_page[c]})
+    meta = {
         "columns": _COLUMNS,
-        "changed": connectivity_map.changed,
-        "commits": connectivity_map.commits,
+        "changed": changed,
+        "changedPerPage": per_page_changed,
+        "commits": meta_commits,
         "fields": _NODE_FIELDS,
+        "detail": _DETAIL_FIELDS,
         "kinds": kinds.values,
         "statuses": statuses.values,
         "files": files.values,
         "langs": langs.values,
         "services": services.values,
-        "pages": pages,
+        "filePage": {path: index for path, (index, _) in file_best.items()},
+        "pages": meta_pages,
     }
-    # </script> inside JSON would close the tag early; escaping the slash is the
-    # standard defence and stays valid JSON.
-    return json.dumps(data, separators=(",", ":")).replace("</", "<\\/")
+    return _json(meta), "\n".join(chunks)
 
 
 def _why_reasons() -> dict:
@@ -4515,6 +4786,7 @@ def render(connectivity_map: ConnectivityMap, console=None, files=None,
         if connectivity_map.baseline_sha
         else "current"
     )
+    meta, chunks = _payload(connectivity_map)
     legend = "".join(
         f'<div><span style="background:{colour}"></span>{name}</div>'
         for name, colour in (
@@ -4644,7 +4916,7 @@ def render(connectivity_map: ConnectivityMap, console=None, files=None,
         '<button class="x" id="dx" type="button" aria-label="Close">\u00d7</button>'
         '<div id="dbody"></div></aside>',
         "</main></div></div>",
-        f"<script>const MAPDATA={_payload(connectivity_map)};</script>",
+        f"<script>const MAPDATA={meta};</script>",
         f"<script>const CONSOLE={_console_payload(console)};</script>",
         f"<script>const SERIES={_js(series or {'entries': []})};</script>",
         f"<script>const FILES={_js(files or [])};</script>",
@@ -4660,6 +4932,9 @@ def render(connectivity_map: ConnectivityMap, console=None, files=None,
         # offer a different vocabulary.
         f"<script>const WHY={_js(_why_reasons())};</script>",
         f"<script>const SHARE={_js(share_payload or {})};</script>",
+        # The rows themselves, after everything the script reads at once: inert text
+        # blocks the loader decodes one page at a time (see _chunk).
+        chunks,
         f"<script>{_SCRIPT}</script>",
         "</body></html>",
     ])

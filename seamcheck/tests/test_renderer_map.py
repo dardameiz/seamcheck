@@ -47,6 +47,10 @@ class MapRenderTests(SimpleTestCase):
         calls = re.findall(r"fetch\(([^\n]*)", out)
         self.assertTrue(calls, "the viewer should make exactly one kind of request")
         for call in calls:
+            # A data: URL is the page reading its own bytes - the chunk loader unpacks
+            # a gzip block that way - and reaches no server at all.
+            if call.startswith('"data:'):
+                continue
             self.assertIn("location.pathname", call,
                           "a fetch that is not built from this page's own path")
             self.assertNotIn("http", call, "a fetch naming an absolute URL")
@@ -156,7 +160,7 @@ class CommitPickerTests(SimpleTestCase):
     def test_a_commit_that_changed_nothing_says_so_rather_than_drawing_a_blank(self):
         out = map_html.render(self._with_commits())
 
-        self.assertIn("nothing the scan reads changed in this commit", out)
+        self.assertIn("This commit changed nothing the scan reads.", out)
 
     def test_with_no_history_the_picker_says_how_to_build_some(self):
         out = map_html.render(_map())

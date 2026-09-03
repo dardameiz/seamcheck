@@ -70,11 +70,13 @@ def _goto_page_with(page, status: str) -> None:
     page.evaluate("""(status) => {
         const sel = document.getElementById('pg');
         const i = [...sel.options].findIndex(o =>
-            PAGES[Number(o.value)].nodes.some(n => n.status === status));
+            (PAGES[Number(o.value)].st[status] || 0) > 0);
         if (i < 0) throw new Error('no page holds a ' + status + ' node');
         sel.selectedIndex = i;
         sel.dispatchEvent(new Event('change', {bubbles: true}));
     }""", status)
+    # The page's rows are decoded on demand; wait until they are in.
+    page.wait_for_function("() => !!PAGES[Number(document.getElementById('pg').value)].nodes")
     page.wait_for_timeout(200)
 
 
@@ -156,7 +158,7 @@ class MapRunsInABrowser(SimpleTestCase):
             mixed = page.evaluate("""() => {
                 const pages = [...document.querySelectorAll('#pg option')].map(o => o.value);
                 return pages.findIndex(v =>
-                    new Set(PAGES[Number(v)].nodes.map(n => n.status)).size > 1);
+                    Object.keys(PAGES[Number(v)].st).length > 1);
             }""")
             page.select_option("#pg", index=mixed)
             page.wait_for_timeout(200)

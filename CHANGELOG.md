@@ -19,6 +19,23 @@ backend that answered `uncertain` everywhere would score 100% precision and be u
 
 ## Unreleased
 
+- **The map opens in under half a second on a 500k-line codebase, at 6 MB JS heap.** The
+  node rows used to sit in one inline `MAPDATA` literal that the browser parsed and
+  inflated in full before the first paint (pointlessbutton: 22.6 MB file, ~1 KB of heap
+  per node × 51k nodes - enough to take a MacBook down when opened at Retina scale with a
+  trace running). The rows now live in inert `<script type="text/plain" data-chunk>`
+  blocks, one per page for the graph and one per page for notes/snippets/context, plus
+  one for the search index and one for the commit history; blocks over 4 KB are
+  gzip + base64 and unpacked in the browser through `DecompressionStream`, so it is still
+  a single file that opens from disk. Only the page being looked at is decoded. Same map,
+  headless, DPR 1: **22.6 MB → 5.5 MB**, open 0.43 s, heap 6 MB at open and 24 MB with the
+  biggest page (18,943 symbols) drawn and its aggregate expanded to 500 cards, search
+  index (42,576 rows) 20 ms on first keystroke, `user` 3 ms, no console errors.
+- **The Stripe, Celery and GraphQL layers are pages the renderer builds**, not a union the
+  browser assembled from every page on open (which forced every page to be decoded).
+  Hidden from the page picker; empty when the scan found nothing for that service.
+- `tools/verify_output.py` decodes the chunks the way the page does and fails a map whose
+  manifest count disagrees with the rows a chunk actually holds.
 - **The map no longer lags while you pan or zoom.** A gesture used to move the `<svg>`
   root's transform, which made Chrome re-lay out every SVG element on every pointer move
   (measured 22 ms Layout + 25 ms compositor Layerize per move on a 3,461-node page). The

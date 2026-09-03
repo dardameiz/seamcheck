@@ -26,7 +26,9 @@ Usage:
 
 from __future__ import annotations
 
+import base64
 import contextlib
+import gzip
 import json
 import os
 import pathlib
@@ -45,7 +47,11 @@ CORPUS = pathlib.Path(os.environ.get("SEAMCHECK_CORPUS", ROOT.parent / "seamchec
 # perfectly ordinary token in JavaScript and only a defect when a reader can see it.
 _LEAKED = ("undefined", "NaN", "[object Object]", "{{", "None", "&lt;built-in")
 
-_SCRIPT = re.compile(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", re.S)
+# Runnable script blocks only. The data chunks are `type="text/plain"` - inert to the
+# browser and read by _payload below, not by node.
+_SCRIPT = re.compile(r"<script(?![^>]*\bsrc=)(?![^>]*text/plain)[^>]*>(.*?)</script>", re.S)
+_CHUNK = re.compile(
+    r'<script type="text/plain" data-chunk="([^"]+)" data-enc="(\w+)">(.*?)</script>', re.S)
 _TAGS = re.compile(r"<[^>]+>")
 
 
@@ -79,13 +85,33 @@ def _payload(html: str) -> dict | None:
     a checker that re-derived the numbers from the graph would pass while the document
     a person opens was empty.
     """
-    match = re.search(r"const\s+MAPDATA\s*=\s*(\{.*\});</script>", html)
+    match = re.search(r"const\s+MAPDATA\s*=\s*(\{.*?\});</script>", html, re.S)
     if not match:
         return None
     try:
-        return json.loads(match.group(1).replace("<\\/", "</"))
+        data = json.loads(match.group(1).replace("<\\/", "</"))
     except json.JSONDecodeError:
         return None
+    # The rows live in chunks - plain JSON when small, gzip+base64 past 32 KB - one per
+    # page, exactly as the page's loader reads them. Decoded here the same way, so the
+    # checks below see what a reader's browser would.
+    chunks: dict[str, object] = {}
+    for name, enc, body in _CHUNK.findall(html):
+        try:
+            if enc == "gz":
+                body = gzip.decompress(base64.b64decode(body)).decode("utf-8")
+            chunks[name] = json.loads(body.replace("<\\/", "</"))
+        except (ValueError, OSError) as error:
+            chunks[name] = {"__error__": f"{type(error).__name__}: {error}"}
+    for index, page in enumerate(data.get("pages") or []):
+        rows = chunks.get(f"p{index}") or {}
+        if "__error__" in rows:
+            page["__error__"] = rows["__error__"]
+            rows = {}
+        page["nodes"] = rows.get("nodes") or []
+        page["edges"] = rows.get("edges") or []
+    data["chunks"] = sorted(chunks)
+    return data
 
 
 def verify(name: str, root: pathlib.Path) -> dict:
@@ -141,7 +167,11 @@ def verify(name: str, root: pathlib.Path) -> dict:
             fail(f"unknown status value(s) in payload: {unknown[:4]}")
 
         for page in pages:
+            if page.get("__error__"):
+                fail(f"{page.get('page')}: chunk does not decode: {page['__error__']}")
             nodes = page.get("nodes") or []
+            if len(nodes) != page.get("n", len(nodes)):
+                fail(f"{page.get('page')}: manifest says {page.get('n')} nodes, chunk holds {len(nodes)}")
             ids = {n[0] for n in nodes if n}
             # A row is [id, label, kindIdx, statusIdx, ...]; the first four are required
             # because the map reads them unconditionally when it draws a card.
@@ -175,7 +205,7 @@ def verify(name: str, root: pathlib.Path) -> dict:
             fail("repo has a pages/templates directory but the map lists no pages")
 
     # 5. nothing raw leaked into what a person reads
-    text = _TAGS.sub(" ", re.sub(_SCRIPT, " ", html))
+    text = _TAGS.sub(" ", _CHUNK.sub(" ", re.sub(_SCRIPT, " ", html)))
     for token in _LEAKED:
         if token in text:
             context = text[max(0, text.index(token) - 45):text.index(token) + 45]
