@@ -14,7 +14,7 @@ import html as html_lib
 import json
 
 from seamcheck import editors, meaning
-from seamcheck.mapdata import ConnectivityMap
+from seamcheck.mapdata import UNREACHED_PAGE, ConnectivityMap
 
 # Column order is the story: browser on the left, database on the right.
 _COLUMNS = [
@@ -1327,11 +1327,14 @@ function ensurePage(index) {
     // A service page shares its nodes with the pages they came from; whichever loaded
     // first owns the object in byId, and the other page points at the same one so a
     // detail loaded through either is seen by both.
-    p.nodes = p.nodes.map(n => {
-      const had = byId.get(n.id);
-      if (had) return had;
-      byId.set(n.id, n);
-      return n;
+    const pg = data && data.pg;
+    p.nodes = p.nodes.map((n, i) => {
+      const had = byId.get(n.id) || n;
+      if (had === n) byId.set(n.id, n);
+      // A store layer's chunk says which ordinary pages hold each node. Set on the SHARED
+      // object, so a card opened from the page it came from says the same thing.
+      if (pg && pg[i] && pg[i].length) had.pg = pg[i];
+      return had;
     });
     dropChunk("p" + index);
     return p;
@@ -1434,7 +1437,8 @@ const LAYER_KINDS = {
   // database" is not a question anyone asks; "show me Redis" is, and the two answer to
   // completely different failure modes - a mistyped column returns a row without it, a
   // mistyped Redis key returns nothing at all and nobody notices.
-  database: new Set(["db_table", "db_column", "db_function", "db_policy",
+  // `model` is the database too: a Django project's Postgres is invisible without it.
+  database: new Set(["model", "db_table", "db_column", "db_function", "db_policy",
                      "db_table_use", "db_column_use", "db_function_use",
                      "edge_function", "edge_function_use", "storage_bucket",
                      "firestore_collection", "firestore_rule",
@@ -1459,7 +1463,21 @@ let layer = "";
 // hangs off any page entry - which is why picking Stripe while "Base · base.html" was
 // selected drew an empty canvas and looked broken. A service layer is global, so it gets
 // a synthetic page unioned across every page in the map.
-const SERVICE_LAYERS = new Set(["stripe", "celery", "graphql"]);
+// A store is global the same way - `user:{id}:stats` is touched from the arena, the
+// leaderboard and a worker - but its nodes ARE on pages, so the Page picker stays and
+// narrows the layer to one page's keys instead of going away.
+const SERVICE_LAYERS = new Set(["stripe", "celery", "graphql", "database", "redis"]);
+const STORE_LAYERS = new Set(["database", "redis"]);
+// On a store layer: null is every page; a page index narrows the layer to that page.
+let pageOnLayer = null;
+// Redis keys are grouped by their first segment - `user:*`, `leaderboard:*` - rather than
+// by kind. Two thousand keys under one "redis key" card is a number; forty under
+// `user:*` is a namespace a reader can open.
+const SEGMENTED_KINDS = new Set(["redis_key", "redis_key_use", "redis_ttl"]);
+function segmentOf(label) {
+  const cut = (label || "").indexOf(":");
+  return cut > 0 ? label.slice(0, cut) : "";
+}
 const LAYER_PAGE = new Map(PAGES.map((p, i) => [p.layer, i]).filter(([k]) => k));
 // A page with nothing in it, for a service the scan found no trace of.
 const EMPTY_PAGE = {page: "", title: "", where: "", layer: "", n: 0, st: {}, ks: [],
@@ -1570,14 +1588,25 @@ function fillPages(counts) {
   // heading is the first thing to truncate, so the only legible part named nothing.
   const tail = i => {
     if (counts) return `${counts[i]} changed`;
-    const drawn = lensedCount(PAGES[i]);
+    const drawn = !STORE_LAYERS.has(layer) ? lensedCount(PAGES[i])
+      : i === currentPageIndex() ? wholeCount() : reachedCount(i);
     return `${drawn} node${drawn === 1 ? "" : "s"}`;
   };
-  const here = PAGES[current] || EMPTY_PAGE;
-  pages.innerHTML = [...GROUP_WHOLE].map(([, i]) =>
-    `<option value="${i}">${esc(pageLabel(PAGES[i]))} — ${tail(i)}</option>`).join("");
-  pages.value = String(GROUP_WHOLE.has(here.g) ? GROUP_WHOLE.get(here.g) : current);
-  const entries = GROUP_ENTRIES.get(here.g) || [];
+  const store = STORE_LAYERS.has(layer);
+  const here = (store ? PAGES[pageOnLayer] : PAGES[current]) || EMPTY_PAGE;
+  // On a store layer the first choice is the whole store; the pages under it say how
+  // many of its nodes each reaches, not how many nodes the page has.
+  const every = store
+    ? [`<option value="all">Every page — ${tail(currentPageIndex())}</option>`] : [];
+  // Under a store, a page that reaches none of it is not offered: a hundred rows of
+  // "0 nodes" is a list of things the picker cannot do. The page already picked stays.
+  const listed = [...GROUP_WHOLE].filter(([g, i]) =>
+    !store || g === here.g || reachedCount(i) > 0);
+  pages.innerHTML = every.concat(listed.map(([, i]) =>
+    `<option value="${i}">${esc(pageLabel(PAGES[i]))} — ${tail(i)}</option>`)).join("");
+  pages.value = store && pageOnLayer === null ? "all"
+    : String(GROUP_WHOLE.has(here.g) ? GROUP_WHOLE.get(here.g) : current);
+  const entries = store && pageOnLayer === null ? [] : (GROUP_ENTRIES.get(here.g) || []);
   if (entries.length > 1) {
     const whole = GROUP_WHOLE.get(here.g);
     sections.innerHTML = [`<option value="${whole}">Whole page — ${tail(whole)}</option>`]
@@ -1592,14 +1621,19 @@ function fillPages(counts) {
 }
 
 function syncPickers() {
+  const store = STORE_LAYERS.has(layer);
+  if (store && pageOnLayer === null) { fillPages(_pickers.counts); return; }
   const here = PAGES[current] || EMPTY_PAGE;
-  if (_pickers.group !== here.g) { fillPages(_pickers.counts); return; }
+  if (_pickers.group !== here.g || store) { fillPages(_pickers.counts); return; }
   pages.value = String(GROUP_WHOLE.has(here.g) ? GROUP_WHOLE.get(here.g) : current);
   if (!secwrap.hidden) sections.value = String(current);
 }
 
 function pickPage(i) {
   current = i; focus = null; view = {x:0, y:0, k:1};
+  // On a store layer the pick narrows the layer; it is also remembered as the page to
+  // land on when the layer comes off.
+  if (STORE_LAYERS.has(layer)) { pageOnLayer = i; _layout.key = null; }
   closeSheet(); draw();
   if (window.syncReadout) syncReadout();
   // The colour key counts the CURRENT page, and changing the page did not refresh it - so
@@ -1610,7 +1644,17 @@ function pickPage(i) {
   if (window.syncChrome) syncChrome();
   syncPickers();
 }
-pages.onchange = e => pickPage(Number(e.target.value));
+pages.onchange = e => {
+  if (e.target.value === "all") {
+    pageOnLayer = null; focus = null; view = {x:0, y:0, k:1};
+    _layout.key = null; closeSheet(); draw();
+    if (window.syncReadout) syncReadout();
+    if (window.syncChrome) syncChrome();
+    syncPickers();
+    return;
+  }
+  pickPage(Number(e.target.value));
+};
 sections.onchange = e => pickPage(Number(e.target.value));
 
 // Clicking a colour in the key filters the canvas to that status. Toggling, so several
@@ -1662,7 +1706,8 @@ function markFiltered() {
   if (layer) bits.push((LAYERS.find(([k]) => k === layer) || [, layer])[1]);
   if (statusFilter.size) bits.push([...statusFilter].join(" + "));
   if (fileFilter) bits.push(fileFilter.split("/").pop());
-  if (expandedKind) bits.push("opened " + expandedKind.replace(/_/g, " "));
+  if (expandedKind) bits.push("opened " + expandedKind.replace(/_/g, " ").replace(/\/(.+)$/, " $1:*")
+    .replace(/\/$/, " other"));
   note.hidden = bits.length === 0;
   if (!bits.length) return;
   note.innerHTML = `<span>${esc(bits.join(" \u00b7 "))}</span>` +
@@ -1677,8 +1722,8 @@ function markFiltered() {
     expandedKind = null;
     const picker = document.getElementById("ly");
     if (picker) picker.value = "";
-    const wrap = document.getElementById("pgwrap");
-    if (wrap) wrap.hidden = false;
+    pageOnLayer = null;
+    syncPageWrap();
     focus = null;
     syncStatusKey();
     if (window.syncChrome) syncChrome();
@@ -1791,8 +1836,35 @@ function lensAllows(kind, status) {
     (!only || only.has(kind)) &&
     (!statusFilter.size || kind === "page" || statusFilter.has(status));
 }
+// Under a store layer, the Page picker keeps the nodes the picked page - or any of a
+// union's sections - holds. A node with no page list is on no page: a key nothing
+// touches, kept only while every page is showing.
+function pageAllows(n) {
+  if (pageOnLayer === null) return true;
+  const here = PAGES[pageOnLayer];
+  const on = here && here.union ? (GROUP_ENTRIES.get(here.g) || []) : [pageOnLayer];
+  return (n.pg || []).some(i => on.includes(i));
+}
 function lensed(p) {
-  return (p.nodes || []).filter(n => lensAllows(n.kind, n.status));
+  const narrow = p.layer && STORE_LAYERS.has(p.layer) && pageOnLayer !== null;
+  return (p.nodes || []).filter(n => lensAllows(n.kind, n.status) && (!narrow || pageAllows(n)));
+}
+// The whole store under the lens, whichever page is narrowing it.
+function wholeCount() {
+  const store = PAGES[currentPageIndex()];
+  if (!store) return 0;
+  if (!store.nodes) return lensedCount(store);
+  return store.nodes.filter(n => lensAllows(n.kind, n.status)).length;
+}
+// How many of the store layer's nodes a page (or a union's sections) reaches - the
+// number the Page picker shows beside each page while a store is on.
+function reachedCount(i) {
+  const store = PAGES[currentPageIndex()];
+  if (!store || !store.nodes) return 0;
+  const here = PAGES[i];
+  const on = here && here.union ? (GROUP_ENTRIES.get(here.g) || []) : [i];
+  return store.nodes.filter(n => lensAllows(n.kind, n.status) &&
+    (n.pg || []).some(j => on.includes(j))).length;
 }
 // The same count from the manifest, for a page that is not loaded: the picker lists
 // every page and must not decode 60 chunks to number them.
@@ -2081,25 +2153,59 @@ function place(buckets, used, perRow) {
       // `!expandedKind` here once meant that opening ONE kind opened EVERY kind on the
       // page at once - 2,000 cards and every wire between them, the wall this card exists
       // to prevent. A kind is open only when it is the one the reader tapped.
-      if (items.length > AGGREGATE_OVER && expandedKind !== kind) {
-        // One card for the whole kind, sized up because it stands for more.
+      // One card standing for many, keyed so a tap opens exactly this card's nodes.
+      const park = (key, name, parked) => {
+        // One card per kind never reached the edge; one per namespace does, so the
+        // parked cards wrap at the same width the small ones do.
+        if (x > 44 && x + BIG_W > 44 + rowWidth) { x = 44; rowTop += tallest + GAP_Y; tallest = 0; }
         const worst = ["unresolved", "unused", "uncertain", "connected"]
-          .find(st => items.some(n => n.status === st)) || "connected";
-        const open = items.filter(n => n.status === "unresolved" || n.status === "unused").length;
-        aggregates.push({kind, label, x, y: rowTop, w: BIG_W, h: BIG_H,
-                         count: items.length, open, status: worst});
+          .find(st => parked.some(n => n.status === st)) || "connected";
+        const open = parked.filter(n => n.status === "unresolved" || n.status === "unused").length;
+        aggregates.push({kind, key, label: name, x, y: rowTop, w: BIG_W, h: BIG_H,
+                         count: parked.length, open, status: worst});
         // Every node in the kind is parked on the card, so edges still land somewhere
         // truthful and the chain a reader lights still reaches the right region.
-        items.forEach(n => pos.set(n.id, {x, y: rowTop, w: BIG_W, h: BIG_H, agg: true}));
+        parked.forEach(n => pos.set(n.id, {x, y: rowTop, w: BIG_W, h: BIG_H, agg: true}));
         x += BIG_W + GAP_X;
         tallest = Math.max(tallest, BIG_H);
+      };
+      const segmented = SEGMENTED_KINDS.has(kind) && items.length > AGGREGATE_OVER;
+      if (segmented) {
+        // Keys by namespace: `user:*`, `leaderboard:*`. A namespace of one or two keys is
+        // not a namespace, so those pool under "other keys". The open segment lays out as
+        // cards below; the rest stay parked on their own cards.
+        const bySeg = new Map();
+        items.forEach(n => {
+          const seg = segmentOf(n.label);
+          if (!bySeg.has(seg)) bySeg.set(seg, []);
+          bySeg.get(seg).push(n);
+        });
+        const other = [];
+        const segs = [...bySeg].filter(([seg, parked]) => {
+          if (seg && parked.length >= 3) return true;
+          other.push(...parked);
+          return false;
+        }).sort((a, b) => b[1].length - a[1].length);
+        if (other.length) segs.push(["", other]);
+        let opened = null;
+        segs.forEach(([seg, parked]) => {
+          const key = `${kind}/${seg}`;
+          if (expandedKind === key) { opened = parked; return; }
+          park(key, seg ? `${seg}:* ${label.toLowerCase()}` : `other ${label.toLowerCase()}`, parked);
+        });
+        if (!opened) return;
+        items = opened;
+        if (x > 44) { x = 44; rowTop += tallest + GAP_Y; tallest = 0; }
+      } else if (items.length > AGGREGATE_OVER && expandedKind !== kind) {
+        park(kind, label, items);
         return;
       }
       // An opened kind shows one window of EXPAND_PAGE cards; the rest are parked on a
       // "more" card at the end, which is where their wires land and what the reader taps
       // to see the next window. Nothing is cut without a card that says so.
       let shown = items, rest = [];
-      if (expandedKind === kind && items.length > EXPAND_PAGE) {
+      const openKey = segmented ? expandedKind : kind;
+      if (expandedKind === openKey && items.length > EXPAND_PAGE) {
         const from = Math.min(expandedFrom, items.length - 1);
         shown = items.slice(from, from + EXPAND_PAGE);
         rest = items.slice(0, from).concat(items.slice(from + EXPAND_PAGE));
@@ -2112,7 +2218,7 @@ function place(buckets, used, perRow) {
       let rows = Math.ceil(shown.length / perRow);
       if (rest.length) {
         const my = rowTop + rows * (CARD_H + GAP_Y);
-        aggregates.push({kind, label, x, y: my, w: BIG_W, h: BIG_H, more: true,
+        aggregates.push({kind, key: openKey, label, x, y: my, w: BIG_W, h: BIG_H, more: true,
                          count: rest.length, open: 0, status: "connected",
                          from: Math.min(expandedFrom, items.length - 1), total: items.length});
         rest.forEach(n => pos.set(n.id, {x, y: my, w: BIG_W, h: BIG_H, agg: true}));
@@ -2369,13 +2475,15 @@ function jumpTo(id, page) {
     view = {x: 0, y: 0, k: 1};
   }
   layer = "";
+  pageOnLayer = null;
   const picker = document.getElementById("ly");
   if (picker) picker.value = "";
   focus = null;
   if (SECTION_KINDS[mode] === undefined) switchTo("map");
   asList = false;
+  syncPageWrap();
   lit = id;
-  return ensurePage(current).then(() => { draw(); show(id); });
+  return ensurePage(current).then(() => { draw(); show(id); syncPickers(); });
 }
 
 // How many nodes the filter box matched, said out loud. Fading is only meaningful when
@@ -2458,7 +2566,8 @@ function layoutKey() {
   // cached layout - the dropdown said 35 nodes over a canvas still drawing all 392. A
   // cache keyed on less than its function reads is a cache that lies.
   return [current, mode, focus, fileFilter, only, isolate ? lit : "", asList,
-          layer, expandedKind || "", expandedFrom, [...statusFilter].sort().join(",")].join("\u0000");
+          layer, pageOnLayer === null ? "" : pageOnLayer, expandedKind || "", expandedFrom,
+          [...statusFilter].sort().join(",")].join("\u0000");
 }
 
 function layoutFor(p) {
@@ -2511,6 +2620,8 @@ function draw() {
         + (narrowed ? "; filtered" : "")
         + (onPage < inFile ? "; the rest are not reached from any page" : "")
     : focus ? `${here} › ${(byId.get(focus) || {}).label || ""}`
+    // A store has no module to pick; a card here opens a namespace.
+    : STORE_LAYERS.has(layer) ? `${here} — tap a card to open it`
     : `${here} — pick a module`;
   document.getElementById("up").hidden = !focus;
   // draw() is what WRITES the breadcrumb, so the readout has to be told after it, not
@@ -2723,7 +2834,8 @@ function draw() {
       // what is parked here; on the last window the tap wraps back to the first.
       const to = Math.min(g.from + EXPAND_PAGE, g.total), last = to >= g.total;
       const tap = last ? "tap for the first" : "tap for the next";
-      out.push(`<g class="nd agg more" data-kind="${esc(g.kind)}" data-more="1">
+      out.push(`<g class="nd agg more" data-kind="${esc(g.kind)}" data-key="${esc(g.key)}"
+                  data-total="${g.total}" data-more="1">
         <rect x="${g.x}" y="${g.y}" width="${g.w}" height="${g.h}" rx="${NODE_R}"
               fill="var(--panel)" stroke="var(--ink)" stroke-width="2" stroke-dasharray="6 4"/>
         <title>${esc(g.count.toLocaleString())} not in this window — ${tap} ${EXPAND_PAGE}</title>
@@ -2733,7 +2845,7 @@ function draw() {
       </g>`);
       return;
     }
-    out.push(`<g class="nd agg st-${esc(g.status)}" data-kind="${esc(g.kind)}">
+    out.push(`<g class="nd agg st-${esc(g.status)}" data-kind="${esc(g.kind)}" data-key="${esc(g.key)}">
       <rect x="${g.x}" y="${g.y}" width="${g.w}" height="${g.h}" rx="${NODE_R}"
             fill="${F[g.status] || "var(--panel)"}" stroke="${S[g.status] || "var(--dim)"}"
             stroke-width="2"/>
@@ -2812,10 +2924,9 @@ svg.addEventListener("click", e => {
     if (agg.dataset.more) {
       // Next window of the open kind; past the end, wrap to the first.
       expandedFrom += EXPAND_PAGE;
-      const total = (currentPage().nodes || []).filter(n => n.kind === agg.dataset.kind).length;
-      if (expandedFrom >= total) expandedFrom = 0;
+      if (expandedFrom >= Number(agg.dataset.total)) expandedFrom = 0;
     } else {
-      expandedKind = expandedKind === agg.dataset.kind ? null : agg.dataset.kind;
+      expandedKind = expandedKind === agg.dataset.key ? null : agg.dataset.key;
       expandedFrom = 0;
     }
     _layout.key = null;
@@ -3126,6 +3237,7 @@ function show(id) {
     <div class="row"><span class="badge ${esc(n.status)}">${esc(n.status)}</span>
       ${esc(n.kind)}${ch ? " · " + esc(ch) : ""}</div>
     ${n.file ? `<div class="row">${loc(n.file, n.line)}</div>` : ""}
+    ${onPages(n)}
     ${n.note ? `<div class="note">${esc(n.note)}</div>` : ""}
     ${why(n.kind, n.status)}
     ${path.length ? `<div class="lbl">Path — browser to backend · <b>${path.length}</b> hop${
@@ -3155,6 +3267,22 @@ function show(id) {
   }
 }
 document.getElementById("dx").onclick = () => { lit = null; isolate = false; closeSheet(); draw(); };
+
+// Where a store's node is touched from. A key on the Redis layer is a name floating over
+// the whole map until it says which pages reach it; each one is a jump.
+function onPages(n) {
+  const on = (n.pg || []).filter(i => PAGES[i]);
+  if (!on.length) return "";
+  return `<div class="lbl">On pages — <b>${on.length}</b></div>
+    <div class="onpages">${on.map(i =>
+      `<button type="button" class="row rowgo" data-go="${esc(n.id)}" data-page="${i}">${
+        esc(pageLabel(PAGES[i]))} › ${esc(PAGES[i].page)}</button>`).join("")}</div>`;
+}
+dbody.addEventListener("click", event => {
+  const go = event.target.closest && event.target.closest("[data-go]");
+  if (!go) return;
+  jumpTo(go.dataset.go, Number(go.dataset.page));
+});
 
 // Pointer events, not mouse events: one code path covers a mouse, a finger and a pen.
 // Listening for `mousedown` alone left a phone with no pan and no zoom at all, and the
@@ -3547,6 +3675,15 @@ function whyOncePerRun(rows) {
 // answer "how many, of what kind, where" - a switch, not a separate page.
 const D = CONSOLE, panel = document.getElementById("panel");
 const pgwrap = document.getElementById("pgwrap"), viewer = document.getElementById("vw");
+// The ONE place that decides whether the Page picker shows. Three writers used to set
+// it - the view switch, the layer picker, the clear button - and a jump out of Stripe
+// set none of them, so the picker stayed gone on an ordinary page. Choosing a page
+// inside "Stripe" is a question with no answer, so it goes; inside "Redis" it is the
+// question, so it stays.
+function syncPageWrap() {
+  const drawable = SECTION_KINDS[mode] !== undefined && !asList;
+  pgwrap.hidden = !drawable || (SERVICE_LAYERS.has(layer) && !STORE_LAYERS.has(layer));
+}
 const listToggle = document.getElementById("aslist");
 listToggle.onclick = () => { asList = !asList; switchTo(mode); };
 // Overview opens, because "how is this project doing" is the question someone has when
@@ -4358,7 +4495,7 @@ function switchTo(next) {
   document.getElementById("crumb").hidden = !drawable;
   // The search reaches the whole scan, so it is never out of place.
   document.getElementById("q").hidden = false;
-  pgwrap.hidden = !drawable;
+  syncPageWrap();
   listToggle.hidden = !hasLens;
   // Says what you will GET, with a swap sign. It was the trigram U+2630, which a mono
   // face at 13px draws as something that reads like a small 3 beside a 0.
@@ -4430,11 +4567,8 @@ const ly = document.getElementById("ly");
 ly.onchange = e => {
   layer = e.target.value;
   focus = null;
-  // Choosing a page inside "Stripe" is a question with no answer, so the control goes
-  // away rather than sitting there offering counts of zero.
-  const global = SERVICE_LAYERS.has(layer);
-  const wrap = document.getElementById("pgwrap");
-  if (wrap) wrap.hidden = global;
+  pageOnLayer = null;
+  syncPageWrap();
   markFiltered();
   fillPages();
   draw();
@@ -4592,7 +4726,20 @@ _SERVICE_LAYERS = (
     ("stripe", "Stripe", ("stripe_webhook", "stripe_event")),
     ("celery", "Celery", ("celery_task", "celery_schedule")),
     ("graphql", "GraphQL", ("graphql_field", "graphql_selection")),
+    # A store is not on a page either: `user:{id}:stats` is touched from the arena, the
+    # leaderboard and a worker, and the question "show me Redis" wants all of it, with
+    # the key nothing touches - which sits in a not-reached bucket - on the same canvas.
+    # `model` belongs to the database: a Django project's Postgres is invisible without it.
+    ("database", "Database", ("model", "db_table", "db_column", "db_function", "db_policy",
+                              "db_table_use", "db_column_use", "db_function_use",
+                              "edge_function", "edge_function_use", "storage_bucket",
+                              "firestore_collection", "firestore_rule",
+                              "cloud_function", "cloud_function_use")),
+    ("redis", "Redis", ("redis_key", "redis_key_use", "redis_ttl")),
 )
+# The layers whose nodes ARE on pages, and so can say which. A webhook is reached by
+# Stripe and lists none; a key is reached by whichever pages' handlers touch it.
+_STORE_LAYERS = frozenset({"database", "redis"})
 
 # Below this a chunk is plain JSON, so a small map stays readable in the markup and the
 # fixture tests can grep it; above it, gzip + base64. The crossover is where the base64
@@ -4796,6 +4943,17 @@ def _payload(connectivity_map: ConnectivityMap) -> tuple[str, list[Chunk], dict[
                     edges.append(e)
         pages.append((f"layer:{key}", title, "", key, list(seen.values()), edges, None, False))
 
+    # Which ordinary pages hold each node - the sections a person can open, not the
+    # unions built from them and not the not-reached buckets, which hold what no page
+    # holds. A store layer's chunk carries this per node, so a key's card can say where
+    # it is touched from and the Page picker can narrow the layer to one page.
+    on_pages: dict[str, list[int]] = {}
+    for index, (name, _t, _w, layer, nodes, _e, _g, union) in enumerate(pages):
+        if layer or union or name.startswith(f"{UNREACHED_PAGE}:"):
+            continue
+        for node in nodes:
+            on_pages.setdefault(node.id, []).append(index)
+
     meta_pages, chunks = [], []
     file_best: dict[str, tuple[int, int]] = {}
     search_rows, in_search = [], set()
@@ -4842,10 +5000,13 @@ def _payload(connectivity_map: ConnectivityMap) -> tuple[str, list[Chunk], dict[
         if union:
             meta["union"] = True
         meta_pages.append(meta)
-        chunks.append(_chunk(f"p{index}", {
+        rows_chunk = {
             "nodes": rows,
             "edges": [[e.source, e.target, statuses(e.status)] for e in edges],
-        }))
+        }
+        if layer in _STORE_LAYERS:
+            rows_chunk["pg"] = [on_pages.get(node.id, []) for node in nodes]
+        chunks.append(_chunk(f"p{index}", rows_chunk))
         chunks.append(_chunk(f"d{index}", {
             field: [getattr(node, field) or "" for node in nodes] for field in _DETAIL_FIELDS
         }))

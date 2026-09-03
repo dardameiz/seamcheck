@@ -59,6 +59,24 @@ There is still no "whole codebase" page, on purpose: a 40,000-node hairball woul
 none of them. The findings list and the search box are the cross-cutting views; they see
 everything.
 
+## A store, across every page
+
+Redis and the database are not pages, so they are not drawn like one. Pick either from the
+menu and the whole store is drawn once — every key and every table the scan found,
+unioned over every page and over the not-reached buckets, so a key nothing touches sits
+beside the ones that are used. Keys are parked by their first segment (`user:*`,
+`challenges:*`, `other`) and open one namespace at a time, which is what keeps 754 keys
+readable.
+
+The Page picker stays on. **Every page** first, then only the pages that reach something
+in the store; pick one and the store narrows to what that page touches. A card's sheet
+lists the pages it is on, and tapping one jumps to that page with the card open.
+
+One limit, written down in the changelog: a view is tied to a key or table only when the
+use is in the same file. A project whose views hand off to a cache module will show its
+whole store under Every page and nothing under any one page — the store is right, the page
+column is empty.
+
 One menu, and the counts are the current page's.
 
 ![The menu](images/menu.png)

@@ -336,3 +336,83 @@ class PagesAndSections(SimpleTestCase):
         body = self._chunk(out, "search")
         self.assertNotIn(index, body["page"])
         self.assertEqual(body["n"], 4, "url:both once, on the first entry that holds it")
+
+
+class StoreLayers(SimpleTestCase):
+    """Redis and the database are global layers, and each node on them says which pages.
+
+    A key is touched from the arena, the leaderboard and a worker; "show me Redis" wants
+    all of it on one canvas, with the key nothing touches - which sits in a not-reached
+    bucket - beside them. The layer chunk carries, per node, the ordinary pages that
+    hold it, so the browser can narrow the layer to one page and a card can say where
+    it is touched from.
+    """
+
+    @staticmethod
+    def _entries():
+        from seamcheck.mapdata import UNREACHED_PAGE
+
+        def page(name, title, where, keys, extra=()):
+            nodes = [MapNode(f"page:{name}", name, "page", "connected")]
+            edges = []
+            for key in keys:
+                nodes.append(MapNode(f"redis:{key}", key, "redis_key", "connected", file="r.py", line=1))
+                edges.append(MapEdge(f"page:{name}", f"redis:{key}", "connected"))
+            nodes.extend(extra)
+            return PageMap(name, nodes, edges, title=title, where=where)
+
+        model = MapNode("model:Score", "Score", "model", "connected", file="m.py", line=3)
+        arena_a = page("arena-main", "Arena", "/arena/", ["user:1:stats", "leaderboard:hourly"], [model])
+        arena_b = page("arena-side", "Arena", "/arena/", ["user:1:stats"])
+        home = page("home-main", "Home", "/", ["leaderboard:hourly"])
+        orphan = PageMap(f"{UNREACHED_PAGE}:backend",
+                         [MapNode("redis:orphan:key", "orphan:key", "redis_key", "unused",
+                                  file="r.py", line=9)],
+                         [], title="Not reached from any page", where="Reached by nothing — 1")
+        return [arena_a, arena_b, home, orphan]
+
+    def _render(self):
+        import json
+        out = map_html.render(ConnectivityMap("0" * 12, "", self._entries()))
+        start = out.index("{", out.index("MAPDATA"))
+        meta = json.JSONDecoder().raw_decode(out, start)[0]
+        return meta, out
+
+    @staticmethod
+    def _chunk(out, name):
+        import json
+        tag = f'data-chunk="{name}" data-enc="json">'
+        start = out.index(tag) + len(tag)
+        return json.JSONDecoder().raw_decode(out, start)[0]
+
+    def test_each_store_is_one_layer_page_across_the_whole_map(self):
+        meta, out = self._render()
+        names = [p["page"] for p in meta["pages"]]
+        self.assertIn("layer:redis", names)
+        self.assertIn("layer:database", names)
+        redis = self._chunk(out, f"p{names.index('layer:redis')}")
+        ids = sorted(row[0] for row in redis["nodes"])
+        # Every key once, including the one no page reaches.
+        self.assertEqual(ids, ["redis:leaderboard:hourly", "redis:orphan:key", "redis:user:1:stats"])
+        database = self._chunk(out, f"p{names.index('layer:database')}")
+        self.assertEqual([row[0] for row in database["nodes"]], ["model:Score"],
+                         "a Django model is the database")
+
+    def test_a_layer_node_lists_the_ordinary_pages_that_hold_it(self):
+        meta, out = self._render()
+        names = [p["page"] for p in meta["pages"]]
+        redis = self._chunk(out, f"p{names.index('layer:redis')}")
+        on = {row[0]: pg for row, pg in zip(redis["nodes"], redis["pg"], strict=True)}
+        by_name = {name: i for i, name in enumerate(names)}
+        self.assertEqual(on["redis:user:1:stats"],
+                         [by_name["arena-main"], by_name["arena-side"]])
+        self.assertEqual(on["redis:leaderboard:hourly"],
+                         [by_name["arena-main"], by_name["home-main"]])
+        # Not the union the entries were folded into, and not the bucket: on no page.
+        self.assertEqual(on["redis:orphan:key"], [])
+        for pg in redis["pg"]:
+            self.assertNotIn(by_name["group:0"], pg)
+        # Ordinary pages do not carry the column.
+        self.assertNotIn("pg", self._chunk(out, f"p{by_name['arena-main']}"))
+        self.assertNotIn("pg", self._chunk(out, f"p{by_name['layer:stripe']}")
+                         if "layer:stripe" in by_name else {})

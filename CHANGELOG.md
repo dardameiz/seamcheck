@@ -52,8 +52,27 @@ reference project - the first time a release was tested the way a user meets it.
   group. The readout beside the pickers no longer repeats the page's name - the pickers
   say it - and it starts where they end instead of centred, where two of them covered it.
 
+- **Added** — **Redis** and **Database** are layers across the whole map, not a lane on
+  one page. Pick either in the menu and the store is drawn once, unioned over every page
+  *and* over the not-reached buckets, so a key that nothing on any page touches is on the
+  same screen as the ones that are; `model` symbols count as database. Keys are parked by
+  their first segment (`user:*` 60, `challenges:*` 13, … `other` 49) and open one namespace
+  at a time - the reference project's 754 Redis nodes draw in 0.8 s. The Page picker stays
+  on while a store is up: **Every page** first, then only the pages that reach something
+  in the store, and picking one narrows the store to what that page touches. A card's
+  sheet lists the pages it is on, and tapping one jumps there with the card open. The
+  Page picker's visibility now has one writer; before, leaving Stripe by way of a jump
+  lost the picker until the layer was switched again.
+
 Known open, recorded rather than hidden:
 
+- **Store attribution stops at the handler's file.** A view is linked to the keys and
+  tables it touches only when both sit in the same file (the nearest view above the
+  use). A project whose views delegate to a cache or service module - the reference
+  project does, everywhere - lists no page under Redis or Database: all 754 keys sit in
+  Every page and none in Push Arena. The layer is still right about the store; it is the
+  page column that is empty. Following the call from the view into the module it
+  delegates to is the fix, and it is a scan-side change, not a map one.
 - **`connected` is not stable between two scans of the same commit** on the reference
   project: 40,168 / 40,169 / 40,171 / 40,175 across five runs of identical code, with
   `unused` (1,485), `unresolved` (2,581) and `uncertain` (3,711) fixed. The total moves

@@ -50,3 +50,6 @@ UNRESOLVED  redis_ttl  cache:board:*   names itself a cache, written with no exp
 Key patterns are normalised before they are compared, so `user:{uid}:stats`,
 `user:${id}:stats` and `user:%s:stats` are one key — a Python writer meets a JavaScript
 reader.
+
+On the map, each store is a layer across every page — see
+[A store, across every page](the-map.md#a-store-across-every-page).

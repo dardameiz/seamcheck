@@ -1047,3 +1047,135 @@ class PageThenSection(SimpleTestCase):
         # it starts after them now, and the right corner's buttons end it.
         for shot in (first, third, section):
             self.assertTrue(shot["clear"], "the readout sits under a corner's controls")
+
+
+class StoreLayerInTheBrowser(SimpleTestCase):
+    """Redis as a layer over the whole map, narrowed by the Page picker.
+
+    The picker stays while a store is on - "Every page" first, then each page with how
+    many of the store's nodes it reaches. Keys are parked by namespace, not by kind, and
+    a key's card says which pages touch it, each a jump.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        try:
+            from playwright.sync_api import sync_playwright  # noqa: F401
+        except ImportError:  # pragma: no cover - depends on the optional extra
+            raise unittest.SkipTest("playwright is not installed (the observe extra)") from None
+
+    def _url(self) -> str:
+        from seamcheck.mapdata import build_map
+        from seamcheck.pagenames import PageName
+        from seamcheck.renderers.map_html import render_document
+
+        def sym(kind, label, file, status=Status.CONNECTED):
+            return Symbol(id=f"{kind}:{label}", kind=kind, label=label, sub="", file=file, line=1,
+                          status=status, snippet=label, chain=[label], note="")
+
+        # A page is seeded by the fetches in its files and walked fetch -> url -> view ->
+        # key, so each page gets that chain, and the keys hang off the view.
+        symbols, edges = [], []
+        def page_chain(name, keys):
+            fetch = sym("fetch_target", f"/api/{name}/", f"static/{name}.js")
+            url = sym("url", f"api/{name}/", "app/urls.py")
+            view = sym("view", name, "app/views.py")
+            symbols.extend([fetch, url, view])
+            edges.append(Edge(from_id=fetch.id, to_id=url.id, status=Status.CONNECTED))
+            edges.append(Edge(from_id=url.id, to_id=view.id, status=Status.CONNECTED))
+            for k in keys:
+                edges.append(Edge(from_id=view.id, to_id=k.id, status=Status.CONNECTED))
+
+        arena = [sym("redis_key", f"user:{i}:stats", "app/arena.py") for i in range(30)]
+        boards = [sym("redis_key", f"leaderboard:{n}", "app/home.py") for n in ("hourly", "daily", "season")]
+        shared = sym("redis_key", "season:active", "app/shared.py")
+        stray = [sym("redis_key", "cursor", "app/home.py"), sym("redis_key", "lock", "app/home.py")]
+        orphan = sym("redis_key", "orphan:key", "app/worker.py", Status.UNUSED)
+        symbols.extend(arena + boards + [shared] + stray + [orphan])
+        page_chain("arena", arena + [shared])
+        page_chain("home", boards + [shared] + stray)
+        graph = Graph(symbols=symbols, edges=edges)
+        pages = {"arena-main": {"static/arena.js"}, "home-main": {"static/home.js"}}
+        names = {"arena-main": PageName("Arena", "/arena/", "arena-main"),
+                 "home-main": PageName("Home", "/", "home-main")}
+        connectivity = build_map(graph, pages, git_sha="0" * 12, names=names)
+        document = render_document(connectivity, console=_console_for(graph))
+        path = pathlib.Path(tempfile.mkdtemp()) / "map.html"
+        path.write_text(document.single_file(), encoding="utf-8")
+        return path.as_uri()
+
+    def test_every_page_then_one_page_and_a_key_says_where_it_is_touched(self):
+        from playwright.sync_api import sync_playwright
+
+        errors: list[str] = []
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch()
+            except Exception as error:  # pragma: no cover - no browser downloaded
+                raise unittest.SkipTest(f"no chromium: {error}") from None
+            page = browser.new_page()
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.goto(page_url := self._url(), wait_until="load")
+            page.wait_for_timeout(250)
+            _open_lens(page, "map")
+            page.wait_for_timeout(200)
+            read = "() => ({" \
+                "pages: [...document.querySelectorAll('#pg option')].map(o => o.textContent)," \
+                "picked: document.getElementById('pg').value," \
+                "pickerShown: !document.getElementById('pgwrap').hidden," \
+                "drawn: document.querySelectorAll('#cv .nd:not(.agg)').length," \
+                "aggs: [...document.querySelectorAll('#cv .nd.agg')].map(g =>" \
+                "  [g.dataset.key, g.querySelector('.big').textContent])," \
+                "labels: [...document.querySelectorAll('#cv .nd:not(.agg) .lbl, #cv .nd:not(.agg) text')]" \
+                "  .map(t => t.textContent)})"
+            page.select_option("#ly", "redis")
+            page.wait_for_function("() => !!PAGES[currentPageIndex()].nodes")
+            page.wait_for_timeout(200)
+            every = page.evaluate(read)
+            home = page.evaluate("() => [...document.querySelectorAll('#pg option')]"
+                                 ".find(o => o.textContent.startsWith('Home')).value")
+            page.select_option("#pg", home)
+            page.wait_for_timeout(200)
+            narrowed = page.evaluate(read)
+            # Back to the whole store, open the user:* namespace.
+            page.select_option("#pg", "all")
+            page.wait_for_timeout(200)
+            page.click('#cv .nd.agg[data-key="redis_key/user"]')
+            page.wait_for_timeout(200)
+            opened = page.evaluate(read)
+            # A key on two pages says so, and the first one is a jump.
+            page.evaluate("() => show('redis_key:season:active')")
+            page.wait_for_timeout(200)
+            sheet = page.evaluate("() => [...document.querySelectorAll('#dbody [data-go]')]"
+                                  ".map(b => [b.textContent, b.dataset.page])")
+            page.click('#dbody [data-go]')
+            page.wait_for_timeout(300)
+            landed = page.evaluate("() => ({page: PAGES[current].page, layer,"
+                                   " pickerShown: !document.getElementById('pgwrap').hidden,"
+                                   " picked: document.getElementById('pg').value})")
+            browser.close()
+
+        self.assertEqual(errors, [], page_url)
+        # The whole store: every key, the orphan included, with the picker offering pages.
+        self.assertTrue(every["pickerShown"])
+        self.assertEqual(every["picked"], "all")
+        self.assertEqual(every["pages"][0], "Every page — 37 nodes")
+        self.assertEqual([p.split(" — ")[0] for p in every["pages"][1:3]], ["Arena · /arena/", "Home · /"])
+        self.assertIn("Home · / — 6 nodes", every["pages"], "how many of the store's nodes Home reaches")
+        self.assertEqual(len(every["pages"]), 3, "a page reaching none of the store is not offered")
+        # Thirty-seven keys are parked by namespace, the two lone ones under "other".
+        self.assertEqual(dict(every["aggs"]), {"redis_key/user": "30", "redis_key/leaderboard": "3",
+                                               "redis_key/": "4"})
+        # Home: its three boards, the shared key and the two strays; no user:* card.
+        self.assertEqual(narrowed["picked"], home)
+        self.assertEqual(narrowed["aggs"], [])
+        self.assertEqual(narrowed["drawn"], 6)
+        self.assertEqual(narrowed["pages"][0], "Every page — 37 nodes", "the whole store's count holds")
+        # Opening user:* lays out its thirty keys and leaves the other namespaces parked.
+        self.assertEqual(opened["drawn"], 30)
+        self.assertEqual(dict(opened["aggs"]), {"redis_key/leaderboard": "3", "redis_key/": "4"})
+        self.assertEqual([b[0] for b in sheet], ["Arena · /arena/ › arena-main", "Home · / › home-main"])
+        # The jump lands on the page, with the layer off and the picker back.
+        self.assertEqual(landed, {"page": "arena-main", "layer": "", "pickerShown": True,
+                                  "picked": str(sheet[0][1])})
