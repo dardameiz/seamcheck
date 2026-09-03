@@ -433,6 +433,7 @@ def _url_literals(
                 id=target_id, kind="fetch_target", label=target, sub="literal",
                 file=path, line=line, status=Status.UNCERTAIN, snippet=f'"{target}"',
                 chain=[basename, enclosing] if enclosing else [basename], note=_LITERAL_NOTE,
+                owner=enclosing,
             )
         )
     return symbols, edges
@@ -471,6 +472,7 @@ def _http_symbols(
                     id=call_id, kind="js_call", label=target, sub=basename, file=path,
                     line=line, status=Status.CONNECTED,
                     snippet=f'fetch("{target}")', chain=chain, note=_EXTERNAL_NOTE,
+                    owner=enclosing,
                 )
             )
             continue
@@ -481,7 +483,7 @@ def _http_symbols(
                 Symbol(
                     id=call_id, kind="js_call", label=target, sub=basename, file=path,
                     line=line, status=status, snippet=snippet,
-                    chain=chain, note="" if exact else _PREFIX_NOTE,
+                    chain=chain, note="" if exact else _PREFIX_NOTE, owner=enclosing,
                 )
             )
             target_id = f"fetch:{target}"
@@ -491,7 +493,7 @@ def _http_symbols(
                     Symbol(
                         id=target_id, kind="fetch_target", label=target, sub="", file=path,
                         line=line, status=status, snippet=snippet,
-                        chain=[target], note="" if exact else _PREFIX_NOTE,
+                        chain=[target], note="" if exact else _PREFIX_NOTE, owner=enclosing,
                     )
                 )
             edges.append(Edge(from_id=call_id, to_id=target_id, status=status))
@@ -501,6 +503,7 @@ def _http_symbols(
                     id=call_id, kind="js_call", label="fetch(<runtime value>)", sub=basename,
                     file=path, line=line, status=Status.UNCERTAIN,
                     snippet="fetch(<dynamic value>)", chain=chain, note=_DYNAMIC_NOTE,
+                    owner=enclosing,
                 )
             )
     return symbols, edges

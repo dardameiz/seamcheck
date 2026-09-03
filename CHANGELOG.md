@@ -83,6 +83,14 @@ reference project - the first time a release was tested the way a user meets it.
   that command on the clipboard. `check` JSON carries the list as `returned`; a mark
   whose finding is gone is listed softly as *outlived its finding*, not raised. Older
   `triage.json` files load unchanged.
+- **Added** — **every symbol says which function it lives in.** A card named the variable
+  and the file, and left the reader to find the function themselves - the one thing they
+  already had open. Each symbol now carries an `owner`: the `def` a Python line sits in
+  (`submit_push`, `StoreManager.apply`), or the enclosing JavaScript function, which the
+  JS side had been reading all along and throwing away. The card reads top-down - the
+  thing, the function, the file, the evidence - the findings list names the function on
+  each row, `--explain` prints it, and the `unverified` JSON carries it. Descriptive
+  only: no status depends on it, so a wrong owner cannot become a wrong finding.
 
 Known open, recorded rather than hidden:
 

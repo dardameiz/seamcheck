@@ -31,6 +31,11 @@ class Symbol:
     snippet: str
     chain: list[str]
     note: str
+    # The function this line sits in - `submit_push`, `StoreManager.apply`, the enclosing
+    # JavaScript function. Empty at module level, which is a fact rather than a gap.
+    # Descriptive only: no status depends on it, so a wrong owner can never become a wrong
+    # finding.
+    owner: str = ""
 
 
 @dataclass

@@ -127,6 +127,9 @@ class MapNode:
     # because of the directory it sits in is the mistake this is meant to prevent.
     lang: str = ""
     service: str = ""
+    # The function this line sits in. A card that names the variable and the file but not
+    # the function is missing the one thing the person reading it already knows.
+    owner: str = ""
 
 
 @dataclass
@@ -193,7 +196,7 @@ def _node(symbol: Symbol, context: bool = True, snippet_limit: int = 400,
         snippet=(symbol.snippet or "")[:snippet_limit],
         context=_context(symbol.file, symbol.line)
                 if context and symbol.kind in _CONTEXT_KINDS else "",
-        file=symbol.file, line=symbol.line, note=symbol.note,
+        file=symbol.file, line=symbol.line, note=symbol.note, owner=symbol.owner,
         lang=language_of(symbol.file),
         service=services.of(symbol.file) if services and symbol.file else "",
     )

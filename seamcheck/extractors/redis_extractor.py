@@ -38,6 +38,7 @@ from seamcheck.adapters.discovery import SKIP_DIRS
 from seamcheck.extractors.js_extractor import _walk, iter_parsed
 from seamcheck.graph import Edge, Status, Symbol
 from seamcheck.nodetools import node_line
+from seamcheck.pyscope import owners_of
 
 # What a call to Redis is called, and whether it reads or writes. Names shared with dicts
 # and Maps (`get`, `set`, `keys`) are the reason a receiver check matters below.
@@ -139,11 +140,16 @@ def _looks_like_key(pattern: str) -> bool:
 
 
 class _Hit:
-    __slots__ = ("key", "raw", "file", "line", "write", "ttl", "receiver", "method", "nx")
+    __slots__ = ("key", "raw", "file", "line", "write", "ttl", "receiver", "method", "nx",
+                 "owner")
 
-    def __init__(self, key, raw, file, line, write, ttl, receiver, method="", nx=False):
+    def __init__(self, key, raw, file, line, write, ttl, receiver, method="", nx=False,
+                 owner=""):
         self.key, self.raw, self.file, self.line = key, raw, file, line
         self.nx = nx
+        # The function this touch happens in. "Which handler writes this key" is the
+        # question a reader actually has, and the key symbol alone cannot answer it.
+        self.owner = owner
         # The op itself, not just whether it writes. `delete` is in _WRITES because it
         # changes the store, and the TTL check read that as "stored with no expiry" - so
         # every cache.delete() in one project was reported as a key kept forever. 0 of 8
@@ -204,6 +210,7 @@ def _scan_python(root: str) -> list[_Hit]:
             except (OSError, SyntaxError, ValueError):
                 continue
             rel = os.path.relpath(path, root)
+            owners = owners_of(tree)
             for node in ast.walk(tree):
                 if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
                     continue
@@ -223,6 +230,7 @@ def _scan_python(root: str) -> list[_Hit]:
                 hits.append(_Hit(
                     _normalise(pattern), pattern, rel, node.lineno,
                     method in _WRITES, ttl, receiver, method, nx,
+                    owners.get(node.lineno, ""),
                 ))
     return hits
 
@@ -389,6 +397,7 @@ def extract_redis(root: str) -> tuple[list[Symbol], list[Edge]]:
                  else f"{len(writers)} write / {len(readers)} read"),
             file=where.file, line=where.line, status=status,
             snippet=where.raw, chain=sorted({h.file for h in group})[:4], note=note,
+            owner=where.owner,
         ))
 
         # Where each touch of this key actually happens. The key symbol above is one per
@@ -408,7 +417,7 @@ def extract_redis(root: str) -> tuple[list[Symbol], list[Edge]]:
                 id=use_id, kind="redis_key_use", label=key,
                 sub="writes" if hit.write else "reads",
                 file=hit.file, line=hit.line, status=Status.CONNECTED,
-                snippet=hit.raw, chain=[key],
+                snippet=hit.raw, chain=[key], owner=hit.owner,
                 note=("This line " + ("writes" if hit.write else "reads") +
                       " the key. Whether the two halves agree is decided on the key "
                       "itself, not here."),
@@ -426,7 +435,7 @@ def extract_redis(root: str) -> tuple[list[Symbol], list[Edge]]:
             symbols.append(Symbol(
                 id=f"redis_ttl:{key}:{hit.file}:{hit.line}", kind="redis_ttl",
                 label=key, sub="no expiry", file=hit.file, line=hit.line,
-                status=Status.UNRESOLVED, snippet=hit.raw, chain=[key],
+                status=Status.UNRESOLVED, snippet=hit.raw, chain=[key], owner=hit.owner,
                 note="This key names itself a cache and is written without an expiry, so "
                      "Redis keeps it forever.",
             ))

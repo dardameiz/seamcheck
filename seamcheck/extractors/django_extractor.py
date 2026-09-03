@@ -111,6 +111,10 @@ def extract_django_urls_views(
                     snippet=f"def {view_name}(request): ...",
                     chain=[view_name],
                     note="",
+                    # A view IS a function. Naming it here is what lets the function
+                    # filter draw everything `submit_push` touches beside the route that
+                    # reaches it.
+                    owner=view_name.rsplit(".", 1)[-1],
                 )
             )
         edges.append(Edge(from_id=url_id, to_id=view_id, status=Status.CONNECTED))

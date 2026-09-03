@@ -189,7 +189,7 @@ def _dom_selectors_in_uncached(path: str, ast_root: dict, line_offset: int = 0) 
                 id=f"dom_selector:data:{name}:{path}:{line}", kind="dom_selector",
                 label=name, sub="data:read", file=path, line=line,
                 status=Status.UNCERTAIN, snippet=snippet,
-                chain=[basename, enclosing] if enclosing else [basename],
+                chain=[basename, enclosing] if enclosing else [basename], owner=enclosing,
                 note="Reads a data attribute. Evidence that the attribute is used; the "
                      "verdict belongs to the attribute, not to this read.",
             )
@@ -375,7 +375,7 @@ def extract_js_css_tokens(
                     line=_line(node),
                     status=Status.UNCERTAIN,
                     snippet=f"{callee_name}('{name}'{'' if reading else ', ...'})",
-                    chain=[basename, enclosing] if enclosing else [basename],
+                    chain=[basename, enclosing] if enclosing else [basename], owner=enclosing,
                     note="Read from JavaScript through the CSS-OM." if reading
                     else "Defined at runtime by JavaScript, not in any stylesheet.",
                 )
@@ -508,7 +508,7 @@ def extract_js_class_usages(
             Symbol(
                 id=symbol_id, kind="dom_selector", label=name, sub="class:apply", file=path,
                 line=line, status=Status.UNCERTAIN, snippet=snippet,
-                chain=[basename, enclosing] if enclosing else [basename],
+                chain=[basename, enclosing] if enclosing else [basename], owner=enclosing,
                 note="JavaScript puts this class on an element. Carried as evidence that a "
                      "rule of the same name is live, not as a claim about this line - so it "
                      "is uncertain by design, and never a finding.",
@@ -656,6 +656,7 @@ def _definition(kind_sub: str, name: str, path: str, line, enclosing: str, snipp
         status=Status.UNCERTAIN,
         snippet=snippet,
         chain=[os.path.basename(path), enclosing] if enclosing else [os.path.basename(path)],
+        owner=enclosing,
         note="Created by JavaScript at runtime. No template renders it, which is why a "
              "template-only scan reported everything querying it as reaching for nothing.",
     )

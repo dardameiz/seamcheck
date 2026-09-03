@@ -850,6 +850,9 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
 .row .w { color:var(--muted); font-size:11.5px; word-break:break-all;
           font-family:var(--mono); }
 .row .n { color:var(--muted); font-size:12px; margin-top:4px; }
+.row.owner { font-family:var(--mono); font-size:13px; word-break:break-all; }
+.row.owner .kw { color:var(--sig); margin-right:6px; }
+.row .w .own { color:var(--sig); }
 .badge, .pill { display:inline-block; font-size:9.5px; text-transform:uppercase;
                 letter-spacing:.06em; border:1px solid transparent; border-radius:5px;
                 padding:1px 6px; margin-right:6px; font-weight:600; }
@@ -1256,7 +1259,7 @@ const CHUNKS = new Map();
 
 function inflateNode(row) {
   const K = MAPDATA.kinds, S_ = MAPDATA.statuses, FI = MAPDATA.files;
-  const LA = MAPDATA.langs || [], SV = MAPDATA.services || [];
+  const LA = MAPDATA.langs || [], SV = MAPDATA.services || [], OW = MAPDATA.owners || [];
   const n = {note: "", snippet: "", context: ""};
   NODE_FIELDS.forEach((field, i) => {
     const v = row[i];
@@ -1265,6 +1268,7 @@ function inflateNode(row) {
       : field === "file" ? (FI[v] || "")
       : field === "lang" ? (LA[v] || "")
       : field === "service" ? (SV[v] || "")
+      : field === "owner" ? (OW[v] || "")
       : (v == null ? (field === "line" ? null : "") : v);
   });
   return n;
@@ -3266,6 +3270,17 @@ function deduper() {
   });
 }
 
+// A card used to read: the name, then the file. A developer reads the other way round -
+// the name, then the FUNCTION it lives in, then the file, then the line of source. The
+// function is the thing they already have open, and it was the one part the card never
+// said. Written in the language's own keyword, because `def submit_push` and
+// `function loadOrders` are what the reader will search for.
+function ownerLine(n) {
+  if (!n.owner) return "";
+  const word = n.lang === "Python" ? "def" : "function";
+  return `<div class="row owner"><span class="kw">${word}</span> ${esc(n.owner)}</div>`;
+}
+
 function show(id) {
   const n = byId.get(id); if (!n) return;
   const at = pageIndexOf(id);
@@ -3296,6 +3311,7 @@ function show(id) {
     </div>
     <div class="row"><span class="badge ${esc(n.status)}">${esc(n.status)}</span>
       ${esc(n.kind)}${ch ? " · " + esc(ch) : ""}</div>
+    ${ownerLine(n)}
     ${n.file ? `<div class="row">${loc(n.file, n.line)}</div>` : ""}
     ${onPages(n)}
     ${n.note ? `<div class="note">${esc(n.note)}</div>` : ""}
@@ -4410,7 +4426,8 @@ function renderPanel() {
       </select></div>
     ${page.map((r, i) => `<div class="row"><span class="badge ${esc(r.status)}">${esc(r.status)}</span>${markPill(r.id)}
        <div class="t">${esc(r.label)}</div>
-       <div class="w">${esc(r.kind)}${r.file ? " · " + loc(r.file, r.line) : ""}</div>
+       <div class="w">${esc(r.kind)}${r.file ? " · " + loc(r.file, r.line) : ""}${
+         r.owner ? ' · <span class="own">' + esc(r.owner) + "</span>" : ""}</div>
        ${r.note ? `<div class="n">${esc(r.note)}</div>` : ""}
        ${notes[i]}</div>`).join("")
       || `<div class="gap">No rows match.</div>`}
@@ -4795,7 +4812,8 @@ def _esc(value) -> str:
 # What a node row carries on the wire. The three long strings - note, snippet, context -
 # are not here: they were 34% of a real map's bytes and are read only when a sheet or the
 # code box opens, so they travel in a detail chunk of their own (see _payload).
-_NODE_FIELDS = ("id", "label", "kind", "status", "file", "line", "lang", "service")
+_NODE_FIELDS = ("id", "label", "kind", "status", "file", "line", "lang", "service",
+                "owner")
 _DETAIL_FIELDS = ("note", "snippet", "context")
 
 # A service does not live on a page: a Stripe webhook is reached by Stripe and a Celery
@@ -4979,6 +4997,9 @@ def _payload(connectivity_map: ConnectivityMap) -> tuple[str, list[Chunk], dict[
     # Interned like the others: a repository has a handful of languages and services, and
     # every node repeats one of each.
     langs, services = _Table(), _Table()
+    # Interned hardest of all: every symbol a function owns repeats that function's name,
+    # and a hot handler owns dozens.
+    owners = _Table()
     changed = connectivity_map.changed
     commits = connectivity_map.commits or []
 
@@ -4989,6 +5010,7 @@ def _payload(connectivity_map: ConnectivityMap) -> tuple[str, list[Chunk], dict[
             node.id, node.label, kinds(node.kind), statuses(node.status),
             files(node.file or ""), node.line,
             langs(node.lang or ""), services(node.service or ""),
+            owners(node.owner or ""),
         ]
         while len(row) > 4 and not row[-1]:
             row.pop()
@@ -5163,6 +5185,7 @@ def _payload(connectivity_map: ConnectivityMap) -> tuple[str, list[Chunk], dict[
         "files": files.values,
         "langs": langs.values,
         "services": services.values,
+        "owners": owners.values,
         "pages": meta_pages,
     }
     # Which page draws most of each file. Read only when a file is picked from the Files

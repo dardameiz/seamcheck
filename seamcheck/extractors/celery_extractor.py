@@ -192,6 +192,10 @@ def extract_celery(root: str) -> tuple[list[Symbol], list[Edge]]:
             status=Status.CONNECTED if reached else Status.UNCERTAIN,
             snippet=f"@shared_task\\ndef {name}(...): ...", chain=[dotted],
             note="" if reached else _NO_CALLER_NOTE,
+            # A task IS a function, so it answers to its own name in the function filter:
+            # somebody looking for `reset_hourly` should find the task, not only its
+            # callers.
+            owner=name,
         ))
 
     seen: set[str] = set()

@@ -56,6 +56,10 @@ class Row:
     line: int | None
     note: str
     snippet: str
+    # The function this row's line sits in. A list of forty findings that all name their
+    # function reads as "eleven of these are in one place", which is the first thing worth
+    # knowing about a list of forty findings.
+    owner: str = ""
 
 
 @dataclass
@@ -92,6 +96,7 @@ def _row(symbol: Symbol) -> Row:
     return Row(
         id=symbol.id, label=symbol.label or "/", kind=symbol.kind, status=symbol.status.value,
         file=symbol.file, line=symbol.line, note=symbol.note, snippet=symbol.snippet,
+        owner=symbol.owner,
     )
 
 

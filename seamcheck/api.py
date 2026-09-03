@@ -324,6 +324,7 @@ def explain(graph: Graph, symbol_id: str) -> str:
         "",
         f"- **status:** {symbol.status.value}",
         f"- **where:** {symbol.file}:{symbol.line}" if symbol.file else "- **where:** (not a file)",
+        f"- **in:** {symbol.owner}()" if symbol.owner else "",
         f"- **chain:** {' -> '.join(symbol.chain)}" if symbol.chain else "",
         "",
         "```",
@@ -510,6 +511,7 @@ def unverified(repo_root: str = ".", limit: int = 25, kind: str = "") -> dict:
                 "label": symbol.label,
                 "file": symbol.file,
                 "line": symbol.line,
+                "owner": symbol.owner,
                 "note": symbol.note,
             }
             for symbol in claims[:limit]

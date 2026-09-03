@@ -1324,3 +1324,98 @@ class MarksInTheBrowser(SimpleTestCase):
         self.assertFalse(held["returned"])
         self.assertIn("bob", held["mark"])
         self.assertIn("js-applied", held["mark"])
+
+
+class TheFunctionOnTheCard(SimpleTestCase):
+    """A card names the function the line sits in, in that language's own keyword.
+
+    The reader already has `submit_push` open in an editor. A card that says the variable
+    and the file, and never the function, makes them find that themselves - which is the
+    one step they did not need help with.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        try:
+            from playwright.sync_api import sync_playwright  # noqa: F401
+        except ImportError:  # pragma: no cover - depends on the optional extra
+            raise unittest.SkipTest("playwright is not installed (the observe extra)") from None
+
+    def _url(self) -> str:
+        from seamcheck.console import build_console
+        from seamcheck.mapdata import build_map
+        from seamcheck.renderers.map_html import render_document
+        from seamcheck.report import build_report
+
+        def symbol(kind, label, status=Status.CONNECTED, file="app/views.py", owner=""):
+            return Symbol(id=f"{kind}:{label}", kind=kind, label=label, sub="", file=file,
+                          line=12, status=status, snippet=f"{kind} {label}", chain=[label],
+                          note="", owner=owner)
+
+        graph = Graph(symbols=[
+            symbol("url", "api/orders/"),
+            symbol("view", "orders", owner="orders"),
+            symbol("redis_key_use", "cart:{user}:items", owner="submit_push"),
+            symbol("module", "orders.js", file="static/js/orders.js"),
+            symbol("fetch_target", "/api/gone/", Status.UNRESOLVED, "static/js/orders.js",
+                   owner="loadOrders"),
+        ], edges=[])
+        report = build_report(graph=graph, diff=None, entries=[], git_sha="0" * 12)
+        connectivity = build_map(graph, {"orders-main": {s.id for s in graph.symbols}},
+                                 git_sha="0" * 12)
+        document = render_document(connectivity, console=build_console(graph, report))
+        path = pathlib.Path(tempfile.mkdtemp()) / "map.html"
+        path.write_text(document.single_file(), encoding="utf-8")
+        return path.as_uri()
+
+    def test_the_card_says_def_for_python_and_function_for_javascript(self):
+        from playwright.sync_api import sync_playwright
+
+        errors: list[str] = []
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch()
+            except Exception as error:  # pragma: no cover - no browser downloaded
+                raise unittest.SkipTest(f"no chromium: {error}") from None
+            page = browser.new_page()
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.goto(page_url := self._url(), wait_until="load")
+            page.wait_for_timeout(250)
+            _open_lens(page, "findings")
+            page.wait_for_function("() => document.querySelectorAll('#panel .row').length > 0")
+            listed = page.evaluate(
+                "() => [...document.querySelectorAll('#panel .row')].map(r => "
+                "(r.querySelector('.w') || {}).textContent || '')")
+            _goto_page_with(page, "unresolved")
+            page.evaluate("() => show('fetch_target:/api/gone/')")
+            page.wait_for_function("() => !!document.querySelector('#dbody .row.owner')")
+            js = page.evaluate("() => document.querySelector('#dbody .row.owner').textContent")
+            # The Redis touch lives on the store layer, not on this page: `byId` holds
+            # the open page only, so the card has to be opened where the node is.
+            page.evaluate("""() => {
+                const i = PAGES.findIndex(p => p.page === 'layer:redis');
+                return jumpTo('redis_key_use:cart:{user}:items', i);
+            }""")
+            page.wait_for_function(
+                "() => (document.querySelector('#dbody .row.owner') || {}).textContent"
+                ".includes('submit_push')")
+            py = page.evaluate("() => document.querySelector('#dbody .row.owner').textContent")
+            order = page.evaluate("""() => {
+                const rows = [...document.querySelectorAll('#dbody .row')];
+                return {
+                  owner: rows.findIndex(r => r.classList.contains('owner')),
+                  file: rows.findIndex(r => !!r.querySelector('.loc')),
+                };
+            }""")
+            browser.close()
+
+        self.assertEqual(errors, [], page_url)
+        self.assertIn("function loadOrders", " ".join(js.split()))
+        self.assertIn("def submit_push", " ".join(py.split()))
+        # ...and the function is above the file, which is the whole point of the order:
+        # the thing, then who owns it, then where it is.
+        self.assertGreater(order["file"], order["owner"] , order)
+        self.assertNotEqual(order["owner"], -1, order)
+        self.assertTrue(any("loadOrders" in text for text in listed),
+                        "the findings list names the function too")
