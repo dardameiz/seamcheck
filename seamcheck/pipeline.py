@@ -559,6 +559,33 @@ def run_scan(
             [s for s in css_symbols + js_tokens if s.kind == "css_token_use"],
         )
 
+        # A guard that always fires, and the code below it that therefore never runs.
+        # Read AFTER matching, from what matching decided is missing, so it can never
+        # disagree with it: fourteen findings on the reference project were one dead
+        # region, and the region is the thing worth reporting.
+        from seamcheck.dead_region import (
+            demote_dead_writers,
+            find_dead_regions,
+            fold_into_regions,
+        )
+
+        missing = {
+            symbol.label
+            for symbol in dom_selectors
+            if symbol.kind == "dom_selector" and symbol.label != "<dynamic>"
+            and any(edge.from_id == symbol.id and edge.to_id == symbol.id
+                    and edge.status is Status.UNRESOLVED for edge in dom_edges)
+        }
+        region_symbols, spans = find_dead_regions(js_evidence_files, missing)
+        symbols += region_symbols
+        # ...and everything inside a region now points AT the region instead of being
+        # raised on its own. A reference made by code that does not execute is neither
+        # right nor wrong until the region runs again.
+        edges = fold_into_regions(spans, symbols, edges)
+        # ...and a multi-writer whose second writer is inside one of those regions is not
+        # a fight between two writers. It is one live writer and a corpse.
+        symbols = demote_dead_writers(spans, symbols, dom_writes)
+
     # What the handler does after the request lands. Without this a chain stops at the
     # view: the map draws browser -> seam -> server and then nothing, though the server
     # plainly talks to a store, queues a job and reads a cache. The second seam was

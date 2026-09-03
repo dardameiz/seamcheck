@@ -138,3 +138,33 @@ class ScriptBlocksAreNotMarkupTests(SimpleTestCase):
         """)
         rows = {s.label: s.line for s in found if s.kind == "dom_attr"}
         self.assertEqual(rows["after-the-script"], 6)
+
+
+class JsonScriptTests(SimpleTestCase):
+    """`json_script:"name"` renders an element with that id, and nothing looked for it.
+
+    It is Django's own recommended way to hand data to JavaScript, there is no `id=` in
+    the template text, and the element was invisible here - so `getElementById` for one
+    read as a query for nothing. The dead-region pass then turned one such miss into a
+    claim about 161 unreachable lines that run fine.
+    """
+
+    def _scan(self, text: str):
+        path = pathlib.Path(tempfile.mkdtemp()) / "page.html"
+        path.write_text(textwrap.dedent(text), encoding="utf-8")
+        return scan_templates([str(path)])
+
+    def test_the_filter_declares_the_id(self):
+        found = self._scan("""
+            <div>{{ payment_intent_ids_json|json_script:"purchase-receipt-data" }}</div>
+        """)
+        self.assertEqual([(s.sub, s.label) for s in found if s.kind == "dom_attr"],
+                         [("id", "purchase-receipt-data")])
+
+    def test_single_quotes_and_spacing_too(self):
+        found = self._scan("""
+            {{ data|json_script:'chart-data' }}
+            {{ more|json_script: "other-data" }}
+        """)
+        self.assertEqual(sorted(s.label for s in found if s.kind == "dom_attr"),
+                         ["chart-data", "other-data"])

@@ -202,6 +202,14 @@ _SPECIFIC: dict[str, tuple[str, str]] = {
         "Listed for completeness, not as a finding.",
     ),
     # ---- DOM wiring ------------------------------------------------------------------
+    "dead_region|unresolved": (
+        "A guard at the top of this function returns because an element it looks up is "
+        "not rendered anywhere - so the code below the guard has not run since the "
+        "markup changed.",
+        "Unreachable, not unreferenced, and that is the larger of the two: every finding "
+        "inside the region is a symptom of this one line. Read the guard, decide whether "
+        "the feature should exist, then delete the region or restore the element.",
+    ),
     "dom_selector|unresolved": (
         "JavaScript queries for this selector and no template renders a matching element.",
         "Either the element is created at runtime by JavaScript, or it comes from a "

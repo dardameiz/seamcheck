@@ -31,6 +31,10 @@ BACKEND_KINDS = (
 FRONTEND_KINDS = (
     "js_call", "fetch_target", "dom_selector", "dom_attr", "json_field",
     "css_selector", "css_token_def", "css_token_use", "multi_writer_element",
+    # Unreachable, not unreferenced. Listed with the DOM kinds because that is where its
+    # evidence comes from, and counted like any other finding - it just replaces a dozen
+    # of them with the one fact underneath.
+    "dead_region",
 )
 STORE_KINDS = (
     "db_table", "db_column", "db_function", "db_policy",
@@ -155,7 +159,8 @@ def build_console(graph: Graph, report: Report) -> Console:
             "dom", "DOM Wiring",
             "Template elements, the selectors JavaScript uses against them, and elements "
             "more than one file writes.",
-            rows=_rows(graph, ("multi_writer_element", "dom_selector", "dom_attr"), findings_only=True),
+            rows=_rows(graph, ("dead_region", "multi_writer_element", "dom_selector",
+                               "dom_attr"), findings_only=True),
         ),
         Section(
             "backend", _backend_title(graph),

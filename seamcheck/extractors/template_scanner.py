@@ -166,6 +166,14 @@ def _without_code_blocks(text: str) -> str:
     return _SCRIPT_OR_STYLE_RE.sub(blank, text)
 
 
+# `{{ ids|json_script:"purchase-receipt-data" }}` renders
+# `<script id="purchase-receipt-data" type="application/json">`, and it is Django's own
+# recommended way to hand data to JavaScript. There is no `id=` in the template text, so
+# the element was invisible here and every `getElementById` for one read as a query for
+# nothing - which the dead-region pass then multiplied into a claim about 161 unreachable
+# lines that run perfectly well.
+_JSON_SCRIPT_RE = re.compile(r"""json_script:\s*(?:"([^"]+)"|'([^']+)')""")
+
 # Where each opening tag begins, so two attributes on ONE tag can be recognised as one
 # element. "Same line" is not the same question: this project's templates run 400
 # characters wide and put four unrelated tags on a line.
@@ -238,6 +246,22 @@ def scan_templates(template_files: list[str]) -> list[Symbol]:
                         element=element, note="",
                     )
                 )
+
+        # Ids rendered by a filter rather than written as an attribute.
+        for match in _JSON_SCRIPT_RE.finditer(raw):
+            name = match.group(1) or match.group(2)
+            line = _line_of(raw, match.start())
+            symbols.append(
+                Symbol(
+                    id=f"dom_attr:id:{name}:{file_path}:{line}", kind="dom_attr",
+                    label=name, sub="id", file=file_path, line=line,
+                    status=Status.UNCERTAIN, snippet=f'json_script:"{name}"',
+                    chain=[pathlib.Path(file_path).name, name],
+                    element=f"{file_path}:json_script:{match.start()}",
+                    note="Rendered by Django's json_script filter, which writes a "
+                         "<script> element carrying this id.",
+                )
+            )
 
         # Ids the markup READS. Evidence, never a claim: a fragment can legitimately point
         # at an element some script creates later, so "nothing defines it" is not a

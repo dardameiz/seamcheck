@@ -197,6 +197,36 @@ no `getAttribute`, no `[data-base-achieved]` selector, no stylesheet. Graded fal
 "referenced from 2 files"; it is a true finding, and the same shape as correction 2. A
 mention is not a use.
 
+## 9. Shipped: the region, and the two findings it settled
+
+§7 and §8's third rule are done. `seamcheck/dead_region.py` reads, after matching, the
+guards that always fire, and reports the region instead of its symptoms - one finding
+naming the guard, the missing elements and the stranded line count, with everything
+inside it pointing at the region rather than being raised alone.
+
+**Found 9 regions, 224 lines, on the reference project.** Hand-verified as true: the
+50-line `script.js` "Ball Game playground" (`#particleContainer`, `#playBall` in no
+template), `updateAvatarNavButtons` + `initializeAvatarPagination` in `push_arena.js`
+(67 lines, `#avatarPrevBtn` exists only in its own lookup), `createSpeedParticles` in
+`stats_manager.js` (39 lines, `.speed-particles` exists nowhere else),
+`showLostStreakBuyBackButton` (22 lines), `updateTimelinePosition` (20 lines) and
+`updateCollectionStatus` (18 lines, where the markup says `obtained-buttons-modal` and
+the code asks for `obtained-buttons`).
+
+**One was false, and its root cause is fixed:** `{{ ids|json_script:"name" }}` renders a
+`<script id="name">` and the scanner did not know the filter, so a 161-line region was
+claimed over code that runs fine. A region finding multiplies a single missed declaration
+by a hundred lines - which is the argument for it and the reason it has to be fed by
+verified evidence only.
+
+**M3 is shipped with it:** a multi-writer whose second writer sits in a dead region, and
+which has fewer than two live writers left, is reported as a corpse rather than a fight.
+
+**Method note, for the record:** verifying `updateCollectionStatus` by hand, a plain
+substring search said `obtained-buttons` was in the template - it was
+`obtained-buttons-modal`. That is the adjudication's own trap 1, in the other direction,
+hit while checking the tool. Whole-token comparison, both ways round.
+
 ## Measured, 2026-09-04
 
 Reference project, claims (`unresolved` + `unused`) before and after §1-§4 and §8:

@@ -173,6 +173,38 @@ reference project - the first time a release was tested the way a user meets it.
   that stopped being claims are the ones a hands-on review had already reclassified as
   not-defects.
 
+- **Added** — **unreachable, said once, instead of unreferenced said fourteen times.**
+  A guard at the top of a function that returns because an element it looks up is rendered
+  nowhere means everything below it has not run since the markup changed. The reference
+  project had exactly that: three ids deleted long ago, and **292 lines** below the guard,
+  reported as **fourteen separate findings** at the same severity as a one-line typo. It
+  is now one `dead_region` finding naming the guard, the missing elements and how many
+  lines are stranded, and every finding inside the region points at it rather than being
+  raised on its own - because a reference made by code that does not execute is neither
+  right nor wrong until the region runs again.
+
+  Deliberately narrow: the guard must be a direct statement of the function body, its
+  condition must be one this can read (`!a`, `!a || !b`, `!(a && b)` - never `!a && !b`,
+  where one missing element proves nothing), and every element it names must be one
+  matching has already decided is missing. A return inside a branch ends the function too,
+  and this says nothing about it.
+
+  Found **9 regions, 224 lines** on the reference project. Seven were hand-verified true,
+  including a 50-line "Ball Game playground" whose elements exist in no template, and a
+  39-line particle routine in a file nobody suspected. One was false and is fixed below.
+- **Fixed** — **`json_script` declares an element.**
+  `{{ ids|json_script:"purchase-receipt-data" }}` renders
+  `<script id="purchase-receipt-data">`, and it is Django's own recommended way to hand
+  data to JavaScript - but there is no `id=` in the template text, so the element was
+  invisible and every `getElementById` for one read as a query for nothing. The
+  dead-region pass then turned that single miss into a claim about **161 unreachable
+  lines that run perfectly well**, which is how a good finding kind earns distrust.
+- **Fixed** — **a multi-writer whose second writer never runs is not a fight.** Deleting
+  one dead function on the reference project retired two multi-writer reports, because
+  one of the two writers had been unreachable all along. Where a writer sits inside a dead
+  region and fewer than two live writers remain, the report says so instead of sending
+  someone to reconcile a conflict that cannot happen.
+
 Known open, recorded rather than hidden:
 
 - **The call graph is Python only, and name-keyed.** JavaScript functions carry their
