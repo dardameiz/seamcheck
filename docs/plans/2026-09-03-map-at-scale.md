@@ -257,6 +257,9 @@ Verify: a Python unit test that replays the simulation above over `_payload` out
 
 ### Phase 2 — data out of the HTML (1–2 weeks)
 
+**Landed (2026-09-03), narrower than drawn below:** `MapDocument` in `map_html.py` holds head / tail / chunks and decides late between `single_file()` (inline `text/plain` blocks, unchanged) and `bundle()` (`index.html` + `data/<chunk>.js` JSONP, `SC.chunk(name, enc, payload)`); `api.map_document()` / `api.write_map_document()` write either, auto-bundling past `SINGLE_FILE_LIMIT` (50 MB) with a note; `--bundle` on both CLIs; served mode serves the in-memory bundle under `/<token>/data/…` (bare token 301s to the slash form so relative `data/` resolves). No `map_bundle.py` and no separate manifest yet: the manifest (page titles/counts, FILES tree, CONSOLE, OBSERVED) is still inline in `index.html`, which is why it is 2.2 MB for pointlessbutton and 9 MB at 3.7M synthetic symbols - that is the next cut (§2.2 `manifest.js`, lazy FILES). `tools/synth_map.py --bundle` measures the folder form; tests in `test_map_bundle.py` and the `file://` case in `test_map_runs_in_a_browser.py`.
+
+
 Files: new `seamcheck/renderers/map_bundle.py` (chunk writer, manifest), `map_html.py` (loader `SC.chunk()`, inflate to typed arrays, async `jumpTo`, `fillPages` from manifest), `api.py` (`_render_map` returns a bundle object; `report(fmt="map")` keeps returning the single-file string when under threshold), `cli.py:543-550` and `management/commands/seamcheck.py:358-393` (write a directory; `--single-file`), `serve.py` (serve the bundle directory under the token path; keep `/source`), tests (`test_renderer_map.py:22-31` becomes "no cross-origin `src`/`href`"; also resolve the Google Fonts `<link>` at `:4462-4471`, which already fails that test).
 
 - Chunk encoding per §2.2; detail lazy; `commits.js`, `console.js`, `observed.js` split out.

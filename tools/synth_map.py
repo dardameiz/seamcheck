@@ -15,6 +15,7 @@ the shape the real one has, and renders it through the same `render()` the CLI u
     python tools/synth_map.py 37000            # ~pointlessbutton
     python tools/synth_map.py 730000           # ~10M lines at 73 symbols per 1k lines
     python tools/synth_map.py 730000 --open    # then open it headless and report heap
+    python tools/synth_map.py 730000 --bundle --open   # the folder form: index.html + data/
 
 Prints render wall time, peak RSS, file size, and the size of the largest chunk. With
 --open, drives the file in headless Chromium (DPR 1, 768 MB heap cap so a runaway kills
@@ -33,7 +34,7 @@ import time
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from seamcheck.mapdata import ConnectivityMap, MapEdge, MapNode, PageMap  # noqa: E402
-from seamcheck.renderers.map_html import render  # noqa: E402
+from seamcheck.renderers.map_html import render_document  # noqa: E402
 
 KINDS = ["dom_selector", "dom_attr", "api_call", "route", "view", "template_var",
          "js_export", "js_import", "css_class", "celery_task", "stripe_event",
@@ -125,23 +126,41 @@ def main() -> int:
     ap.add_argument("symbols", type=int)
     ap.add_argument("--out", default="")
     ap.add_argument("--open", action="store_true")
+    ap.add_argument("--bundle", action="store_true",
+                    help="write the folder form (index.html + data/*.js) instead of one file")
     args = ap.parse_args()
-    out = pathlib.Path(args.out or f"/tmp/synth_{args.symbols}.html")
+    suffix = "" if args.bundle else ".html"
+    out = pathlib.Path(args.out or f"/tmp/synth_{args.symbols}{suffix}")
 
     t0 = time.time()
     cm = build(args.symbols)
     built = time.time() - t0
     t0 = time.time()
-    html = render(cm)
+    document = render_document(cm)
+    if args.bundle:
+        html, assets = document.bundle()
+        (out / "data").mkdir(parents=True, exist_ok=True)
+        for relative, body in assets.items():
+            (out / relative).write_bytes(body)
+        (out / "index.html").write_text(html)
+        chunks = [(name, enc, text) for name, enc, text in document.chunks]
+        total = len(html) + sum(len(b) for b in assets.values())
+        opened = out / "index.html"
+    else:
+        html = document.single_file()
+        out.write_text(html)
+        chunks = re.findall(r'data-chunk="([^"]+)" data-enc="(\w+)">(.*?)</script>', html, re.S)
+        total = len(html)
+        opened = out
     rendered = time.time() - t0
-    out.write_text(html)
     rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024 ** 2)
-    chunks = re.findall(r'data-chunk="([^"]+)" data-enc="(\w+)">(.*?)</script>', html, re.S)
     biggest = max(chunks, key=lambda c: len(c[2]))
     inline = len(re.search(r"const MAPDATA=(.*?);</script>", html, re.S).group(1))
     print(f"{args.symbols:,} symbols across {len(cm.pages)} pages: build {built:.1f}s, "
           f"render {rendered:.1f}s, peak RSS {rss:.0f} MB")
-    print(f"  {out} = {len(html) / 1e6:.1f} MB; MAPDATA {inline / 1e6:.2f} MB; "
+    print(f"  {out} = {total / 1e6:.1f} MB"
+          + (f" (index.html {len(html) / 1e6:.1f} MB)" if args.bundle else "")
+          + f"; MAPDATA {inline / 1e6:.2f} MB; "
           f"{len(chunks)} chunks; biggest {biggest[0]} {biggest[1]} {len(biggest[2]) / 1e6:.2f} MB")
     if not args.open:
         return 0
@@ -164,7 +183,7 @@ def main() -> int:
             return f"{m['JSHeapUsedSize'] / 1048576:.0f} MB"
 
         t0 = time.time()
-        page.goto(out.as_uri())
+        page.goto(opened.as_uri())
         page.wait_for_function("typeof PAGES !== 'undefined' && PAGES.some(p => p.nodes)", timeout=120000)
         print(f"  open {time.time() - t0:.2f}s, heap {heap()}")
         page.evaluate("switchTo('map')")

@@ -81,6 +81,11 @@ class Command(BaseCommand):
         )
         parser.add_argument("--out", default=None, help="Write to PATH instead of stdout ('-' for stdout).")
         parser.add_argument(
+            "--bundle", action="store_true",
+            help="Write the map as a folder (small index.html + data/ loaded as needed) "
+                 "rather than one file. Automatic above 50 MB.",
+        )
+        parser.add_argument(
             "--open", action="store_true", dest="open_it",
             help="Open the written file in your browser when it is done.",
         )
@@ -344,6 +349,11 @@ class Command(BaseCommand):
             if graph is None:
                 graph = api.scan(repo_root, bar)
             text = json.dumps(graph_to_dict(graph), indent=2)
+        elif fmt in ("map", "console"):
+            document = api.map_document(repo_root, ref=options["since"] or "HEAD",
+                                        progress=bar)
+            bar.finish()
+            return self._write_map(document, options)
         else:
             try:
                 text = api.report(
@@ -390,6 +400,38 @@ class Command(BaseCommand):
                 open_it=options.get("open_it"),
                 sources=set(LAST_MAP_FILES) if fmt == "map" else None,
                 repo_root=repo_root,
+            )
+
+    def _write_map(self, document, options):
+        """The map, written as one file or a folder, then served from memory.
+
+        Served, it is always the folder form: the page arrives at once and each chunk is
+        one small request when it is looked at, so a large repository's map opens as fast
+        as a small one. On disk it is one file unless asked otherwise (`--bundle`, or an
+        `--out` that is a folder) or the file would be too large to open comfortably.
+        """
+        repo_root = options["repo_root"]
+        serving = options["serve"] and not options["no_serve"]
+        destination = options["out"]
+        if destination == "-":
+            return self.stdout.write(document.single_file())
+        if destination is None:
+            config = getattr(settings, "SEAMCHECK_CONFIG", {})
+            key, fallback = _DOCUMENTS["map"]
+            destination = config.get(key) or fallback
+        path = pathlib.Path(repo_root) / destination
+        written, note = api.write_map_document(document, str(path), bundle=options.get("bundle") or None)
+        self.stdout.write(f"  wrote  {written}")
+        if note:
+            self.stdout.write(f"  {note}")
+        if not serving and options.get("open_it"):
+            self._open(pathlib.Path(written).resolve().as_uri())
+        if serving:
+            index, assets = document.bundle()
+            self._serve(
+                index, "map", tunnel=options["tunnel"], local_only=options["local_only"],
+                open_it=options.get("open_it"), sources=set(api.LAST_MAP_FILES),
+                repo_root=repo_root, assets=assets,
             )
 
     def _wrote(self, path, text: str, open_it: bool = False):
@@ -474,7 +516,7 @@ class Command(BaseCommand):
         )
 
     def _serve(self, text, fmt, tunnel=False, local_only=False, open_it=False,
-               sources=None, repo_root: str = ""):
+               sources=None, repo_root: str = "", assets=None):
         """Hold the report open until interrupted, and name every way in."""
         from seamcheck.serve import public_tunnel, serve_addresses
 
@@ -483,7 +525,7 @@ class Command(BaseCommand):
 
         server, addresses = serve_addresses(
             text, host="127.0.0.1" if local_only else "0.0.0.0",
-            sources=sources, repo_root=repo_root,
+            sources=sources, repo_root=repo_root, assets=assets,
         )
         self.stdout.write("")
         self.stdout.write(f"  open   {addresses['local']}")

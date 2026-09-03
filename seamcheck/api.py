@@ -657,6 +657,74 @@ def _service_map(repo_root: str):
 
 
 def _render_map(repo_root: str, ref: str, progress: Progress | None = None) -> str:
+    """The map as one HTML file. See map_document() for the form that can be a bundle."""
+    return _map_document(repo_root, ref, progress).single_file()
+
+
+def map_document(repo_root: str = ".", ref: str = "HEAD", progress: Progress | None = None):
+    """Scan and render the map, undecided between one file and a bundle.
+
+    `report(fmt="map")` builds the single file. This returns the `MapDocument` behind
+    it, so a caller can ask `prefers_bundle()` and write a directory instead - the form
+    a very large repository needs, where the file a reader opens stays small and each
+    page's rows arrive from `data/` when looked at. `write_map_document()` makes that choice.
+    """
+    from seamcheck.extractors.js_extractor import clear_parse_cache
+
+    try:
+        return _map_document(repo_root, ref, progress)
+    finally:
+        clear_parse_cache()
+
+
+def write_map_document(document, destination: str, bundle: bool | None = None) -> tuple[str, str]:
+    """Write a map where asked, as one file or as a directory. Returns (path, note).
+
+    A directory is written when asked for one (`bundle=True`, or a destination that is a
+    directory or has no .html suffix), or when the single file would be too large to
+    open comfortably - then it goes to a directory named after the requested file, and
+    the note says so. A single file otherwise. Stale `data/*.js` in a directory this
+    tool wrote before are removed, so a page that no longer exists cannot be served
+    from a previous run.
+    """
+    import shutil
+
+    from seamcheck.renderers.map_html import BUNDLE_DATA_DIR
+
+    target = pathlib.Path(destination)
+    looks_like_dir = (target.is_dir() or destination.endswith(("/", os.sep))
+                      or target.suffix.lower() not in (".html", ".htm"))
+    note = ""
+    if bundle is None:
+        bundle = looks_like_dir or document.prefers_bundle()
+        if bundle and not looks_like_dir:
+            target = target.with_suffix("")
+            note = (f"Written as a folder: one file would be "
+                    f"{document.single_file_size / 1_048_576:.0f} MB, which a browser "
+                    f"has to hold in full before it can draw. Open {target / 'index.html'}.")
+    if not bundle:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(document.single_file(), encoding="utf-8")
+        return str(target), note
+
+    index, assets = document.bundle()
+    data_dir = target / BUNDLE_DATA_DIR
+    index_path = target / "index.html"
+    if data_dir.is_dir() and (not index_path.is_file()
+                              or "seamcheck" not in index_path.read_text(
+                                  encoding="utf-8", errors="replace")[:4096].lower()):
+        raise ValueError(f"{target} already has a {BUNDLE_DATA_DIR}/ folder that is not a "
+                         f"Seamcheck map; choose another destination.")
+    if data_dir.is_dir():
+        shutil.rmtree(data_dir)
+    data_dir.mkdir(parents=True, exist_ok=True)
+    for relative, body in assets.items():
+        (target / relative).write_bytes(body)
+    index_path.write_text(index, encoding="utf-8")
+    return str(index_path), note
+
+
+def _map_document(repo_root: str, ref: str, progress: Progress | None = None):
     progress = progress or null()
     js_entry_files, _, _extra = _js_roots(_config(), repo_root)
     from seamcheck.console import build_console
@@ -710,7 +778,7 @@ def _render_map(repo_root: str, ref: str, progress: Progress | None = None) -> s
     LAST_MAP_FILES.update(
         symbol.file for symbol in graph.symbols if symbol.file
     )
-    return map_html.render(
+    return map_html.render_document(
         build_map(graph, page_files, git_sha=sha, services=_service_map(repo_root),
                   baseline=baseline, baseline_sha=baseline_sha if baseline else None,
                   names=page_names(repo_root, _config(), graph),

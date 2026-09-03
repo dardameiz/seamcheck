@@ -19,6 +19,20 @@ backend that answered `uncertain` everywhere would score 100% precision and be u
 
 ## Unreleased
 
+- **The map can be written as a folder, so the file a reader opens stays small however
+  big the repository is.** `seamcheck map --out map/` (or `--bundle`) writes `index.html`
+  plus `data/<chunk>.js`, one JSONP file per page for the graph, one per page for the
+  detail, one for the search index and one for the commit history; the page fetches each
+  as a classic `<script src>` the first time it is looked at, which is the one on-demand
+  loader a `file://` page is allowed. A map whose single file would pass 50 MB is written
+  this way on its own and says so; `seamcheck map` alone still prints one file. Served
+  and shared maps use the same bundle in memory (`/<token>/data/…`, nothing on disk).
+  pointlessbutton: **index.html 2.2 MB** instead of 5.5 MB, 258 data files, 3 requests
+  to open and search a page. Synthetic 3.7M symbols across 5,900 pages (about the
+  symbol count of a 50-100M-line monorepo): index.html 9 MB, opens in 0.52 s at 31 MB
+  heap, biggest page (832k symbols) drawn in 1.6 s at 193 MB, no console errors. The
+  55 MB search chunk at that size is the next thing to shard.
+
 - **A scan of a 21,000-file monorepo no longer loses every JavaScript symbol.** The
   parser writes one JSON line per file to a pipe; on macOS those writes are asynchronous
   and unbounded, and at 2.6 GB of output (n8n) node died with `write ENOBUFS` - the whole

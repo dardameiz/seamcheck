@@ -16,4 +16,9 @@ seamcheck share      # a report about the scan containing none of your code
 
 Useful flags: `--format terminal|markdown|html|map|json` · `--out FILE` · `--serve` /
 `--no-serve` · `--tunnel` (a temporary public HTTPS link, for your phone) · `--local-only` ·
-`--since REF` · `--open`.
+`--since REF` · `--open` · `--bundle`.
+
+A map is one HTML file by default. `seamcheck map --out map/` (a folder, or `--bundle`)
+writes a small `index.html` plus `data/*.js`, and each page's rows are fetched only when
+looked at - the form a very large repository needs. A map that would pass 50 MB as one
+file is written this way on its own, and the command says so.

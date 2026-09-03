@@ -1277,27 +1277,51 @@ function inflateNode(row) {
   return n;
 }
 
-// One chunk, decoded once. gzip+base64 goes through a data: URL and DecompressionStream,
-// which is the one path that works when the map is opened as a file - reading a
-// sibling file is refused there, and a module script never runs. The text is dropped
-// from the DOM once read: the base64 alone was 20 MB on a real map.
+// One chunk, decoded once. It arrives one of two ways: an inert text block in the
+// page (the single file), or its own script beside the page when BUNDLE names a
+// directory - a classic <script src> being the one on-demand loader a browser allows
+// from file://. gzip+base64 goes through a data: URL and DecompressionStream either way.
+// Inline text is dropped from the DOM once read: the base64 alone was 20 MB on a real map.
+function decodeChunk(enc, text) {
+  if (enc !== "gz") return Promise.resolve(typeof text === "string" ? JSON.parse(text) : text);
+  if (typeof DecompressionStream === "undefined") {
+    return Promise.reject(new Error("This browser cannot unpack the map (no DecompressionStream)."
+      + " Chrome 80, Safari 16.4 or Firefox 113 and later can."));
+  }
+  return fetch("data:application/octet-stream;base64," + text)
+    .then(r => new Response(r.body.pipeThrough(new DecompressionStream("gzip"))).text())
+    .then(JSON.parse);
+}
+// A bundled chunk is a file that calls SC.chunk(name, enc, text) when it runs. The
+// handler is registered before the script is added, so the call always finds it; a
+// file that is missing (onerror) or says nothing (onload without a call) resolves to
+// null, which every reader already treats as an empty chunk.
+const PENDING = new Map();
+window.SC = {chunk(name, enc, text) {
+  const settle = PENDING.get(name);
+  if (settle) settle(decodeChunk(enc, text));
+}};
+function loadBundled(name) {
+  return new Promise(resolve => {
+    let done = false;
+    const finish = value => { if (!done) { done = true; PENDING.delete(name); resolve(value); } };
+    PENDING.set(name, finish);
+    const s = document.createElement("script");
+    s.onload = () => { finish(null); s.remove(); };
+    s.onerror = () => { finish(null); s.remove(); };
+    s.src = BUNDLE + encodeURIComponent(name) + ".js";
+    document.head.appendChild(s);
+  });
+}
 function readChunk(name) {
   if (CHUNKS.has(name)) return CHUNKS.get(name);
   const el = document.querySelector(`script[type="text/plain"][data-chunk="${name}"]`);
   let promise;
-  if (!el) promise = Promise.resolve(null);
-  else if (el.dataset.enc === "gz") {
-    if (typeof DecompressionStream === "undefined") {
-      promise = Promise.reject(new Error("This browser cannot unpack the map (no DecompressionStream)."
-        + " Chrome 80, Safari 16.4 or Firefox 113 and later can."));
-    } else {
-      const text = el.textContent;
-      promise = fetch("data:application/octet-stream;base64," + text)
-        .then(r => new Response(r.body.pipeThrough(new DecompressionStream("gzip"))).text())
-        .then(JSON.parse);
-    }
-  } else promise = Promise.resolve(JSON.parse(el.textContent));
-  promise.then(() => { if (el) el.textContent = ""; }, () => {});
+  if (el) {
+    promise = decodeChunk(el.dataset.enc, el.textContent);
+    promise.then(() => { el.textContent = ""; }, () => {});
+  } else if (typeof BUNDLE === "string" && BUNDLE) promise = loadBundled(name);
+  else promise = Promise.resolve(null);
   CHUNKS.set(name, promise);
   return promise;
 }
@@ -4634,24 +4658,91 @@ def _json(value) -> str:
     return json.dumps(value, separators=(",", ":")).replace("</", "<\\/")
 
 
-def _chunk(name: str, value) -> str:
+# One block of deferred data: (name, encoding, text). The same triple is written two
+# ways - inline in the single file, or as its own `data/<name>.js` in a bundle - so the
+# page decodes it through one path whichever way it arrived.
+Chunk = tuple[str, str, str]
+
+
+def _chunk(name: str, value) -> Chunk:
     """One block of data the page decodes on demand.
 
-    `type="text/plain"` makes the parser skip it: nothing is evaluated, nothing is
-    allocated beyond the text itself, until a reader asks for the page it belongs to.
     Above the inline limit the JSON is gzipped and base64'd - `DecompressionStream`
-    reads it back from a `data:` URL, which is the one loader that works from `file://`
-    (a `<script src>` needs a sibling file, and reading one from a page is refused).
+    reads it back from a `data:` URL, which is the one decoder that works from `file://`
+    (reading a sibling file with fetch() is refused there, and a module script never
+    runs). Below it the JSON stays as it is, so a small map is readable in the markup.
     """
     text = _json(value)
     if len(text) < _CHUNK_INLINE_LIMIT:
-        return f'<script type="text/plain" data-chunk="{name}" data-enc="json">{text}</script>'
+        return name, "json", text
     packed = gzip.compress(text.encode("utf-8"), compresslevel=6, mtime=0)
-    return (f'<script type="text/plain" data-chunk="{name}" data-enc="gz">'
-            f'{base64.b64encode(packed).decode("ascii")}</script>')
+    return name, "gz", base64.b64encode(packed).decode("ascii")
 
 
-def _payload(connectivity_map: ConnectivityMap) -> tuple[str, str]:
+def _inline(chunk: Chunk) -> str:
+    """The chunk as an inert block in the page.
+
+    `type="text/plain"` makes the parser skip it: nothing is evaluated, nothing is
+    allocated beyond the text itself, until a reader asks for the page it belongs to.
+    """
+    name, enc, text = chunk
+    return f'<script type="text/plain" data-chunk="{name}" data-enc="{enc}">{text}</script>'
+
+
+def _asset(chunk: Chunk) -> bytes:
+    """The chunk as its own script file, for a bundle.
+
+    A classic `<script src>` is the one on-demand loader a browser allows from `file://`,
+    so the file is a call the page registers a handler for (JSONP, in effect) rather than
+    data it would have to fetch. JSON is a JS literal, so the small case costs no parse
+    of its own; the gz case hands the page the same base64 the inline block would.
+    """
+    name, enc, text = chunk
+    body = text if enc == "json" else json.dumps(text)
+    return f'SC.chunk({json.dumps(name)},{json.dumps(enc)},{body});\n'.encode()
+
+
+# A single file above this is written as a bundle instead: the browser has to hold the
+# whole file as text before the first page can draw, and past this the wait is a page
+# that looks hung. A bundle's index.html is ~1 MB whatever the repository's size.
+SINGLE_FILE_LIMIT = 50 * 1024 * 1024
+
+BUNDLE_DATA_DIR = "data"
+
+
+class MapDocument:
+    """A rendered map, before it is decided whether it is one file or a directory.
+
+    The shell (markup, styles, script, the small inline tables) is the same either way;
+    only the chunks move. `single_file()` inlines them; `bundle()` writes each as
+    `data/<name>.js` beside an `index.html` that loads them on demand, so the file a
+    reader opens stays small however large the repository is.
+    """
+
+    def __init__(self, head: str, tail: str, chunks: list[Chunk]):
+        self.head, self.tail, self.chunks = head, tail, chunks
+
+    @property
+    def single_file_size(self) -> int:
+        """Bytes the one-file form would be, without building it."""
+        return len(self.head) + len(self.tail) + sum(len(c[2]) + 80 for c in self.chunks)
+
+    def prefers_bundle(self) -> bool:
+        return self.single_file_size > SINGLE_FILE_LIMIT
+
+    def single_file(self) -> str:
+        return "\n".join([self.head, "<script>const BUNDLE=null;</script>",
+                          *(_inline(c) for c in self.chunks), self.tail])
+
+    def bundle(self) -> tuple[str, dict[str, bytes]]:
+        """(index.html, {relative path: bytes}) for the directory form."""
+        prefix = f"{BUNDLE_DATA_DIR}/"
+        index = "\n".join([self.head, f"<script>const BUNDLE={json.dumps(prefix)};</script>",
+                           self.tail])
+        return index, {f"{prefix}{c[0]}.js": _asset(c) for c in self.chunks}
+
+
+def _payload(connectivity_map: ConnectivityMap) -> tuple[str, list[Chunk]]:
     """The map as (inline meta, deferred chunks).
 
     The meta is what the page needs before a reader touches anything: the string
@@ -4791,7 +4882,7 @@ def _payload(connectivity_map: ConnectivityMap) -> tuple[str, str]:
         "filePage": {path: index for path, (index, _) in file_best.items()},
         "pages": meta_pages,
     }
-    return _json(meta), "\n".join(chunks)
+    return _json(meta), chunks
 
 
 def _why_reasons() -> dict:
@@ -4868,6 +4959,16 @@ def _js(value) -> str:
 def render(connectivity_map: ConnectivityMap, console=None, files=None,
            repo_root: str = "", editor: str | None = None, series=None,
            adapters=None, observed=None, share_payload=None) -> str:
+    """The map as one self-contained HTML file."""
+    return render_document(connectivity_map, console=console, files=files,
+                           repo_root=repo_root, editor=editor, series=series,
+                           adapters=adapters, observed=observed,
+                           share_payload=share_payload).single_file()
+
+
+def render_document(connectivity_map: ConnectivityMap, console=None, files=None,
+                    repo_root: str = "", editor: str | None = None, series=None,
+                    adapters=None, observed=None, share_payload=None) -> MapDocument:
     mode = (
         f"diff vs {_esc(connectivity_map.baseline_sha[:12])}"
         if connectivity_map.baseline_sha
@@ -4881,7 +4982,7 @@ def render(connectivity_map: ConnectivityMap, console=None, files=None,
             ("unused", "var(--warn)"), ("uncertain", "var(--dim)"),
         )
     )
-    return "\n".join([
+    head = "\n".join([
         "<!doctype html>",
         # The pack is stamped on the root so `body` and every panel inherit it, and it is
         # stamped in the markup rather than by script so the first paint is already Aurora
@@ -5019,9 +5120,9 @@ def render(connectivity_map: ConnectivityMap, console=None, files=None,
         # offer a different vocabulary.
         f"<script>const WHY={_js(_why_reasons())};</script>",
         f"<script>const SHARE={_js(share_payload or {})};</script>",
-        # The rows themselves, after everything the script reads at once: inert text
-        # blocks the loader decodes one page at a time (see _chunk).
-        chunks,
-        f"<script>{_SCRIPT}</script>",
-        "</body></html>",
     ])
+    # The rows themselves come after everything the script reads at once - inline as
+    # inert text blocks, or as files beside the page - and the loader decodes them one
+    # page at a time (see _chunk and MapDocument).
+    tail = "\n".join([f"<script>{_SCRIPT}</script>", "</body></html>"])
+    return MapDocument(head, tail, chunks)

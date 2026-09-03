@@ -89,17 +89,75 @@ class MapRunsInABrowser(SimpleTestCase):
         except ImportError:  # pragma: no cover - depends on the optional extra
             raise unittest.SkipTest("playwright is not installed (the observe extra)") from None
 
-    def _render(self, series=None) -> str:
+    def _document(self, series=None):
         from seamcheck.mapdata import build_map
-        from seamcheck.renderers.map_html import render
+        from seamcheck.renderers.map_html import render_document
 
         graph = _fixture_graph()
         pages = {"orders-main": {s.id for s in graph.symbols}}
         connectivity = build_map(graph, pages, git_sha="0" * 12)
-        html = render(connectivity, console=_console_for(graph), series=series)
+        return render_document(connectivity, console=_console_for(graph), series=series)
+
+    def _render(self, series=None) -> str:
         path = pathlib.Path(tempfile.mkdtemp()) / "map.html"
-        path.write_text(html, encoding="utf-8")
+        path.write_text(self._document(series).single_file(), encoding="utf-8")
         return path.as_uri()
+
+    def _render_bundle(self) -> str:
+        from seamcheck.api import write_map_document
+
+        folder = pathlib.Path(tempfile.mkdtemp()) / "map"
+        written, _ = write_map_document(self._document(), str(folder) + "/")
+        return pathlib.Path(written).as_uri()
+
+    def _drawn(self, url: str) -> dict:
+        """Open a map and report what it drew, plus which data it went to fetch."""
+        from playwright.sync_api import sync_playwright
+
+        errors: list[str] = []
+        fetched: list[str] = []
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch()
+            except Exception as error:  # pragma: no cover - no browser downloaded
+                raise unittest.SkipTest(f"no chromium: {error}") from None
+            page = browser.new_page()
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
+            page.on("request", lambda r: fetched.append(r.url.rsplit("/", 1)[-1])
+                    if "/data/" in r.url else None)
+            page.goto(url, wait_until="load")
+            page.wait_for_function("() => !!PAGES[Number(document.getElementById('pg').value)].nodes")
+            page.wait_for_timeout(300)
+            page.fill("#q", "orders")
+            page.wait_for_timeout(300)
+            state = page.evaluate("""() => ({
+                nodes: document.querySelectorAll('#cv g[data-id]').length,
+                pages: document.querySelectorAll('#pg option').length,
+                hits: document.getElementById('qn').textContent.trim(),
+                leftovers: document.querySelectorAll('script[src*="data/"]').length,
+            })""")
+            browser.close()
+        state["errors"] = errors
+        state["fetched"] = sorted(set(fetched))
+        return state
+
+    def test_the_bundle_opened_from_a_file_url_draws_the_same_map(self):
+        """The folder form fetches its rows as classic scripts - the one loader a
+        `file://` page is allowed. It must draw exactly what the single file draws, fetch
+        only the chunks it looked at, and leave no script tags behind."""
+        single = self._drawn(self._render())
+        bundle = self._drawn(self._render_bundle())
+
+        self.assertEqual(bundle["errors"], [])
+        self.assertEqual(single["errors"], [])
+        self.assertGreater(bundle["nodes"], 0, "the bundle drew nothing")
+        self.assertEqual((bundle["nodes"], bundle["pages"], bundle["hits"]),
+                         (single["nodes"], single["pages"], single["hits"]))
+        self.assertEqual(single["fetched"], [], "the single file went to the network")
+        self.assertIn("p0.js", bundle["fetched"])
+        self.assertIn("search.js", bundle["fetched"])
+        self.assertEqual(bundle["leftovers"], 0, "loader script tags were not removed")
 
     def test_the_page_runs_without_a_single_console_error(self):
         from playwright.sync_api import sync_playwright

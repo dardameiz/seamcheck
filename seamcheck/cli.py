@@ -144,6 +144,7 @@ COMMANDS: dict[str, Command] = {
             ("seamcheck map --local-only", "no phone link; loopback only"),
             ("seamcheck map --since main", "highlight what changed against main"),
             ("seamcheck map --out /tmp/map.html", "choose where it lands"),
+            ("seamcheck map --out /tmp/map/", "a folder: small index.html, data loaded as needed"),
         ],
     ),
     "check": Command(
@@ -540,8 +541,13 @@ def _run_without_django(arguments, verbose: bool) -> int:
             result = api.check(repo_root=root)
             print(api.report(repo_root=root, fmt="terminal"))
             return 1 if result.get("findings") else 0
-        rendered = api.report(repo_root=root, fmt=options["fmt"])
+        if options["fmt"] in ("map", "console"):
+            document = api.map_document(repo_root=root)
+        else:
+            rendered = api.report(repo_root=root, fmt=options["fmt"])
 
+    if options["fmt"] in ("map", "console"):
+        return _map_plain(document, root, options)
     if options["out"]:
         pathlib.Path(options["out"]).write_text(rendered, encoding="utf-8")
         print(f"seamcheck: wrote {options['out']}", file=sys.stderr)
@@ -549,6 +555,28 @@ def _run_without_django(arguments, verbose: bool) -> int:
     if options["serve"]:
         return _serve_plain(rendered, root, options)
     print(rendered)
+    return 0
+
+
+def _map_plain(document, root: str, options: dict) -> int:
+    """The map: one file, or a folder when it is asked for or the file would be too big.
+
+    Served, it is always the folder form held in memory - the page arrives at once and
+    each chunk is one small request when it is looked at - so a map of any size opens as
+    fast as a small one.
+    """
+    from seamcheck import api
+
+    if options["out"]:
+        written, note = api.write_map_document(document, options["out"], bundle=options["bundle"] or None)
+        print(f"seamcheck: wrote {written}", file=sys.stderr)
+        if note:
+            print(f"seamcheck: {note}", file=sys.stderr)
+        return 0
+    if options["serve"]:
+        index, assets = document.bundle()
+        return _serve_plain(index, root, options, assets=assets)
+    print(document.single_file())
     return 0
 
 
@@ -581,7 +609,7 @@ def _worth_scanning(root: str) -> bool:
     return False
 
 
-def _serve_plain(rendered: str, root: str, options: dict) -> int:
+def _serve_plain(rendered: str, root: str, options: dict, assets=None) -> int:
     """The same serving the Django path does, named the same way."""
     from seamcheck import api
     from seamcheck.serve import public_tunnel, serve_addresses
@@ -589,7 +617,7 @@ def _serve_plain(rendered: str, root: str, options: dict) -> int:
     server, addresses = serve_addresses(
         rendered,
         host="127.0.0.1" if options["local_only"] else "0.0.0.0",
-        sources=set(api.LAST_MAP_FILES), repo_root=root,
+        sources=set(api.LAST_MAP_FILES), repo_root=root, assets=assets,
     )
     print("")
     print(f"  open   {addresses['local']}")
@@ -630,7 +658,7 @@ def _plain_args(arguments) -> dict:
     """
     options = {
         "fmt": "terminal", "out": None, "serve": False, "check": False,
-        "tunnel": False, "local_only": False, "open": False,
+        "tunnel": False, "local_only": False, "open": False, "bundle": False,
         # The four that were missing. Each has a branch in the management command and
         # none had one here, so on an Express or Next repository `seamcheck explain X`,
         # `seamcheck config`, `seamcheck triage X` and `seamcheck json` all printed the
@@ -668,6 +696,8 @@ def _plain_args(arguments) -> dict:
             options["out"] = following
         elif item == "--serve":
             options["serve"] = True
+        elif item == "--bundle":
+            options["bundle"] = True
         elif item == "--no-serve":
             options["serve"] = False
         elif item == "--check":

@@ -51,9 +51,12 @@ _INVENTORY_CACHE: dict[str, dict] = {}
 
 class _OneFileHandler(BaseHTTPRequestHandler):
     def __init__(self, *args, body: bytes, path: str, sources=None, repo_root: str = "",
-                 **kwargs):
+                 assets=None, **kwargs):
         self._body = body
         self._path = path
+        # A bundled map's chunks, by the relative path the page asks for ("data/p0.js").
+        # Held in memory: they are the same bytes that would have been inline.
+        self._assets = assets or {}
         # An ALLOWLIST of repo-relative paths, not a document root. The report already
         # names every file it found, so the set of files worth reading is known exactly -
         # and serving from a known set means no amount of `../` in a request can reach a
@@ -124,18 +127,32 @@ class _OneFileHandler(BaseHTTPRequestHandler):
         if route.rstrip("/") == f"{self._path.rstrip('/')}/inventory":
             self._serve_inventory()
             return
+        base = self._path.rstrip("/") + "/"
+        if route.startswith(base) and route[len(base):] in self._assets:
+            self._bytes(self._assets[route[len(base):]], "application/javascript")
+            return
         if route.rstrip("/") != self._path.rstrip("/"):
             self.send_error(404)
             return
+        if self._assets and route != self._path:
+            # The bundle's page loads "data/…" relative to its own address; without the
+            # slash the browser would look beside the token rather than under it.
+            self.send_response(301)
+            self.send_header("Location", self._path)
+            self.end_headers()
+            return
+        self._bytes(self._body, "text/html; charset=utf-8")
+
+    def _bytes(self, body: bytes, content_type: str):
         self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(self._body)))
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
         # A report names files in a private repo; no cache, no index, no referrer.
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Robots-Tag", "noindex, nofollow")
         self.send_header("Referrer-Policy", "no-referrer")
         self.end_headers()
-        self.wfile.write(self._body)
+        self.wfile.write(body)
 
     def log_message(self, *args):
         return
@@ -150,15 +167,18 @@ def serve_once(html: str, host: str = "0.0.0.0", port: int = 0, sources=None,
 
 
 def _bind(html: str, host: str, port: int, sources=None,
-          repo_root: str = "") -> tuple[ThreadingHTTPServer, str]:
-    path = f"/{secrets.token_urlsafe(9)}"
+          repo_root: str = "", assets=None) -> tuple[ThreadingHTTPServer, str]:
+    # A bundle's page loads "data/<name>.js" RELATIVE to itself, so its address has to
+    # end in a slash for the browser to resolve that under the token rather than beside
+    # it. A single file has no siblings and keeps the bare token.
+    path = f"/{secrets.token_urlsafe(9)}" + ("/" if assets else "")
     handler = partial(_OneFileHandler, body=html.encode("utf-8"), path=path,
-                      sources=sources, repo_root=repo_root)
+                      sources=sources, repo_root=repo_root, assets=assets)
     return ThreadingHTTPServer((host, port), handler), path
 
 
 def serve_addresses(html: str, host: str = "0.0.0.0", port: int = 0, sources=None,
-                    repo_root: str = "") -> tuple[ThreadingHTTPServer, dict[str, str]]:
+                    repo_root: str = "", assets=None) -> tuple[ThreadingHTTPServer, dict[str, str]]:
     """Start the server and name every address it can be reached at.
 
     `serve_once` answers with one URL, which was the right shape when serving was an
@@ -168,7 +188,8 @@ def serve_addresses(html: str, host: str = "0.0.0.0", port: int = 0, sources=Non
     opens inside itself), the LAN one is the one to type on a phone. Same port, same
     token, so they are the same document.
     """
-    server, path = _bind(html, host, port, sources=sources, repo_root=repo_root)
+    server, path = _bind(html, host, port, sources=sources, repo_root=repo_root,
+                         assets=assets)
     port_number = server.server_port
     addresses = {"local": f"http://127.0.0.1:{port_number}{path}"}
     if host not in ("127.0.0.1", "localhost"):
