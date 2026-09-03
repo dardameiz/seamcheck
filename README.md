@@ -37,6 +37,10 @@ What changed, per release: [CHANGELOG.md](CHANGELOG.md).
 
 ## What it looks like
 
+![Four stacked tiers - the browser, the seam, the server, the store - with one chain lit from a page through its module and its request to the route, the handler and a Redis key](docs/images/tiers.png)
+
+<sub>**The four tiers, and one chain through them.** A page and its module are the browser; the request it makes is the seam; the route and handler are the server; the key they read is the store. Nothing on this picture is inferred from a name — every hop on the right is a line of source the scan read. The second request in the seam is the unresolved one: it goes nowhere, and nothing else in the project would have said so.</sub>
+
 ![The store band of the map: Postgres, Redis and Firebase in separate lanes, with the deployables below split by service and language](docs/images/stores.png)
 
 <sub>**Three data stores and three services, one screen.** Postgres has a schema to check
