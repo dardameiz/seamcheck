@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import json
-import logging
 import subprocess
 import sys
 
 from seamcheck.graph import Status, Symbol
-
-logger = logging.getLogger(__name__)
+from seamcheck.nodetools import report
 
 _NO_ORM_USAGE_NOTE = (
     "No ORM-usage extractor yet - status is a known Core Pipeline limitation until a later "
@@ -62,16 +60,19 @@ def extract_django_models(app_labels: list[str]) -> list[Symbol]:
         check=False,
     )
     if result.returncode != 0 or not result.stdout.strip():
-        # Say it. A scan that silently drops a whole symbol kind is indistinguishable
-        # from a project that has none of them, which is the exact ambiguity this tool
-        # exists to refuse.
-        logger.warning(
-            "seamcheck: no model symbols - `manage.py graph_models` did not run "
-            "(django-extensions installed?). Every other extractor still ran."
+        # Say it, through `report`: a plain logger.warning is muted by quiet(), which
+        # is how a wheel install without django-extensions scanned the reference project
+        # 66 symbols short and printed nothing. A scan that silently drops a whole symbol
+        # kind is indistinguishable from a project that has none of them, which is the
+        # exact ambiguity this tool exists to refuse.
+        report(
+            "models",
+            "no model symbols - `manage.py graph_models` did not run (django-extensions "
+            "installed? `pip install 'seamcheck[models]'`). Every other extractor still ran.",
         )
         return []
     try:
         return parse_graph_models_json(json.loads(result.stdout))
     except json.JSONDecodeError:
-        logger.warning("seamcheck: no model symbols - graph_models returned unreadable JSON.")
+        report("models", "no model symbols - graph_models returned unreadable JSON.")
         return []

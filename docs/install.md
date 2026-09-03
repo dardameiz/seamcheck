@@ -21,6 +21,9 @@ pip install seamcheck
 A Django project is the one thing seamcheck reads by *importing* it, so it has to run where
 that project's imports resolve. Every other backend is read from source, so anywhere works.
 
+Model symbols come from django-extensions' `graph_models`; without it the scan runs, has no
+models in it, and says so on stderr. `pip install 'seamcheck[models]'` adds it.
+
 For the agent server: `pip install 'seamcheck[mcp]'`.
 
 <details>

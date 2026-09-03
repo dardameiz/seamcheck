@@ -52,15 +52,26 @@ class OptionalDependencyTests(SimpleTestCase):
             self.assertEqual(extract_django_models(["app"]), [])
 
     def test_it_says_out_loud_that_model_symbols_are_missing(self):
+        # Inside quiet(), because that is where the CLI runs the scan: a logger.warning
+        # here was muted with the host project's noise, and a wheel install without
+        # django-extensions scanned 66 symbols short while printing nothing.
+        import contextlib
+        import io
         from unittest import mock
 
+        from seamcheck import nodetools
         from seamcheck.extractors.django_models_extractor import extract_django_models
+        from seamcheck.quiet import quiet
 
+        nodetools._reported.discard("models")
         failed = mock.Mock(returncode=1, stdout="", stderr="boom")
+        stderr = io.StringIO()
         with (
             mock.patch("subprocess.run", return_value=failed),
-            self.assertLogs("seamcheck.extractors.django_models_extractor", "WARNING") as logs,
+            quiet(),
+            contextlib.redirect_stderr(stderr),
         ):
             extract_django_models(["app"])
 
-        self.assertIn("no model symbols", logs.output[0])
+        self.assertIn("no model symbols", stderr.getvalue())
+        self.assertIn("seamcheck[models]", stderr.getvalue())

@@ -17,6 +17,31 @@ Coverage and precision have **different denominators** and neither is meaningful
 backend that answered `uncertain` everywhere would score 100% precision and be useless.
 `uncertain` is not counted as a claim in precision, because it is not a claim.
 
+## Unreleased
+
+Found by installing 0.9.0 from PyPI into a clean virtualenv and pointing it at the
+reference project - the first time a release was tested the way a user meets it.
+
+- **Fixed** — a scan without django-extensions **lost every model symbol and said
+  nothing**. The extractor did warn, through `logger.warning`; the CLI runs the whole scan
+  inside `quiet()`, which mutes WARNING for the host project's start-up noise, and muted
+  that line with it - the reference project scanned 66 symbols short and looked clean.
+  The warning now goes through `nodetools.report`, the one path seamcheck's own scan-time
+  diagnostics take (it writes to stderr when logging cannot), and names the extra to
+  install. Written down in `docs/install.md` as well.
+- **Fixed** — a global install pointed at a Django project answered with a **bare
+  traceback** (`ModuleNotFoundError: No module named 'django'`). The explanation for
+  exactly that situation was five lines below, guarding `django.setup()` but not
+  `import django`. Same message, exit 2, either way now.
+
+Known open, recorded rather than hidden:
+
+- **`connected` is not stable between two scans of the same commit** on the reference
+  project: 40,168 / 40,169 / 40,171 / 40,175 across five runs of identical code, with
+  `unused` (1,485), `unresolved` (2,581) and `uncertain` (3,711) fixed. The total moves
+  with it, so a few symbols come and go, not a few statuses. Something in the scan is
+  order- or timing-dependent; not yet found.
+
 ## 0.9.0 — 3 Sep 2026
 
 **Measured:** coverage **79%** across 47 projects and 137,054 symbols (Flask 91%, Django

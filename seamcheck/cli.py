@@ -853,14 +853,17 @@ def main(argv: list[str] | None = None) -> int:
         # both parsers, and only one of them should own the vocabulary.
         os.environ["SEAMCHECK_NO_PROGRESS"] = "1"
 
-    import django
-    from django.core.management import call_command
-    from django.core.management.base import CommandError
-
     # The whole run, not just setup(): a project logs on import, and again the first time
     # the scan touches its app registry.
     with quiet(not verbose):
         try:
+            # Django itself is the first thing that can be missing: a global install
+            # pointed at a Django project has no Django at all, and used to answer with
+            # a bare traceback from this line while the explanation sat five lines below.
+            import django
+            from django.core.management import call_command
+            from django.core.management.base import CommandError
+
             django.setup()
         except ModuleNotFoundError as error:
             # The project is here and importable-looking, but one of ITS dependencies is

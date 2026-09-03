@@ -29,7 +29,7 @@ _reported: set[str] = set()
 
 
 def report(what: str, message: str, *args) -> None:
-    """Tell the user a parser failed, once per subject, on stderr.
+    """Tell the user an extractor lost its evidence, once per subject, on stderr.
 
     Not only via `logging`: the CLI runs the entire scan inside `quiet()`, which disables
     WARNING-level logging so the host project's start-up noise stays out of the output.
