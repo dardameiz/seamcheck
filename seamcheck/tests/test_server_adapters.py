@@ -11,7 +11,7 @@ import pathlib
 import tempfile
 import unittest
 
-from seamcheck.adapters import ADAPTERS, available, select
+from seamcheck.adapters import _adapters, available, select
 from seamcheck.adapters.base import ServerAdapter, ServerScan
 from seamcheck.adapters.django_adapter import DjangoAdapter
 from seamcheck.progress import null
@@ -31,7 +31,7 @@ class AdapterRegistry(unittest.TestCase):
         self.assertIn("django", available())
 
     def test_every_registered_adapter_satisfies_the_protocol(self):
-        for adapter in ADAPTERS:
+        for adapter in _adapters():
             with self.subTest(adapter=adapter.name):
                 self.assertIsInstance(adapter, ServerAdapter)
                 self.assertTrue(adapter.name)

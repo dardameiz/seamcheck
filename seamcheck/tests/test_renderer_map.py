@@ -475,12 +475,22 @@ class BigCanvasTests(SimpleTestCase):
 
     def test_panning_moves_one_transform_instead_of_redrawing(self):
         # The whole reason a 1,450-node page was unusable: draw() rebuilt the markup on
-        # every pointermove frame. Pan and zoom write one attribute on one group.
+        # every pointermove frame. A gesture now writes one CSS transform on a plain div
+        # ABOVE the svg (a transform on the svg root re-lays out its contents), and the
+        # committed view is folded in once, at the end of the gesture.
         out = map_html.render(_map())
 
-        self.assertIn("view.x = e.clientX - drag.x; view.y = e.clientY - drag.y; applyView();", out)
-        self.assertIn("const zoomTo = k => { view.k = Math.min(3, Math.max(0.2, k)); applyView(); }", out)
+        self.assertIn("cvlayer.style.transform = `translate(${gest.dx}px, ${gest.dy}px) scale(${gest.s})`", out)
+        self.assertIn("function gestureEnd()", out)
         self.assertIn('g.setAttribute("transform"', out)
+        # The three properties the measurements showed are each worth ~20ms a move.
+        self.assertRegex(out, r"\.cvlayer \{[^}]*contain:paint")
+        self.assertRegex(out, r"\.cvlayer \{[^}]*inset:-100%")
+        self.assertRegex(out, r"\.cvlayer \{[^}]*will-change:transform")
+        # And no move handler may call draw(): that is the slideshow this test exists for.
+        move = out[out.index('window.addEventListener("pointermove"'):]
+        move = move[:move.index("\n});")]
+        self.assertNotIn("draw(", move)
 
     def test_the_layout_is_cached_against_what_actually_changes_it(self):
         # layout() is nine trial placements over every node. Recomputing it for a pan is

@@ -33,13 +33,13 @@ from seamcheck.extractors.js_extractor import (
     extract_js,
     extract_template_js,
 )
+from seamcheck.extractors.preprocessor_extractor import preprocessor_classes
 from seamcheck.extractors.template_scanner import scan_templates
 from seamcheck.extractors.url_reference_extractor import (
     extract_url_references,
     find_js_files,
 )
 from seamcheck.field_matcher import match_json_response_fields
-from seamcheck.extractors.preprocessor_extractor import preprocessor_classes
 from seamcheck.graph import Edge, Graph, Status, Symbol
 from seamcheck.matcher import match_js_to_django
 from seamcheck.nodetools import report

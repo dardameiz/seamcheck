@@ -17,6 +17,33 @@ Coverage and precision have **different denominators** and neither is meaningful
 backend that answered `uncertain` everywhere would score 100% precision and be useless.
 `uncertain` is not counted as a claim in precision, because it is not a claim.
 
+## Unreleased
+
+- **The map no longer lags while you pan or zoom.** A gesture used to move the `<svg>`
+  root's transform, which made Chrome re-lay out every SVG element on every pointer move
+  (measured 22 ms Layout + 25 ms compositor Layerize per move on a 3,461-node page). The
+  gesture now moves a plain `<div>` above the svg with `contain:paint`, sized to three
+  viewports so a drag shows pre-rasterised content instead of blank strips, and the view
+  is committed once when the gesture ends. Same page: 60 drag moves 4.65 s → 1.15 s wall,
+  ~8 ms main-thread per move; verified headless on the 22 MB pointlessbutton map.
+- Store bands were black: the band stroke read an undefined `--text` token. Now `--ink`,
+  with a visible white border.
+- Docs: README explains the one-page-per-script map; `docs/the-map.md` has the long form;
+  CONTRIBUTING has the tested setup (`pip install -e ".[django,mcp]" pytest`, 859 tests)
+  and the pre-push self-scan rule. Two design docs under `docs/plans/`: `observe` riding
+  along with an E2E suite, and the map at 1M–10M lines (data out of the HTML, Canvas2D
+  with level of detail, bucket trees). Neither is implemented yet.
+
+Known open, recorded rather than hidden:
+
+- 13 tests in `test_renderer_map.py` fail at HEAD and predate this change: they pin
+  literal markup/strings from an earlier renderer (rail vs select, `it_loads_nothing_from_
+  the_network` — the Google Fonts `<link>` breaks the offline promise it asserts). To be
+  rewritten against behaviour, not strings, during the map-at-scale work.
+- One corpus repo's JavaScript parser exits 1 under Node 23 (`parse_js.bundle.mjs
+  exited 1`); the other extractors still run, so it is not a CRASH row, but that repo's
+  JS symbols are missing from its scan.
+
 ## 0.8.2 — 3 Sep 2026
 
 **Measured:** coverage **79%** across 47 projects and 136,181 symbols (Flask 91%, Django

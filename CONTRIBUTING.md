@@ -4,18 +4,23 @@
 
 ```bash
 git clone https://github.com/dardameiz/seamcheck && cd seamcheck
-pip install -e . pytest
+python -m venv .venv && . .venv/bin/activate
+pip install -e ".[django,mcp]" pytest
 pytest
 ```
 
-446 tests, no database, no host project needed. `conftest.py` supplies the minimal Django
-settings, and the suite runs against the fixtures under `seamcheck/tests/fixtures/`.
+859 tests, no database, no host project needed. `conftest.py` supplies the minimal Django
+settings (that is why the `django` extra is required; two test files import `mcp`), and the
+suite runs against the fixtures under `seamcheck/tests/fixtures/`. Tests are methods on
+`django.test.SimpleTestCase` subclasses; `pytest` collects them directly.
 
 To rebuild the Node parsers after touching either `.mjs` source:
 
 ```bash
 npm ci && ./build_parsers.sh
 ```
+
+Lint before a commit: `ruff check seamcheck/`.
 
 ## The one rule that matters
 
@@ -26,17 +31,22 @@ evidence the scan does not have.
 
 Every pull request is read against that rule first.
 
-## Development setup
+## Before every push: run Seamcheck on Seamcheck
+
+Not before every commit — before every **push**. The tool scans its own repository, and
+that scan is the one place a regression in the extractors shows up on code we know:
 
 ```bash
-pip install -e ".[models,mcp]"
-npm install --save-dev acorn postcss     # only needed for the JS/CSS extractors
-python manage.py test seamcheck
-ruff check seamcheck/
+python -m seamcheck.cli check     # from the repository root: must not crash, must report nothing new
 ```
 
-Seamcheck is developed inside a host Django project so it is always run against real
-code. See [PACKAGING.md](PACKAGING.md).
+The expected result is zero findings (a Python-only repository with no templates has almost
+nothing to connect, so the numbers are small — that is correct, not empty). A crash, a new
+`unresolved`/`unused`, or a rise in `uncertain` blocks the push until it is understood. It
+takes seconds, and the habit is the point: a scan of your own code is the cheapest honest
+signal you have.
+
+If you have a real project to hand, `python tools/corpus.py scan` (or a scan of your own project) as well — see below.
 
 ## Test-driven, and prove the test fails
 
@@ -45,9 +55,8 @@ it fail. Disable the line your test protects, re-run, and confirm it goes red. A
 passes with its own fix removed is asserting nothing — this project has already shipped
 two of those and caught them only by checking.
 
-Tests are methods on `django.test.SimpleTestCase` subclasses. A bare `def test_*()`
-function is silently skipped by Django's runner, which reports `Ran 0 tests` **and exits
-0**.
+A bare `def test_*()` function outside a `SimpleTestCase` is not picked up by Django's own
+runner (`Ran 0 tests`, exit 0); keep tests as methods on the class so both runners agree.
 
 ## Validate against real code, not just fixtures
 

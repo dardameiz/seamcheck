@@ -8,11 +8,11 @@ import os
 import pathlib
 
 from seamcheck.diff import DiffResult, diff_graphs
+from seamcheck.extractors.preprocessor_extractor import preprocessor_files
 from seamcheck.graph import Graph, Status, relativise
 from seamcheck.nodetools import report as _notify
 from seamcheck.pipeline import SCAN_PHASES, run_scan
 from seamcheck.progress import Progress, null
-from seamcheck.extractors.preprocessor_extractor import preprocessor_files
 from seamcheck.roots import discover_css_files, discover_js_roots, tailwind_classes
 from seamcheck.snapshot import current_git_sha, load_snapshot, save_snapshot
 from seamcheck.triage import (

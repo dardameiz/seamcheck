@@ -589,10 +589,33 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
 .gone { max-height:26dvh; overflow-y:auto; }
 
 .main { flex:1 1 auto; position:relative; min-height:0; background:var(--sunk); }
-#cv { position:absolute; inset:0; width:100%; height:100%; display:block;
-      cursor:grab; touch-action:none; }
+/* A gesture is a CSS transform on .cvlayer, one composited layer, so the compositor slides
+   or scales what is already rasterised and the main thread does nothing per frame. Three
+   things make that true, each measured on a 20,000-element page and each costing the whole
+   idea when missing:
+   - the transform is on a plain div, NOT the <svg>: Chrome treats a transform on an SVG
+     root as a change to its contents and re-lays out every element (22ms of Layout/move);
+   - contain:paint on the layer: without it every move re-ran compositor layer assignment
+     over all 20,000 items (25ms of Layerize/move; 2.7ms with it);
+   - the layer is three viewports wide and tall (inset:-100%), with the <svg> box kept at
+     the middle third so nothing about coordinates changes: contain:paint clips at the
+     layer's edge, and a layer the size of the screen would show blank strips while dragging
+     until the commit. Tiles are rasterised near the viewport only, so the size is free.
+   .cvclip clips to the screen - not .main, whose menus may hang past its edge. */
+.cvclip { position:absolute; inset:0; overflow:hidden; }
+.cvlayer { position:absolute; inset:-100%; contain:paint; will-change:transform;
+           transform-origin:calc(100% / 3) calc(100% / 3); }
+#cv { position:absolute; left:calc(100% / 3); top:calc(100% / 3);
+      width:calc(100% / 3); height:calc(100% / 3); display:block;
+      cursor:grab; touch-action:none; overflow:visible; }
 #cv.drag { cursor:grabbing; }
 #cv * { touch-action:none; }
+/* Nothing under a gesture needs hit-testing, and hit-testing is what a pointermove over
+   twelve thousand elements spends most of its time on. */
+#cv.gesture #vp, #cv.drag #vp { pointer-events:none; }
+/* One bounding-box test per card instead of one per rect and text inside it. */
+.nd { pointer-events:bounding-box; }
+.ed, .band, .col, .bandbig, .bandlbl, .bandlang, .lanename, .lanebadge { pointer-events:none; }
 .nd rect { stroke-width:1.5; }
 .nd text { font-size:10.5px; fill:var(--ink); pointer-events:none; letter-spacing:-.1px;
            font-family:var(--mono); }
@@ -770,13 +793,16 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
            font-variant-numeric:tabular-nums; }
 .nd.agg { cursor:pointer; }
 .nd.agg rect { stroke-width:2; }
-/* The bands sit behind everything and are barely there - a region marker, not a panel. */
-#cv .band { fill:var(--panel); opacity:.30; stroke:var(--text); stroke-width:2.5;
-            stroke-opacity:.55; }
+/* The bands sit behind everything: a faint fill, and a border a reader can still see with
+   the whole repository zoomed out - which is the one view in which "what regions are
+   there" is the question. fill-opacity and stroke-opacity are set apart on purpose: a
+   single `opacity` dimmed the border with the fill, and the strips read as black boxes. */
+#cv .band { fill:var(--panel); fill-opacity:.30; stroke:var(--ink); stroke-width:3;
+            stroke-opacity:.85; }
 /* Named languages, sitting on the band's own top line. */
-#cv .bandlang { fill:var(--text); font-size:15px; font-weight:600; letter-spacing:.04em;
-                text-anchor:end; opacity:.72; font-family:var(--mono); }
-#cv .band.seam { fill:var(--sig-fill); opacity:.55; stroke:var(--sig);
+#cv .bandlang { fill:var(--ink); font-size:15px; font-weight:600; letter-spacing:.04em;
+                text-anchor:end; opacity:.85; font-family:var(--mono); }
+#cv .band.seam { fill:var(--sig-fill); fill-opacity:.55; stroke:var(--sig);
                  stroke-dasharray:5 4; }
 /* A lane heading inside a band. Bigger than the kind headings under it, because the
    store is the thing a reader is choosing between, and the kind is a detail of it. */
@@ -1374,6 +1400,7 @@ let mode = "map", cq = "", cstatus = "", shown = ROWS_PER_PAGE, asList = false;
 let ckind = "";
 
 const svg = document.getElementById("cv");
+const cvlayer = document.getElementById("cvlayer");
 const sheet = document.getElementById("detail");
 const dbody = document.getElementById("dbody");
 const pages = document.getElementById("pg");
@@ -2477,7 +2504,10 @@ function applyView() {
   // Labels are dropped when they would be unreadable, not when they are merely small: at
   // 0.34 a phone opening a 400-node page (which fits at about 0.18) saw a map with no
   // names at all and no obvious way to get them.
-  svg.classList.toggle("nolabels", view.k < 0.24);
+  // Written only on change: toggling a class on the <svg> - even to the value it already
+  // has - is a style recalc over every element under it.
+  const nolabels = view.k < 0.24;
+  if (svg.classList.contains("nolabels") !== nolabels) svg.classList.toggle("nolabels", nolabels);
 }
 
 // Delegated, not per-node: draw() replaces svg.innerHTML, and panning redraws on every
@@ -2811,26 +2841,94 @@ document.getElementById("dx").onclick = () => { lit = null; isolate = false; clo
 // Pointer events, not mouse events: one code path covers a mouse, a finger and a pen.
 // Listening for `mousedown` alone left a phone with no pan and no zoom at all, and the
 // pointer is never captured - capture would retarget the click away from the node.
+//
+// HOW A GESTURE STAYS CHEAP. The committed view lives in the `transform` attribute of
+// #vp, and writing that attribute makes the browser recompute style, re-hit-test, repaint
+// and re-rasterise every one of the ~12,000 elements on a big page - about 50ms a frame
+// on a Retina screen, which is the lag a reader feels as "the whole map redraws when I
+// move it". So a gesture in progress never touches #vp. It writes a CSS transform on the
+// <svg> element itself, which the compositor applies to the already-rasterised layer
+// without waking the main thread: a pan is a texture move, a zoom scales the texture
+// (slightly soft until the fingers lift). The gesture is folded into #vp exactly once,
+// when it ends - one repaint per gesture instead of one per frame.
 const ptrs = new Map();
 let drag = null, moved = false, pinch = null;
 
-const zoomTo = k => { view.k = Math.min(3, Math.max(0.2, k)); applyView(); };
+// The gesture in progress, as a transform layered ON TOP of the committed view:
+// screen = translate(dx, dy) · scale(s) · committed. Identity when nothing is happening.
+const gest = {dx: 0, dy: 0, s: 1, active: false, timer: null};
+let box = null;   // the svg's client box, read once per gesture - not once per move
+
+function gestureStart() {
+  if (!gest.active) { gest.active = true; box = svg.getBoundingClientRect(); svg.classList.add("gesture"); }
+}
+function gestureApply() {
+  cvlayer.style.transform = `translate(${gest.dx}px, ${gest.dy}px) scale(${gest.s})`;
+}
+// Fold the gesture into the committed view and let the page repaint once, crisp.
+function gestureEnd() {
+  if (!gest.active) return;
+  clearTimeout(gest.timer); gest.timer = null;
+  view.k = view.k * gest.s;
+  view.x = view.x * gest.s + gest.dx;
+  view.y = view.y * gest.s + gest.dy;
+  gest.dx = gest.dy = 0; gest.s = 1; gest.active = false;
+  cvlayer.style.transform = "";
+  svg.classList.remove("gesture");
+  applyView();
+}
+function panBy(dx, dy) {
+  gestureStart();
+  gest.dx += dx; gest.dy += dy;
+  gestureApply();
+}
+// Zoom by `f` about a screen point, so the thing under the pointer stays under the
+// pointer. Zooming about the canvas origin, which is what a bare change of scale does,
+// sent the corner a reader was looking at off the screen on every wheel tick.
+function zoomBy(f, cx, cy) {
+  gestureStart();
+  const want = view.k * gest.s * f;
+  const k = Math.min(3, Math.max(ZOOM_FLOOR, want));
+  f = k / (view.k * gest.s);
+  if (f === 1) return;
+  const px = cx - box.left, py = cy - box.top;
+  gest.dx = px - (px - gest.dx) * f;
+  gest.dy = py - (py - gest.dy) * f;
+  gest.s *= f;
+  gestureApply();
+}
+// A wheel has no "up" event; the gesture ends when the ticks stop.
+function settleSoon() {
+  clearTimeout(gest.timer);
+  gest.timer = setTimeout(gestureEnd, 140);
+}
+// draw() may fit a big page at 0.06 to get it all on screen, and the old floor of 0.2
+// meant the first zoom-OUT from there jumped the map larger. The floor is the smaller
+// of the two, so from a fitted page the wheel does what it says.
+const ZOOM_FLOOR = 0.05;
+// The corner buttons zoom about the middle of the screen, which is where the eye is.
+const zoomStep = f => {
+  const r = svg.getBoundingClientRect();
+  zoomBy(f, r.left + r.width / 2, r.top + r.height / 2);
+  settleSoon();
+};
 
 let lastTap = 0;
 svg.addEventListener("pointerdown", e => {
   // Double-tap zooms. A phone has no wheel, and reaching the corner buttons mid-read
   // costs a thumb-shift; this is the gesture people already try.
+  clearTimeout(gest.timer); gest.timer = null;
   const now = Date.now();
-  if (ptrs.size === 0 && now - lastTap < 320) { zoomTo(view.k * 1.6); lastTap = 0; }
+  if (ptrs.size === 0 && now - lastTap < 320) { zoomBy(1.6, e.clientX, e.clientY); gestureEnd(); lastTap = 0; }
   else lastTap = now;
   ptrs.set(e.pointerId, {x: e.clientX, y: e.clientY});
   if (ptrs.size === 2) {
     const [a, b] = [...ptrs.values()];
-    pinch = {d: Math.hypot(a.x - b.x, a.y - b.y), k: view.k};
+    pinch = {d: Math.hypot(a.x - b.x, a.y - b.y), cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2};
     drag = null; moved = true;  // two fingers are a gesture, never a tap
     return;
   }
-  drag = {x: e.clientX - view.x, y: e.clientY - view.y, sx: e.clientX, sy: e.clientY};
+  drag = {x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY};
   moved = false;
 });
 window.addEventListener("pointermove", e => {
@@ -2839,21 +2937,25 @@ window.addEventListener("pointermove", e => {
   if (pinch && ptrs.size === 2) {
     const [a, b] = [...ptrs.values()];
     const d = Math.hypot(a.x - b.x, a.y - b.y);
-    if (pinch.d > 0) zoomTo(pinch.k * d / pinch.d);
+    const cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
+    // The fingers' midpoint moves as well as their spread: that movement is a pan.
+    panBy(cx - pinch.cx, cy - pinch.cy);
+    if (pinch.d > 0) zoomBy(d / pinch.d, cx, cy);
+    pinch = {d, cx, cy};
     return;
   }
   if (!drag) return;
   // A few pixels between press and release is a tap, not a pan. A finger wobbles more
   // than a mouse, so the threshold is wider than a mouse alone would need.
   if (!moved && Math.abs(e.clientX - drag.sx) + Math.abs(e.clientY - drag.sy) < 6) return;
-  moved = true;
-  svg.classList.add("drag");
-  view.x = e.clientX - drag.x; view.y = e.clientY - drag.y; applyView();
+  if (!moved) { moved = true; svg.classList.add("drag"); }
+  panBy(e.clientX - drag.x, e.clientY - drag.y);
+  drag.x = e.clientX; drag.y = e.clientY;
 });
 const release = e => {
   ptrs.delete(e.pointerId);
   if (ptrs.size < 2) pinch = null;
-  if (ptrs.size === 0) { drag = null; svg.classList.remove("drag"); }
+  if (ptrs.size === 0) { drag = null; svg.classList.remove("drag"); gestureEnd(); }
 };
 window.addEventListener("pointerup", release);
 window.addEventListener("pointercancel", release);
@@ -2877,17 +2979,14 @@ svg.addEventListener("wheel", e => {
   // event flew from one end of the zoom range to the other on a single flick. macOS marks
   // a pinch as ctrlKey, which is the gesture that should zoom; a plain two-finger scroll
   // pans, as it does in every map on this platform.
-  if (e.ctrlKey || e.metaKey) {
-    zoomTo(view.k * Math.exp(-e.deltaY * 0.01));
-    return;
-  }
-  view.x -= e.deltaX; view.y -= e.deltaY;
-  applyView();
+  if (e.ctrlKey || e.metaKey) zoomBy(Math.exp(-e.deltaY * 0.01), e.clientX, e.clientY);
+  else panBy(-e.deltaX, -e.deltaY);
+  settleSoon();
 }, {passive: false});
 
 // A pinch needs two fingers and some dexterity; these need one thumb.
-document.getElementById("zi").onclick = () => zoomTo(view.k * 1.25);
-document.getElementById("zo").onclick = () => zoomTo(view.k / 1.25);
+document.getElementById("zi").onclick = () => zoomStep(1.25);
+document.getElementById("zo").onclick = () => zoomStep(1 / 1.25);
 document.getElementById("zf").onclick = () => {
   // Back to "unset", which is the signal draw() reads to re-fit the page to the screen.
   view = {x:0, y:0, k:1}; draw();
@@ -4392,7 +4491,7 @@ def render(connectivity_map: ConnectivityMap, console=None, files=None,
         # every filter, four status pills carry the whole vocabulary, and that is the lot.
         '<div class="shell"><div class="content">',
         '<main class="main">',
-        '<svg id="cv"></svg>',
+        '<div class="cvclip"><div class="cvlayer" id="cvlayer"><svg id="cv"></svg></div></div>',
         '<div class="panel" id="panel" hidden></div>',
 
         # ── the one dropdown ──────────────────────────────────────────────────
