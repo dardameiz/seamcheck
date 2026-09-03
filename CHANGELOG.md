@@ -64,6 +64,15 @@ reference project - the first time a release was tested the way a user meets it.
   Page picker's visibility now has one writer; before, leaving Stripe by way of a jump
   lost the picker until the layer was switched again.
 
+- **Added** — **Shared across pages**, a layer of what two or more pages reach: the
+  helper every page imports, the endpoint three pages call, the selector two templates
+  write - the change that lands somewhere other than the page it was made on. Two
+  sections of one page do not count as two pages. Every card there, and the same card
+  on an ordinary page, says **on N pages**; its sheet lists them, each a jump. The
+  list travels only for the rows two pages reach, so a page of 3,000 nodes with three
+  shared ones sends three. The reference project: 2,447 shared nodes (36 routes, 22
+  handlers, 1,426 elements) over 22 pages, drawn in 0.6 s.
+
 Known open, recorded rather than hidden:
 
 - **Store attribution stops at the handler's file.** A view is linked to the keys and

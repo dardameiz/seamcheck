@@ -416,3 +416,27 @@ class StoreLayers(SimpleTestCase):
         self.assertNotIn("pg", self._chunk(out, f"p{by_name['arena-main']}"))
         self.assertNotIn("pg", self._chunk(out, f"p{by_name['layer:stripe']}")
                          if "layer:stripe" in by_name else {})
+
+    def test_shared_is_what_two_pages_reach_and_each_page_says_which_rows(self):
+        meta, out = self._render()
+        names = [p["page"] for p in meta["pages"]]
+        by_name = {name: i for i, name in enumerate(names)}
+        self.assertIn("layer:shared", names)
+        shared = self._chunk(out, f"p{by_name['layer:shared']}")
+        # Two sections of the arena both hold user:1:stats; that is one page, not two.
+        # The leaderboard key is on the arena and on home - that is shared.
+        self.assertEqual([row[0] for row in shared["nodes"]], ["redis:leaderboard:hourly"])
+        self.assertEqual(shared["pg"], [[by_name["arena-main"], by_name["home-main"]]])
+        # An ordinary page carries the list sparsely - only the rows two pages reach.
+        arena = self._chunk(out, f"p{by_name['arena-main']}")
+        row = [row[0] for row in arena["nodes"]].index("redis:leaderboard:hourly")
+        self.assertEqual(arena["shared"], [[row, [by_name["arena-main"], by_name["home-main"]]]])
+        self.assertNotIn("shared", self._chunk(out, f"p{by_name['arena-side']}"))
+        self.assertNotIn("shared", self._chunk(out, f"p{by_name['layer:redis']}"))
+
+    def test_no_shared_layer_when_nothing_is_reached_from_two_pages(self):
+        import json
+        out = map_html.render(ConnectivityMap("0" * 12, "", self._entries()[2:]))
+        start = out.index("{", out.index("MAPDATA"))
+        meta = json.JSONDecoder().raw_decode(out, start)[0]
+        self.assertNotIn("layer:shared", [p["page"] for p in meta["pages"]])

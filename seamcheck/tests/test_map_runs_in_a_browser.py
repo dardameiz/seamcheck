@@ -1179,3 +1179,50 @@ class StoreLayerInTheBrowser(SimpleTestCase):
         # The jump lands on the page, with the layer off and the picker back.
         self.assertEqual(landed, {"page": "arena-main", "layer": "", "pickerShown": True,
                                   "picked": str(sheet[0][1])})
+
+    def test_the_shared_layer_holds_what_two_pages_reach_and_the_card_says_so(self):
+        from playwright.sync_api import sync_playwright
+
+        errors: list[str] = []
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch()
+            except Exception as error:  # pragma: no cover - no browser downloaded
+                raise unittest.SkipTest(f"no chromium: {error}") from None
+            page = browser.new_page()
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.goto(page_url := self._url(), wait_until="load")
+            page.wait_for_timeout(250)
+            _open_lens(page, "map")
+            page.wait_for_timeout(200)
+            read = "() => ({" \
+                "pages: [...document.querySelectorAll('#pg option')].map(o => o.textContent)," \
+                "pickerShown: !document.getElementById('pgwrap').hidden," \
+                "cards: [...document.querySelectorAll('#cv .nd:not(.agg)')].map(g =>" \
+                "  [g.dataset.id, g.querySelector('text.on') ? g.querySelector('text.on').textContent : '']" \
+                ").filter(([id]) => id)})"
+            offered = page.evaluate("() => [...document.querySelectorAll('#ly option')].map(o => o.value)")
+            page.select_option("#ly", "shared")
+            page.wait_for_function("() => !!PAGES[currentPageIndex()].nodes")
+            page.wait_for_timeout(200)
+            shared = page.evaluate(read)
+            # Back on an ordinary page, the same card carries the same tag - and only it.
+            page.select_option("#ly", "")
+            page.wait_for_timeout(200)
+            page.evaluate("() => pickPage(PAGES.findIndex(p => p.page === 'home-main'))")
+            page.wait_for_function("() => !!PAGES[current].nodes")
+            page.wait_for_timeout(200)
+            page.evaluate("() => { focus = 'view:home'; draw(); }")
+            page.wait_for_timeout(200)
+            home = page.evaluate(read)
+            browser.close()
+
+        self.assertEqual(errors, [], page_url)
+        self.assertIn("shared", offered)
+        self.assertTrue(shared["pickerShown"])
+        self.assertEqual(shared["pages"][0], "Every page — 1 node")
+        # The one key both pages' views touch; the page-chains are each page's own.
+        self.assertEqual(shared["cards"], [["redis_key:season:active", "on 2 pages"]])
+        tagged = {id_: tag for id_, tag in home["cards"] if tag}
+        self.assertEqual(tagged, {"redis_key:season:active": "on 2 pages"})
+        self.assertGreater(len(home["cards"]), 1, "the rest of home's chain is drawn untagged")

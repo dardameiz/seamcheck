@@ -1336,6 +1336,11 @@ function ensurePage(index) {
       if (pg && pg[i] && pg[i].length) had.pg = pg[i];
       return had;
     });
+    // An ordinary page carries the list only for the nodes two pages reach, sparse -
+    // [row, pages] pairs - so a page of 800 nodes with three shared ones sends three.
+    ((data && data.shared) || []).forEach(([i, on]) => {
+      if (p.nodes[i]) p.nodes[i].pg = on;
+    });
     dropChunk("p" + index);
     return p;
   });
@@ -1420,6 +1425,7 @@ const LAYERS = [
   ["dom", "DOM wiring"],
   ["css", "CSS & tokens"],
   ["backend", "Backend"],
+  ["shared", "Shared across pages"],
   ["stripe", "Stripe"],
   ["celery", "Celery"],
   ["jobs", "Background jobs"],
@@ -1452,6 +1458,9 @@ function layersPresent() {
   PAGES.forEach(p => p.ks.forEach(([k]) => kinds.add(MAPDATA.kinds[k])));
   return LAYERS.filter(([key]) => {
     if (!key) return true;
+    // Not a set of kinds but a page the writer built - and did not build when nothing
+    // was reached from two pages.
+    if (key === "shared") return LAYER_PAGE.has("shared");
     const want = LAYER_KINDS[key] || SECTION_KINDS[key];
     return !want || [...want].some(k => kinds.has(k));
   });
@@ -1466,8 +1475,10 @@ let layer = "";
 // A store is global the same way - `user:{id}:stats` is touched from the arena, the
 // leaderboard and a worker - but its nodes ARE on pages, so the Page picker stays and
 // narrows the layer to one page's keys instead of going away.
-const SERVICE_LAYERS = new Set(["stripe", "celery", "graphql", "database", "redis"]);
-const STORE_LAYERS = new Set(["database", "redis"]);
+// "Shared" is the layer of what two or more pages reach - the helper every page imports,
+// the endpoint three pages call - so its nodes are on pages by definition.
+const SERVICE_LAYERS = new Set(["stripe", "celery", "graphql", "database", "redis", "shared"]);
+const PAGED_LAYERS = new Set(["database", "redis", "shared"]);
 // On a store layer: null is every page; a page index narrows the layer to that page.
 let pageOnLayer = null;
 // Redis keys are grouped by their first segment - `user:*`, `leaderboard:*` - rather than
@@ -1588,11 +1599,11 @@ function fillPages(counts) {
   // heading is the first thing to truncate, so the only legible part named nothing.
   const tail = i => {
     if (counts) return `${counts[i]} changed`;
-    const drawn = !STORE_LAYERS.has(layer) ? lensedCount(PAGES[i])
+    const drawn = !PAGED_LAYERS.has(layer) ? lensedCount(PAGES[i])
       : i === currentPageIndex() ? wholeCount() : reachedCount(i);
     return `${drawn} node${drawn === 1 ? "" : "s"}`;
   };
-  const store = STORE_LAYERS.has(layer);
+  const store = PAGED_LAYERS.has(layer);
   const here = (store ? PAGES[pageOnLayer] : PAGES[current]) || EMPTY_PAGE;
   // On a store layer the first choice is the whole store; the pages under it say how
   // many of its nodes each reaches, not how many nodes the page has.
@@ -1621,7 +1632,7 @@ function fillPages(counts) {
 }
 
 function syncPickers() {
-  const store = STORE_LAYERS.has(layer);
+  const store = PAGED_LAYERS.has(layer);
   if (store && pageOnLayer === null) { fillPages(_pickers.counts); return; }
   const here = PAGES[current] || EMPTY_PAGE;
   if (_pickers.group !== here.g || store) { fillPages(_pickers.counts); return; }
@@ -1633,7 +1644,7 @@ function pickPage(i) {
   current = i; focus = null; view = {x:0, y:0, k:1};
   // On a store layer the pick narrows the layer; it is also remembered as the page to
   // land on when the layer comes off.
-  if (STORE_LAYERS.has(layer)) { pageOnLayer = i; _layout.key = null; }
+  if (PAGED_LAYERS.has(layer)) { pageOnLayer = i; _layout.key = null; }
   closeSheet(); draw();
   if (window.syncReadout) syncReadout();
   // The colour key counts the CURRENT page, and changing the page did not refresh it - so
@@ -1845,8 +1856,15 @@ function pageAllows(n) {
   const on = here && here.union ? (GROUP_ENTRIES.get(here.g) || []) : [pageOnLayer];
   return (n.pg || []).some(i => on.includes(i));
 }
+// The pages a node is on, counted as the pages a person knows: two sections of Push
+// Arena are one page. Zero when the writer sent no list, which is the common case.
+function pagesOn(n) {
+  if (!n.pg || n.pg.length < 2) return 0;
+  const groups = new Set(n.pg.map(i => (PAGES[i] || {}).g));
+  return groups.size > 1 ? groups.size : 0;
+}
 function lensed(p) {
-  const narrow = p.layer && STORE_LAYERS.has(p.layer) && pageOnLayer !== null;
+  const narrow = p.layer && PAGED_LAYERS.has(p.layer) && pageOnLayer !== null;
   return (p.nodes || []).filter(n => lensAllows(n.kind, n.status) && (!narrow || pageAllows(n)));
 }
 // The whole store under the lens, whichever page is narrowing it.
@@ -2621,7 +2639,7 @@ function draw() {
         + (onPage < inFile ? "; the rest are not reached from any page" : "")
     : focus ? `${here} › ${(byId.get(focus) || {}).label || ""}`
     // A store has no module to pick; a card here opens a namespace.
-    : STORE_LAYERS.has(layer) ? `${here} — tap a card to open it`
+    : PAGED_LAYERS.has(layer) ? `${here} — tap a card to open it`
     : `${here} — pick a module`;
   document.getElementById("up").hidden = !focus;
   // draw() is what WRITES the breadcrumb, so the readout has to be told after it, not
@@ -2871,9 +2889,12 @@ function draw() {
     // A module's second line names its LANGUAGE, because that is the thing a reader is
     // actually scanning for on a polyglot map - "javascript file" under a card called
     // totals.ts was wrong on its face, and wrong in the one way this map exists to fix.
+    // How many pages reach it, when that is more than one: the number that says a
+    // change here lands somewhere other than the page it was made on.
+    const on = pagesOn(n);
     const sub = fit(
       n.kind === "module" && n.lang ? n.lang.toLowerCase() + " file"
-        : (KIND_WORD[n.kind] || n.kind.replace(/_/g, " ")), 26);
+        : (KIND_WORD[n.kind] || n.kind.replace(/_/g, " ")), on ? 15 : 26);
     // On an isolated path a FILE is drawn as a pill rather than a card. Reading a chain
     // is reading a sequence of different kinds of thing, and a column of identical
     // rectangles makes every hop look alike - the shape should carry some of the meaning
@@ -2886,7 +2907,9 @@ function draw() {
             stroke="${stroke}" stroke-width="${ch ? 3 : 1.5}"/>
       <title>${esc(n.label)}${n.file ? "\n" + esc(n.file) + (n.line ? ":" + n.line : "") : ""}</title>
       <text x="${q.x + (pill ? 22 : 12)}" y="${q.y + 20}">${esc(label)}</text>
-      <text class="sub" x="${q.x + (pill ? 22 : 12)}" y="${q.y + 36}">${esc(sub)}</text></g>`);
+      <text class="sub" x="${q.x + (pill ? 22 : 12)}" y="${q.y + 36}">${esc(sub)}</text>${on
+        ? `<text class="sub on" x="${q.x + q.w - 12}" y="${q.y + 36}" text-anchor="end">on ${on} pages</text>`
+        : ""}</g>`);
   });
   out.push("</g>");
   svg.innerHTML = out.join("");
@@ -3682,7 +3705,7 @@ const pgwrap = document.getElementById("pgwrap"), viewer = document.getElementBy
 // question, so it stays.
 function syncPageWrap() {
   const drawable = SECTION_KINDS[mode] !== undefined && !asList;
-  pgwrap.hidden = !drawable || (SERVICE_LAYERS.has(layer) && !STORE_LAYERS.has(layer));
+  pgwrap.hidden = !drawable || (SERVICE_LAYERS.has(layer) && !PAGED_LAYERS.has(layer));
 }
 const listToggle = document.getElementById("aslist");
 listToggle.onclick = () => { asList = !asList; switchTo(mode); };
@@ -4738,8 +4761,9 @@ _SERVICE_LAYERS = (
     ("redis", "Redis", ("redis_key", "redis_key_use", "redis_ttl")),
 )
 # The layers whose nodes ARE on pages, and so can say which. A webhook is reached by
-# Stripe and lists none; a key is reached by whichever pages' handlers touch it.
-_STORE_LAYERS = frozenset({"database", "redis"})
+# Stripe and lists none; a key is reached by whichever pages' handlers touch it; the
+# shared layer holds nothing but nodes two pages reach.
+_PAGED_LAYERS = frozenset({"database", "redis", "shared"})
 
 # Below this a chunk is plain JSON, so a small map stays readable in the markup and the
 # fixture tests can grep it; above it, gzip + base64. The crossover is where the base64
@@ -4948,11 +4972,33 @@ def _payload(connectivity_map: ConnectivityMap) -> tuple[str, list[Chunk], dict[
     # holds. A store layer's chunk carries this per node, so a key's card can say where
     # it is touched from and the Page picker can narrow the layer to one page.
     on_pages: dict[str, list[int]] = {}
-    for index, (name, _t, _w, layer, nodes, _e, _g, union) in enumerate(pages):
+    group_of: dict[int, int] = {}
+    for index, (name, _t, _w, layer, nodes, _e, group, union) in enumerate(pages):
         if layer or union or name.startswith(f"{UNREACHED_PAGE}:"):
             continue
+        group_of[index] = group
         for node in nodes:
-            on_pages.setdefault(node.id, []).append(index)
+            if node.kind != "page":
+                on_pages.setdefault(node.id, []).append(index)
+    # Reached from two or more PAGES - the ones a person knows, so two sections of one
+    # page do not count - which is the helper everything imports and the endpoint three
+    # pages call: the change that breaks more than the page it was made on.
+    shared = {nid for nid, on in on_pages.items() if len({group_of[i] for i in on}) > 1}
+    if shared:
+        seen = {}
+        for index in group_of:
+            for node in pages[index][4]:
+                if node.id in shared:
+                    seen.setdefault(node.id, node)
+        edges, seen_edges = [], set()
+        for index in group_of:
+            for e in pages[index][5]:
+                pair = (e.source, e.target)
+                if e.source in seen and e.target in seen and pair not in seen_edges:
+                    seen_edges.add(pair)
+                    edges.append(e)
+        pages.append(("layer:shared", "Shared across pages", "", "shared",
+                      list(seen.values()), edges, None, False))
 
     meta_pages, chunks = [], []
     file_best: dict[str, tuple[int, int]] = {}
@@ -5004,8 +5050,14 @@ def _payload(connectivity_map: ConnectivityMap) -> tuple[str, list[Chunk], dict[
             "nodes": rows,
             "edges": [[e.source, e.target, statuses(e.status)] for e in edges],
         }
-        if layer in _STORE_LAYERS:
+        if layer in _PAGED_LAYERS:
             rows_chunk["pg"] = [on_pages.get(node.id, []) for node in nodes]
+        elif not layer:
+            # Sparse on an ordinary page: only the rows two pages reach, so a card there
+            # can say "on 3 pages" without every row carrying an empty list.
+            sparse = [[i, on_pages[node.id]] for i, node in enumerate(nodes) if node.id in shared]
+            if sparse:
+                rows_chunk["shared"] = sparse
         chunks.append(_chunk(f"p{index}", rows_chunk))
         chunks.append(_chunk(f"d{index}", {
             field: [getattr(node, field) or "" for node in nodes] for field in _DETAIL_FIELDS

@@ -77,6 +77,14 @@ use is in the same file. A project whose views hand off to a cache module will s
 whole store under Every page and nothing under any one page — the store is right, the page
 column is empty.
 
+## What two pages share
+
+**Shared across pages** is the layer of everything reached from two or more pages — the
+helper every page imports, the endpoint three pages call, the selector two templates
+write. It is the answer to "what else does this change touch": a card there, and the same
+card on any ordinary page, says **on N pages**, and its sheet names them. Two sections of
+one page count as one page.
+
 One menu, and the counts are the current page's.
 
 ![The menu](images/menu.png)
