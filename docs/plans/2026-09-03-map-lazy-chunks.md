@@ -46,3 +46,16 @@ inline limit 4 KB). Open 0.43 s, heap 6 MB. Biggest page (`unreached:template`, 
 symbols) decodes in 10 ms and draws in 0.14 s; aggregate expanded to 500 cards: 1.5 s,
 heap 24 MB, 2,552 elements. Sheet 20 ms. Search index 42,576 rows in 20 ms on first
 keystroke; `user` 3 ms. No page or console errors. verify_output --self ok.
+
+**Synthetic scale (`tools/synth_map.py`, same shape as the real map, same headless setup).**
+
+| symbols (≈ lines) | pages | render | Python peak RSS | file | open | heap open | biggest page drawn | search index (rows, load, heap) |
+|---|---|---|---|---|---|---|---|---|
+| 37k (≈ 0.5M) | 76 | 0.2 s | 65 MB | 2.5 MB | 0.40 s | 8 MB | 8,326 in 0.01 s | 37k · 20 ms · 14 MB |
+| 730k (≈ 10M) | 1,180 | 5.4 s | 774 MB | 43.7 MB | 0.66 s | 116 MB | 164,251 in 0.05 s | 730k · 0.39 s · 243 MB |
+| 2M (≈ 27M) | 3,188 | 15.4 s | 1.9 GB | 120 MB | 1.49 s | 218 MB | 450,001 in 0.18 s | 2M · 1.16 s · 633 MB |
+
+No console errors at any size. What bends first is the **search index** - one chunk
+holding every row (13.6 MB gz at 730k, 37.8 MB at 2M) and the whole thing inflated in the
+heap on the first keystroke. That is Phase 4 (shards by label prefix, loaded on demand).
+Second is Python peak RSS at render (≈1 KB/symbol); Phase 5.

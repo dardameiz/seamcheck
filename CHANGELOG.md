@@ -31,6 +31,13 @@ backend that answered `uncertain` everywhere would score 100% precision and be u
   headless, DPR 1: **22.6 MB → 5.5 MB**, open 0.43 s, heap 6 MB at open and 24 MB with the
   biggest page (18,943 symbols) drawn and its aggregate expanded to 500 cards, search
   index (42,576 rows) 20 ms on first keystroke, `user` 3 ms, no console errors.
+- **Measured past any real repository.** `tools/synth_map.py N` builds a graph in the
+  shape of the real map - three buckets holding 45%, a dozen heavy bundles, hundreds of
+  ordinary pages, fan-in wires, notes and context - and renders it through the same
+  `render()`. At 730k symbols (≈10M lines at the measured 73 symbols per 1k lines): 43.7 MB
+  file, opens in 0.66 s at 116 MB heap, biggest page (164k symbols) draws in 50 ms, no
+  errors. At 2M symbols (≈27M lines): 120 MB file, 1.5 s, 218 MB. The search index is
+  the part that grows without bound (633 MB heap at 2M) and is the next thing to shard.
 - **The Stripe, Celery and GraphQL layers are pages the renderer builds**, not a union the
   browser assembled from every page on open (which forced every page to be decoded).
   Hidden from the page picker; empty when the scan found nothing for that service.
