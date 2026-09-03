@@ -423,7 +423,6 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overf
    filter the reader set and has to be findable when they come back to the screen a minute
    later, which on a phone is the common case. The pill itself carries the signal, so it
    reads from the corner of the eye without parsing five small words. */
-.seg button[data-status=""][aria-pressed="true"] { background:var(--sunk); color:var(--muted); }
 .pill.filtering, .legendbar.filtering .seg { border-color:var(--sig); }
 .pill.filtering { box-shadow:0 0 0 1px var(--sig), 0 10px 30px -12px rgba(0,0,0,.6); }
 /* On the glass with the status pills, because that is where a reader is looking when a
@@ -437,10 +436,6 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overf
 .fnote button { flex:none; background:var(--sig); color:var(--bg); border:0; cursor:pointer;
                 border-radius:var(--r-pill); padding:5px 12px; font-family:var(--mono);
                 font-size:11.5px; font-weight:600; }
-.fnote-legacy { grid-column:1 / -1; font-size:11px; color:var(--sig); display:flex; gap:8px;
-  align-items:center; justify-content:space-between; }
-.fnote button { background:none; border:0; color:var(--sig); font:inherit; font-size:11px;
-  text-decoration:underline; cursor:pointer; padding:0; }
 .seg button.s-connected[aria-pressed="true"] { background:var(--ok); }
 .seg button.s-unresolved[aria-pressed="true"] { background:var(--crit); }
 .seg button.s-unused[aria-pressed="true"] { background:var(--warn); }
@@ -623,11 +618,13 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
 .nd.faded { opacity:.10; }
 #cv.nolabels .nd text { display:none; }
 .nd.lit rect { stroke-width:3.5; }
-.ed { fill:none; stroke-width:1.1; opacity:.38; }
+/* stroke-opacity, not opacity: `opacity` makes every wire its own transparency group
+   that the compositor has to blend separately; a translucent stroke is just a colour. */
+.ed { fill:none; stroke-width:1.1; stroke-opacity:.38; }
 /* On the isolated path: opaque and heavier, so the one thing being followed is the one
    thing the eye lands on. */
-.ed.lit { stroke-width:2.4; opacity:1; }
-.ed.faded { opacity:.05; }
+.ed.lit { stroke-width:2.4; stroke-opacity:1; }
+.ed.faded { stroke-opacity:.05; }
 .col { font-size:9.5px; fill:var(--muted); text-transform:uppercase; letter-spacing:.1em;
        font-family:var(--mono); }
 
@@ -766,9 +763,6 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
 .fl.inv { cursor:default; }
 .fl.inv .fn { flex:1 1 auto; }
 /* An empty canvas has to say why. Readable size, not the 9.5px column-heading style. */
-#cv .mt { font-size:14px; fill:var(--ink); }
-#cv .mt.sub { font-size:13px; fill:var(--muted); }
-#cv .mt tspan.hl { fill:var(--sig); }
 /* The page as the browser laid it out. Boxes at true proportions, coloured by what the
    scan says - the two views of one page, side by side in one picture. */
 .obwrap { border:1px solid var(--line); border-radius:var(--r-card); background:var(--sunk);
@@ -1276,6 +1270,9 @@ const PAGES = (() => {
     edges: p.edges.map(e => ({source: e[0], target: e[1], status: S_[e[2]]})),
   }));
 })();
+// The raw rows are 90% of this file and nothing reads them again once inflated; keeping
+// them alive doubled the heap of a 50,000-row map. The rest of MAPDATA is small.
+MAPDATA.pages = null;
 // Which changed-set is in force. Starts as the whole-run diff, and a commit selection
 // replaces it - so "what changed" always means the thing the reader picked, never a
 // blend of a commit and a branch.
@@ -1295,6 +1292,10 @@ let lit = null, isolate = false, fileFilter = null;
 // the first is out would put 18,000 cards on the canvas. Declared with the other filters
 // because the filter notice reads it, and that runs long before the canvas does.
 let expandedKind = null;
+// Where an opened kind's window starts. A kind with 2,000 members opens 500 at a time -
+// the cap used to cut silently at 2,000 and the reader never learned what was missing.
+let expandedFrom = 0;
+const EXPAND_PAGE = 500;
 
 // A section is a lens on the same canvas, not a different page. The list of rows is the
 // CLI's answer; on screen the answer is the shape.
@@ -1512,9 +1513,6 @@ function syncStatusKey() {
 // a filter, pans for a minute, and comes back to a map that is not the whole map - with
 // no way to tell except reading five small words in a row of buttons.
 function markFiltered() {
-  const on = statusFilter.size > 0 || Boolean(layer);
-  const pill = document.querySelector(".pill");
-  if (pill) pill.classList.toggle("filtering", on);
   colourkey.classList.toggle("filtering", statusFilter.size > 0);
 
   const note = document.getElementById("fnote");
@@ -1930,7 +1928,10 @@ function place(buckets, used, perRow) {
       // crossing is the whole subject and the map never said it.
       items.forEach(n => { if (n.lang) bandLangs.add(n.lang); });
 
-      if (items.length > AGGREGATE_OVER && !expandedKind) {
+      // `!expandedKind` here once meant that opening ONE kind opened EVERY kind on the
+      // page at once - 2,000 cards and every wire between them, the wall this card exists
+      // to prevent. A kind is open only when it is the one the reader tapped.
+      if (items.length > AGGREGATE_OVER && expandedKind !== kind) {
         // One card for the whole kind, sized up because it stands for more.
         const worst = ["unresolved", "unused", "uncertain", "connected"]
           .find(st => items.some(n => n.status === st)) || "connected";
@@ -1944,14 +1945,33 @@ function place(buckets, used, perRow) {
         tallest = Math.max(tallest, BIG_H);
         return;
       }
-      items.forEach((n, i) => {
+      // An opened kind shows one window of EXPAND_PAGE cards; the rest are parked on a
+      // "more" card at the end, which is where their wires land and what the reader taps
+      // to see the next window. Nothing is cut without a card that says so.
+      let shown = items, rest = [];
+      if (expandedKind === kind && items.length > EXPAND_PAGE) {
+        const from = Math.min(expandedFrom, items.length - 1);
+        shown = items.slice(from, from + EXPAND_PAGE);
+        rest = items.slice(0, from).concat(items.slice(from + EXPAND_PAGE));
+      }
+      shown.forEach((n, i) => {
         const col = i % perRow, row = Math.floor(i / perRow);
         pos.set(n.id, {x: x + col * (CARD_W + GAP_X),
                        y: rowTop + row * (CARD_H + GAP_Y), w: CARD_W, h: CARD_H});
       });
-      const rows = Math.ceil(items.length / perRow);
-      tallest = Math.max(tallest, rows * (CARD_H + GAP_Y) - GAP_Y);
-      x += Math.min(items.length, perRow) * (CARD_W + GAP_X);
+      let rows = Math.ceil(shown.length / perRow);
+      if (rest.length) {
+        const my = rowTop + rows * (CARD_H + GAP_Y);
+        aggregates.push({kind, label, x, y: my, w: BIG_W, h: BIG_H, more: true,
+                         count: rest.length, open: 0, status: "connected",
+                         from: Math.min(expandedFrom, items.length - 1), total: items.length});
+        rest.forEach(n => pos.set(n.id, {x, y: my, w: BIG_W, h: BIG_H, agg: true}));
+        rows += 1;
+        tallest = Math.max(tallest, rows * (CARD_H + GAP_Y) - GAP_Y + (BIG_H - CARD_H));
+      } else {
+        tallest = Math.max(tallest, rows * (CARD_H + GAP_Y) - GAP_Y);
+      }
+      x += Math.min(shown.length, perRow) * (CARD_W + GAP_X);
       width = Math.max(width, x);
     };
 
@@ -2198,9 +2218,11 @@ function reportEmpty(count) {
   const bits = [];
   if (layer) bits.push((LAYERS.find(([k]) => k === layer) || [, layer])[1]);
   if (statusFilter.size) bits.push([...statusFilter].join(" or "));
+  if (fileFilter) bits.push("in " + fileFilter.split("/").pop());
   box.innerHTML = bits.length
     ? `<b>Nothing is both ${bits.map(esc).join(" and ")}.</b>
-       <span>The filters are fine; this combination is empty.</span>`
+       <span>The filters are fine; this combination is empty. Take one off, or pick
+       another page.</span>`
     : "<b>Nothing to draw here.</b><span>Try another page.</span>";
 }
 
@@ -2216,7 +2238,7 @@ function layoutKey() {
   // cached layout - the dropdown said 35 nodes over a canvas still drawing all 392. A
   // cache keyed on less than its function reads is a cache that lies.
   return [current, mode, focus, fileFilter, only, isolate ? lit : "", asList,
-          layer, expandedKind || "", [...statusFilter].sort().join(",")].join("\u0000");
+          layer, expandedKind || "", expandedFrom, [...statusFilter].sort().join(",")].join("\u0000");
 }
 
 function layoutFor(p) {
@@ -2267,20 +2289,16 @@ function draw() {
     return;
   }
   // Filters that exclude everything draw an empty canvas, which is indistinguishable from
-  // a broken one - and "the filter is not working" was exactly the report. Say what is on
-  // and offer to take it off, rather than showing a blank rectangle.
+  // a broken one - and "the filter is not working" was exactly the report. ONE thing says
+  // so: the notice box, which names the filters and sits where the reader is looking.
+  // This used to write its own line of svg text instead, so the box - the one with the
+  // "clear" beside it - never appeared for exactly the case it was written for.
   const shownNow = visible(p);
   const onlyPage = [...shownNow].every(id => (byId.get(id) || {}).kind === "page");
   if (!shownNow.size || onlyPage) {
-    const on = [];
-    if (fileFilter) on.push(`file <tspan class="hl">${esc(fileFilter)}</tspan>`);
-    if (layer) on.push(`layer <tspan class="hl">${esc(layer)}</tspan>`);
-    if (statusFilter.size) on.push(`status <tspan class="hl">${esc([...statusFilter].join(", "))}</tspan>`);
-    svg.innerHTML =
-      `<text x="20" y="42" class="mt">Nothing on this page matches all of the filters.</text>` +
-      (on.length
-        ? `<text x="20" y="70" class="mt sub">On now: ${on.join(" · ")}</text>` : "") +
-      `<text x="20" y="98" class="mt sub">Take one off, or pick another page.</text>`;
+    svg.innerHTML = "";
+    reportMatches(0, 0);
+    reportEmpty(0);
     return;
   }
   const {keep, value: {pos, columns, bands, lanes, aggregates, width, height}} = layoutFor(p);
@@ -2390,6 +2408,12 @@ function draw() {
     }
   });
   const drawnEdge = new Set();
+  // One wire per pair of CARDS, not per edge. Two aggregate cards with 8,591 edges
+  // between them drew 8,591 identical paths, each its own opacity group and marker -
+  // that was 85% of the markup on the biggest page, and it was one line. The merged
+  // wire is lit if any edge under it is, faded only if all of them are, and thickens
+  // with the log of how many it stands for.
+  const wires = new Map();
   p.edges.forEach(e => {
     // A status carried on a loop to itself is not a connection. See above.
     if (e.source === e.target) return;
@@ -2408,13 +2432,21 @@ function draw() {
       || (fading && query && !ends.every(n => n && hit(n)));
     // Lit: this edge is part of the path the reader asked to see on its own.
     const onChain = !!chain && chain.has(e.source) && chain.has(e.target);
-    const colour = S[e.status] || "var(--dim)";
-    const head = `url(#ar-${e.status || "dim"}${onChain ? "-lit" : ""})`;
-    const tail = twoWay ? ` marker-start="url(#tl-${e.status || "dim"}${onChain ? "-lit" : ""})"` : "";
-    out.push(`<path class="ed${dim ? " faded" : ""}${onChain ? " lit" : ""}"
-      stroke="${colour}" marker-end="${head}"${tail}
-      d="${wirePath(a.x + (a.w || CARD_W), a.y + (a.h || CARD_H) / 2,
-                    b.x, b.y + (b.h || CARD_H) / 2, onChain)}"/>`);
+    const st = e.status || "dim";
+    const key = [a.x, a.y, b.x, b.y, st, twoWay ? 1 : 0].join("\u0000");
+    const w = wires.get(key);
+    if (w) { w.n += 1; w.dim = w.dim && dim; w.onChain = w.onChain || onChain; return; }
+    wires.set(key, {a, b, st, twoWay, dim, onChain, n: 1});
+  });
+  wires.forEach(w => {
+    const colour = S[w.st] || "var(--dim)";
+    const head = `url(#ar-${w.st}${w.onChain ? "-lit" : ""})`;
+    const tail = w.twoWay ? ` marker-start="url(#tl-${w.st}${w.onChain ? "-lit" : ""})"` : "";
+    const thick = w.n > 1 && !w.onChain ? ` style="stroke-width:${(1.1 + Math.log10(w.n)).toFixed(1)}"` : "";
+    out.push(`<path class="ed${w.dim ? " faded" : ""}${w.onChain ? " lit" : ""}"${thick}
+      stroke="${colour}" marker-end="${head}"${tail}${w.n > 1 ? ` data-n="${w.n}"` : ""}
+      d="${wirePath(w.a.x + (w.a.w || CARD_W), w.a.y + (w.a.h || CARD_H) / 2,
+                    w.b.x, w.b.y + (w.b.h || CARD_H) / 2, w.onChain)}"/>`);
   });
   // "Alone" is the STATUS, not the edge count. A symbol reaches a page by an edge, so
   // nothing here can have no edges, and the map's edge set carries no self-loops either -
@@ -2443,6 +2475,22 @@ function draw() {
   });
 
   (aggregates || []).forEach(g => {
+    if (g.more) {
+      // The window of an opened kind: "501-1,000 of 2,164 - tap for the next 500". The
+      // count is every card NOT in this window, before it as well as after, because that is
+      // what is parked here; on the last window the tap wraps back to the first.
+      const to = Math.min(g.from + EXPAND_PAGE, g.total), last = to >= g.total;
+      const tap = last ? "tap for the first" : "tap for the next";
+      out.push(`<g class="nd agg more" data-kind="${esc(g.kind)}" data-more="1">
+        <rect x="${g.x}" y="${g.y}" width="${g.w}" height="${g.h}" rx="${NODE_R}"
+              fill="var(--panel)" stroke="var(--ink)" stroke-width="2" stroke-dasharray="6 4"/>
+        <title>${esc(g.count.toLocaleString())} not in this window — ${tap} ${EXPAND_PAGE}</title>
+        <text class="big" x="${g.x + 14}" y="${g.y + 27}">+${g.count.toLocaleString()}</text>
+        <text class="sub" x="${g.x + 14}" y="${g.y + 45}">${(g.from + 1).toLocaleString()}–${
+          to.toLocaleString()} of ${g.total.toLocaleString()} · ${last ? "tap for first" : "tap for next"}</text>
+      </g>`);
+      return;
+    }
     out.push(`<g class="nd agg st-${esc(g.status)}" data-kind="${esc(g.kind)}">
       <rect x="${g.x}" y="${g.y}" width="${g.w}" height="${g.h}" rx="${NODE_R}"
             fill="${F[g.status] || "var(--panel)"}" stroke="${S[g.status] || "var(--dim)"}"
@@ -2519,7 +2567,15 @@ svg.addEventListener("click", e => {
   const agg = e.target.closest && e.target.closest(".nd.agg");
   if (agg) {
     e.stopPropagation();
-    expandedKind = expandedKind === agg.dataset.kind ? null : agg.dataset.kind;
+    if (agg.dataset.more) {
+      // Next window of the open kind; past the end, wrap to the first.
+      expandedFrom += EXPAND_PAGE;
+      const total = (currentPage().nodes || []).filter(n => n.kind === agg.dataset.kind).length;
+      if (expandedFrom >= total) expandedFrom = 0;
+    } else {
+      expandedKind = expandedKind === agg.dataset.kind ? null : agg.dataset.kind;
+      expandedFrom = 0;
+    }
     _layout.key = null;
     draw();
     return;
@@ -2991,10 +3047,14 @@ document.getElementById("zf").onclick = () => {
   // Back to "unset", which is the signal draw() reads to re-fit the page to the screen.
   view = {x:0, y:0, k:1}; draw();
 };
+// One redraw per pause in typing. draw() on every keystroke rebuilt the canvas six
+// times for a six-letter word; the results list is cheap and still follows each key.
+let qTimer = null;
 document.getElementById("q").addEventListener("input", e => {
   query = e.target.value.trim().toLowerCase();
-  draw();
   showResults(query);
+  clearTimeout(qTimer);
+  qTimer = setTimeout(draw, 120);
 });
 document.getElementById("q").addEventListener("focus", () => showResults(query));
 document.addEventListener("click", e => {
@@ -4548,7 +4608,6 @@ def render(connectivity_map: ConnectivityMap, console=None, files=None,
         '<button type="button" class="s-uncertain" data-status="uncertain" '
         'title="No evidence either way \u2014 not a claim it is dead">'
         '<i></i>uncertain<b></b></button>'
-        '<button type="button" data-status="" class="allbtn" hidden>all</button>'
         "</div></div>"
         # A filter that empties the canvas has to offer its own way out, WHERE THE READER
         # IS LOOKING. This used to live in the header; the header is gone and the button

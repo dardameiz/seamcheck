@@ -525,7 +525,10 @@ class ReadabilityTests(SimpleTestCase):
         for status in ("connected", "unresolved", "unused", "uncertain"):
             self.assertIn(f'data-status="{status}"', out)
         self.assertIn("not a claim it is dead", out, "the meaning is still reachable")
-        self.assertIn('data-status=""', out, "there must be a way back to everything")
+        # The way back to everything is the clear on the filter notice; an "all" chip
+        # used to exist but the chip loop never un-hid it, so it was dead and is gone.
+        self.assertNotIn('data-status=""', out, "the dead all-chip is back")
+        self.assertIn('id="fnote"', out, "there must be a way back to everything")
 
     def test_the_legend_does_not_borrow_the_key_buttons_class(self):
         # Both were called .key, so the strip inherited the button's absolute position and

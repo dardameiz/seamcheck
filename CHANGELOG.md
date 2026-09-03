@@ -26,6 +26,28 @@ backend that answered `uncertain` everywhere would score 100% precision and be u
   viewports so a drag shows pre-rasterised content instead of blank strips, and the view
   is committed once when the gesture ends. Same page: 60 drag moves 4.65 s → 1.15 s wall,
   ~8 ms main-thread per move; verified headless on the 22 MB pointlessbutton map.
+- **A page with tens of thousands of wires now draws in one frame.** The largest
+  pointlessbutton page (push-arena-main, 3,461 nodes) used to build 10,040 wire paths on
+  open. Now only one kind of node is expanded at a time, an expanded kind shows 500 cards
+  per window with a dashed "+N · 1–500 of 1,079 · tap for next" card to page through, and
+  the wires between two cards merge into one path whose stroke scales with the count
+  (`data-n`). Collapsed: **10,040 → 40 paths**; one kind expanded: 529 cards / 982 paths /
+  3,678 DOM nodes. Measured headless on the 22 MB map: 60 drag moves 0.92 s wall, 30 zoom
+  ticks 0.90 s, both with **0 long tasks**; search 0.65 s (debounced 120 ms); 26 MB JS heap.
+- **A filter combination that empties the canvas now says so.** The status chip plus a
+  layer with none of that status drew nothing and stayed silent: two pieces of code wrote
+  the empty state (an svg text in `draw()` and the `#nothing` notice), and the one that ran
+  first hid the other. `reportEmpty()` is the single writer now, and it names the file
+  filter too.
+- **Removed a control that never appeared.** The "all" chip in the colour key was skipped
+  by the loop that un-hides chips, so it was dead on every page. The way back from a status
+  filter is the clear on the filter notice; the notice's button also lost a leftover rule
+  from an earlier layout that had been restyling it as an underlined text link.
+- The browser tests (`test_map_runs_in_a_browser.py`, 71) were rewritten against the
+  current one-menu layout — they had been tapping a lens list that lives behind the menu
+  button since that redesign, and asserting a theme control and a pill bar that no longer
+  exist. All 71 pass headless.
+
 - Store bands were black: the band stroke read an undefined `--text` token. Now `--ink`,
   with a visible white border.
 - Docs: README explains the one-page-per-script map; `docs/the-map.md` has the long form;
@@ -40,6 +62,9 @@ Known open, recorded rather than hidden:
   literal markup/strings from an earlier renderer (rail vs select, `it_loads_nothing_from_
   the_network` — the Google Fonts `<link>` breaks the offline promise it asserts). To be
   rewritten against behaviour, not strings, during the map-at-scale work.
+- Dead CSS from earlier layouts is still in the map stylesheet (`.pill`, `.top`,
+  `.legendbar`, `.filters`): harmless, ~2 KB, to go in a cleanup pass once the stale
+  renderer tests that still assert some of it are rewritten.
 - One corpus repo's JavaScript parser exits 1 under Node 23 (`parse_js.bundle.mjs
   exited 1`); the other extractors still run, so it is not a CRASH row, but that repo's
   JS symbols are missing from its scan.

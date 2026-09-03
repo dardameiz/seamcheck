@@ -54,6 +54,30 @@ def _fixture_graph() -> Graph:
     return Graph(symbols=symbols, edges=edges)
 
 
+
+def _open_lens(page, key: str) -> None:
+    """Pick a lens. Overview opens first and the lens list lives inside the one menu, on
+    every width, so the menu opens before anything in it can be tapped."""
+    if page.get_attribute("#menubtn", "aria-expanded") != "true":
+        page.click("#menubtn")
+    page.click(f'#nav .nv[data-key="{key}"]')
+
+
+def _goto_page_with(page, status: str) -> None:
+    """Open the first page holding a node of this status. A status the open page has
+    none of is hidden from the colour key rather than offered as a chip that filters
+    nothing, so a test that taps a chip has to stand on a page where it exists."""
+    page.evaluate("""(status) => {
+        const sel = document.getElementById('pg');
+        const i = [...sel.options].findIndex(o =>
+            PAGES[Number(o.value)].nodes.some(n => n.status === status));
+        if (i < 0) throw new Error('no page holds a ' + status + ' node');
+        sel.selectedIndex = i;
+        sel.dispatchEvent(new Event('change', {bubbles: true}));
+    }""", status)
+    page.wait_for_timeout(200)
+
+
 class MapRunsInABrowser(SimpleTestCase):
     @classmethod
     def setUpClass(cls):
@@ -104,8 +128,8 @@ class MapRunsInABrowser(SimpleTestCase):
         self.assertEqual(errors, [], f"the map raised in the browser: {errors}")
         self.assertGreater(populated["nav"], 0, "navigation never rendered")
         self.assertGreater(populated["pages"], 0, "page selector never filled")
-        # Four statuses plus "all", which is the way back to everything.
-        self.assertEqual(populated["key"], 5, "the status filter is missing")
+        # Four statuses. The way back to everything is the clear on the filter notice.
+        self.assertEqual(populated["key"], 4, "the status filter is missing")
         self.assertEqual(populated["theme"], 1, "the theme control is missing")
 
     def test_clicking_a_status_chip_filters_the_page_counts(self):
@@ -122,15 +146,26 @@ class MapRunsInABrowser(SimpleTestCase):
             page.goto(url, wait_until="load")
             page.wait_for_timeout(300)
             # The key belongs to the canvas, and the canvas is hidden until a lens that
-            # draws is selected. Overview opens first.
-            page.click('#nav .nv[data-key="map"]')
+            # draws is selected. Overview opens first, and the lens list lives inside the
+            # one menu, so the menu opens before anything in it can be tapped.
+            _open_lens(page, "map")
             page.wait_for_timeout(200)
-            before = page.eval_on_selector("#pg option", "el => el.textContent")
-            page.click('#colourkey .seg button[data-status="unresolved"]')
+            # A filter can only change a page that mixes statuses, and a status the page
+            # has none of is hidden rather than offered as a chip that filters nothing.
+            # So: go to the first page with two statuses, then tap the first chip shown.
+            mixed = page.evaluate("""() => {
+                const pages = [...document.querySelectorAll('#pg option')].map(o => o.value);
+                return pages.findIndex(v =>
+                    new Set(PAGES[Number(v)].nodes.map(n => n.status)).size > 1);
+            }""")
+            page.select_option("#pg", index=mixed)
             page.wait_for_timeout(200)
-            after = page.eval_on_selector("#pg option", "el => el.textContent")
-            pressed = page.get_attribute(
-                '#colourkey .seg button[data-status="unresolved"]', "aria-pressed")
+            before = page.eval_on_selector("#pg option:checked", "el => el.textContent")
+            chip = '#colourkey .seg button[data-status]:not([data-status=""]):not([hidden])'
+            page.click(chip)
+            page.wait_for_timeout(200)
+            after = page.eval_on_selector("#pg option:checked", "el => el.textContent")
+            pressed = page.get_attribute(chip + '[aria-pressed="true"]', "aria-pressed")
             browser.close()
 
         self.assertNotEqual(before, after, "filtering changed nothing")
@@ -167,7 +202,7 @@ class TrendChartRenders(MapRunsInABrowser):
             page.on("pageerror", lambda e: errors.append(str(e)))
             page.goto(url, wait_until="load")
             page.wait_for_timeout(250)
-            page.click('#nav .nv[data-key="changes"]')
+            _open_lens(page, "changes")
             page.wait_for_timeout(200)
             state = page.evaluate("""() => ({
                 dots: document.querySelectorAll('.trend .dot').length,
@@ -254,14 +289,15 @@ class SyntaxHighlighting(MapRunsInABrowser):
         self.assertEqual(rendered.count('<i class="k">const</i>'), 1)
 
 
-class ThemeControl(MapRunsInABrowser):
-    """The map is read on a phone in a light OS as often as on a dark desktop.
+class AppearancePicker(MapRunsInABrowser):
+    """Appearance is a pack, not a switch.
 
-    It followed prefers-color-scheme and offered no way to disagree, so a reader whose
-    system is light had no way to see the dark design at all.
+    The map is read on a light phone as often as on a dark desk, and a reader may hate
+    the colour the author liked. The control offers named packs; the ones that read on
+    either ground also offer the ground, and the choice survives a reload.
     """
 
-    def _cycle(self, clicks: int) -> str:
+    def _pick(self, steps, reload=False):
         from playwright.sync_api import sync_playwright
 
         url = self._render()
@@ -273,37 +309,51 @@ class ThemeControl(MapRunsInABrowser):
             page = browser.new_page()
             page.goto(url, wait_until="load")
             page.wait_for_timeout(200)
-            page.click('#nav .nv[data-key="map"]')
-            for _ in range(clicks):
+            _open_lens(page, "map")
+            if steps:
                 page.click("#tmode")
-            stamped = page.get_attribute("html", "data-theme")
+            for step in steps:
+                page.click(step)
+                page.wait_for_timeout(100)
+            if reload:
+                page.reload(wait_until="load")
+                page.wait_for_timeout(200)
+            stamped = page.evaluate("""() => ({
+                pack: document.documentElement.getAttribute('data-pack'),
+                mode: document.documentElement.getAttribute('data-mode'),
+                modesOffered: !document.querySelector('#packmenu .modes').hidden,
+            })""")
             browser.close()
         return stamped
 
-    def test_dark_is_the_default(self):
-        """Dark is the ground the status colours were chosen against.
+    def test_the_default_is_the_dark_aurora_and_offers_no_ground(self):
+        """A light Aurora is not Aurora, so the ground row is withheld for it."""
+        state = self._pick([])
+        self.assertEqual(state["pack"], "aurora")
+        self.assertIsNone(state["mode"], "a single-world pack must not be stamped a mode")
+        self.assertFalse(state["modesOffered"])
 
-        Following the system meant a reader on a light phone got the pale variant with no
-        idea a better one existed - and the map is read on a phone as often as anywhere.
-        """
-        self.assertEqual(self._cycle(0), "dark")
+    def test_a_two_ground_pack_offers_light_and_dark(self):
+        state = self._pick(['#packmenu [data-pk="slate"]'])
+        self.assertEqual(state["pack"], "slate")
+        self.assertTrue(state["modesOffered"])
+        self.assertEqual(state["mode"], "light", "light is the ground a phone is read on")
+        state = self._pick(['#packmenu [data-pk="slate"]', '#packmenu [data-md="dark"]'])
+        self.assertEqual(state["mode"], "dark")
 
-    def test_one_press_gives_light(self):
-        self.assertEqual(self._cycle(1), "light")
-
-    def test_two_presses_hand_it_back_to_the_system(self):
-        self.assertIsNone(self._cycle(2), "the system setting is still reachable")
-
-    def test_three_presses_return_to_dark(self):
-        self.assertEqual(self._cycle(3), "dark")
+    def test_the_choice_survives_a_reload(self):
+        state = self._pick(['#packmenu [data-pk="slate"]', '#packmenu [data-md="dark"]'],
+                           reload=True)
+        self.assertEqual((state["pack"], state["mode"]), ("slate", "dark"))
 
 
 class DirectionAOnAPhone(MapRunsInABrowser):
-    """The phone layout: one pill at the bottom, and the canvas gets the rest.
+    """One menu over the canvas, on every width, and the canvas gets the rest.
 
     The header was six stacked rows - brand, view, commit, page, crumb, colour key - and
-    the map got roughly a third of a 390px screen. Every control belongs in one container
-    over the canvas instead, within reach of the thumb already holding the phone.
+    the map got roughly a third of a 390px screen. Every control now lives in the one
+    dropdown behind the menu button, except the colour key, which is the filter a reader
+    reaches for most and floats over the canvas on its own.
     """
 
     @staticmethod
@@ -355,18 +405,15 @@ class DirectionAOnAPhone(MapRunsInABrowser):
             page.on("pageerror", lambda e: errors.append(str(e)))
             page.goto(path.as_uri(), wait_until="load")
             page.wait_for_timeout(300)
-            # The phone gets a View select; the desktop keeps the rail. Same destination,
-            # two controls, because the rail does not fit on 390px.
-            if width <= 720:
-                page.select_option("#vw", "map")
-            else:
-                page.click('#nav .nv[data-key="map"]')
+            _open_lens(page, "map")
             page.wait_for_timeout(300)
             state = page.evaluate("""() => ({
-                pill: !!document.querySelector('.pill'),
-                page: !!document.querySelector('.pill #pg'),
-                layer: !!document.querySelector('.pill #ly'),
-                status: !!document.querySelector('.pill #colourkey'),
+                menu: !!document.querySelector('#mapsheet'),
+                page: !!document.querySelector('.hud #pg'),
+                layer: !!document.querySelector('#mapsheet #ly'),
+                lenses: !!document.querySelector('#mapsheet #nav .nv'),
+                search: !!document.querySelector('#mapsheet #q'),
+                status: !!document.querySelector('.hud #colourkey'),
                 reading: !document.getElementById('reading').hidden,
                 big: (document.getElementById('bignum') || {}).textContent,
                 spark: document.querySelectorAll('#spark polyline').length,
@@ -378,11 +425,14 @@ class DirectionAOnAPhone(MapRunsInABrowser):
         self.assertEqual(errors, [], f"the phone layout raised: {errors}")
         return state
 
-    def test_every_control_is_in_one_pill(self):
+    def test_every_control_is_in_the_one_menu(self):
         state = self._open()
-        self.assertTrue(state["pill"], "no pill was built")
-        for control in ("page", "layer", "status"):
-            self.assertTrue(state[control], f"the {control} control is not in the pill")
+        self.assertTrue(state["menu"], "no menu was built")
+        for control in ("layer", "lenses", "search"):
+            self.assertTrue(state[control], f"the {control} control is not in the menu")
+        # The two filters a reader reaches for most float over the canvas on their own.
+        self.assertTrue(state["page"], "the page picker must sit in a corner, not a menu")
+        self.assertTrue(state["status"], "the colour key must float over the canvas")
 
     def test_the_controls_are_moved_not_duplicated(self):
         """Two copies of the page select is two answers to which page is open."""
@@ -405,9 +455,11 @@ class DirectionAOnAPhone(MapRunsInABrowser):
         self.assertNotIn("graphql", layers, "a service the scan did not find is not offered")
         self.assertIn("", layers, "there must be a way back to everything")
 
-    def test_the_desktop_keeps_its_header(self):
+    def test_the_desktop_gets_the_same_menu(self):
+        """One layout, not a phone one and a desk one that drift apart."""
         state = self._open(width=1200)
-        self.assertFalse(state["pill"], "the pill is a phone layout, not a redesign of both")
+        self.assertTrue(state["menu"])
+        self.assertTrue(state["page"] and state["layer"] and state["lenses"])
 
 
 class FiltersReachTheCanvas(DirectionAOnAPhone):
@@ -444,8 +496,7 @@ class FiltersReachTheCanvas(DirectionAOnAPhone):
             page = browser.new_page(viewport={"width": width, "height": 780})
             page.goto(path.as_uri(), wait_until="load")
             page.wait_for_timeout(250)
-            page.select_option("#vw", "map") if width <= 720 else page.click(
-                '#nav .nv[data-key="map"]')
+            _open_lens(page, "map")
             page.wait_for_timeout(300)
             counts = []
             for step in steps:
@@ -459,9 +510,9 @@ class FiltersReachTheCanvas(DirectionAOnAPhone):
 
     def test_a_status_filter_redraws_the_canvas(self):
         base, filtered, restored = self._drive([
-            lambda p: None,
+            lambda p: _goto_page_with(p, "unresolved"),
             lambda p: p.click('#colourkey .seg button[data-status="unresolved"]'),
-            lambda p: p.click('#colourkey .seg button[data-status=""]'),
+            lambda p: p.click("#fnote button"),
         ])
         self.assertLess(filtered, base, "the canvas kept drawing everything")
         self.assertEqual(restored, base)
@@ -509,7 +560,7 @@ class FiltersReachTheCanvas(DirectionAOnAPhone):
             page = browser.new_page(viewport={"width": width, "height": 780})
             page.goto(path.as_uri(), wait_until="load")
             page.wait_for_timeout(250)
-            page.select_option("#vw", "map")
+            _open_lens(page, "map")
             page.wait_for_timeout(300)
             page.evaluate("() => setSheet(true)")
             page.wait_for_timeout(200)
@@ -589,7 +640,7 @@ class PanelBehaviour(DirectionAOnAPhone):
     def test_show_as_list_stays_on_the_map(self):
         """No section is keyed "map", so renderPanel returned and left the Overview up."""
         state = self._panel([
-            lambda p: p.select_option("#vw", "map"),
+            lambda p: _open_lens(p, "map"),
             lambda p: p.click("#aslist"),
         ])
         self.assertNotEqual(state["head"], "Overview", "the list navigated away from the map")
@@ -602,9 +653,10 @@ class PanelBehaviour(DirectionAOnAPhone):
         filters one at a time and cannot see the combination.
         """
         state = self._panel([
-            lambda p: p.select_option("#vw", "map"),
-            lambda p: p.select_option("#ly", "stripe"),
+            lambda p: _open_lens(p, "map"),
+            lambda p: _goto_page_with(p, "unresolved"),
             lambda p: p.click('#colourkey .seg button[data-status="unresolved"]'),
+            lambda p: p.select_option("#ly", "stripe"),
         ])
         self.assertIn("Nothing is both", state["empty"])
 
@@ -642,38 +694,47 @@ class ThePhoneCanvas(DirectionAOnAPhone):
                                     is_mobile=True, has_touch=True)
             page.goto(path.as_uri(), wait_until="load")
             page.wait_for_timeout(250)
-            page.select_option("#vw", "map")
+            _open_lens(page, "map")
+            _goto_page_with(page, "unresolved")
             page.wait_for_timeout(350)
             page.evaluate("() => setSheet(true)")
             page.wait_for_timeout(200)
+            page.evaluate("() => setSheet(false)")
+            page.wait_for_timeout(200)
             state = page.evaluate("""() => {
-              const top = document.querySelector('.top').getBoundingClientRect();
-              const pill = document.querySelector('.pill');
-              const pr = pill ? pill.getBoundingClientRect() : null;
               const main = document.querySelector('.main').getBoundingClientRect();
+              // The chrome is the corners: what they cover, top to bottom, is what the
+              // reader cannot see map through.
+              const huds = [...document.querySelectorAll('.hud')].map(h => h.getBoundingClientRect());
+              const covered = huds.reduce((a, r) => a + r.height, 0);
+              const between = [...document.querySelectorAll('.hud')].map(h => {
+                const r = h.getBoundingClientRect();
+                const y = r.top > window.innerHeight / 2 ? r.top - 40 : r.bottom + 40;
+                const el = document.elementFromPoint(r.left + r.width / 2, y);
+                return el && el.closest('#cv, .main') ? 'map' : (el && el.className);
+              });
               return {
                 canvasShare: main.height / window.innerHeight,
-                clearShare: (window.innerHeight - top.height - (pr ? pr.height : 0))
-                            / window.innerHeight,
-                viewInPill: !!(pill && pill.querySelector('#vw')),
-                topSelects: document.querySelectorAll('.top select').length,
-                headerOverlays: getComputedStyle(document.querySelector('.top')).position,
-                canDragUnderHeader:
-                  getComputedStyle(document.querySelector('.top')).pointerEvents === 'none',
+                clearShare: (window.innerHeight - covered) / window.innerHeight,
+                pickers: document.querySelectorAll('#pg').length,
+                hudsFloat: [...document.querySelectorAll('.hud')].every(h =>
+                  getComputedStyle(h).position === 'absolute'),
+                mapUnderChrome: between.every(b => b === 'map'),
                 noBounce: getComputedStyle(document.body).overscrollBehaviorY === 'none',
               };
             }""")
             page.click('#colourkey .seg button[data-status="unresolved"]')
             page.wait_for_timeout(300)
             state["filtering"] = page.evaluate(
-                "() => document.querySelector('.pill').classList.contains('filtering')")
+                "() => document.querySelector('#colourkey').classList.contains('filtering')")
             state["note"] = page.evaluate(
                 "() => (document.getElementById('fnote') || {}).textContent || ''")
             page.click("#fnote button")
             page.wait_for_timeout(300)
-            state["clearedNote"] = page.evaluate("() => !!document.getElementById('fnote')")
+            state["clearedNote"] = page.evaluate(
+                "() => !document.getElementById('fnote').hidden")
             state["clearedFiltering"] = page.evaluate(
-                "() => document.querySelector('.pill').classList.contains('filtering')")
+                "() => document.querySelector('#colourkey').classList.contains('filtering')")
             browser.close()
         return state
 
@@ -685,14 +746,13 @@ class ThePhoneCanvas(DirectionAOnAPhone):
 
     def test_the_chrome_floats_and_does_not_swallow_the_drag(self):
         state = self._measure()
-        self.assertEqual(state["headerOverlays"], "absolute")
-        self.assertTrue(state["canDragUnderHeader"], "the header eats gestures over the map")
+        self.assertTrue(state["hudsFloat"], "the chrome takes layout instead of overlaying")
+        self.assertTrue(state["mapUnderChrome"], "something other than map sits under a corner")
         self.assertTrue(state["noBounce"], "the page will rubber-band mid-pan on iOS")
 
-    def test_the_view_picker_is_not_built_twice(self):
-        state = self._measure()
-        self.assertTrue(state["viewInPill"])
-        self.assertEqual(state["topSelects"], 0, "two rows of selects for one control surface")
+    def test_the_page_picker_is_not_built_twice(self):
+        """Two copies of the page select is two answers to which page is open."""
+        self.assertEqual(self._measure()["pickers"], 1)
 
     def test_an_active_filter_is_obvious_and_clearable(self):
         """A reader sets a filter, pans for a minute, and comes back to a partial map."""
