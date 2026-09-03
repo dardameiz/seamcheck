@@ -1226,3 +1226,101 @@ class StoreLayerInTheBrowser(SimpleTestCase):
         tagged = {id_: tag for id_, tag in home["cards"] if tag}
         self.assertEqual(tagged, {"redis_key:season:active": "on 2 pages"})
         self.assertGreater(len(home["cards"]), 1, "the rest of home's chain is drawn untagged")
+
+
+class MarksInTheBrowser(SimpleTestCase):
+    """A mark a person made is on the card, and one the code outgrew says RETURNED.
+
+    The finding is back in the list either way; what the map adds is who said it was
+    fine, when, and an Undo that puts the command on the clipboard - so a returned
+    finding is picked up where the last person left it rather than judged cold.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        try:
+            from playwright.sync_api import sync_playwright  # noqa: F401
+        except ImportError:  # pragma: no cover - depends on the optional extra
+            raise unittest.SkipTest("playwright is not installed (the observe extra)") from None
+
+    def _url(self) -> str:
+        from seamcheck.console import build_console
+        from seamcheck.mapdata import build_map
+        from seamcheck.renderers.map_html import render_document
+        from seamcheck.report import build_report
+        from seamcheck.triage import TriageEntry, TriageStatus, fingerprint_for_symbol
+
+        graph = _fixture_graph()
+        by_id = {s.id: s for s in graph.symbols}
+        entries = [
+            # Marked when the evidence was different: the fingerprint no longer matches.
+            TriageEntry(symbol_id="fetch_target:/api/gone/", fingerprint="older-evidence",
+                        status=TriageStatus.APPROVED, who="alice", when="2026-08-20",
+                        reason="feature-flagged", why="consumed-by-dependency", expired="2026-09-01"),
+            # Still holds.
+            TriageEntry(symbol_id="css_selector:cart", fingerprint=fingerprint_for_symbol(by_id["css_selector:cart"]),
+                        status=TriageStatus.APPROVED, who="bob", when="2026-08-25",
+                        reason="", why="js-applied"),
+        ]
+        report = build_report(graph=graph, diff=None, entries=entries, git_sha="0" * 12)
+        connectivity = build_map(graph, {"orders-main": {s.id for s in graph.symbols}}, git_sha="0" * 12)
+        document = render_document(connectivity, console=build_console(graph, report))
+        path = pathlib.Path(tempfile.mkdtemp()) / "map.html"
+        path.write_text(document.single_file(), encoding="utf-8")
+        return path.as_uri()
+
+    def test_the_card_and_the_list_carry_the_mark_and_undo_copies_the_command(self):
+        from playwright.sync_api import sync_playwright
+
+        errors: list[str] = []
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch()
+            except Exception as error:  # pragma: no cover - no browser downloaded
+                raise unittest.SkipTest(f"no chromium: {error}") from None
+            page = browser.new_page()
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            # The clipboard is a permission in a real browser; here it is a mailbox.
+            page.add_init_script("Object.defineProperty(navigator, 'clipboard', {value: "
+                                 "{writeText: t => { window.__copied = t; return Promise.resolve(); }}});")
+            page.goto(page_url := self._url(), wait_until="load")
+            page.wait_for_timeout(250)
+            hero = page.evaluate("() => (document.querySelector('#panel .returned-note') || {}).textContent || ''")
+            _open_lens(page, "findings")
+            page.wait_for_function("() => document.querySelectorAll('#panel .row').length > 0")
+            pills = page.evaluate("() => [...document.querySelectorAll('#panel .row')].map(r => ["
+                                  "r.querySelector('.t').textContent, "
+                                  "(r.querySelector('.pill') || {}).textContent || ''])")
+            # A card is shown from the page that holds the node.
+            _goto_page_with(page, "unresolved")
+            page.evaluate("() => show('fetch_target:/api/gone/')")
+            page.wait_for_function("() => !!document.getElementById('undo')")
+            card = page.evaluate("() => ({"
+                                 "mark: (document.querySelector('#dbody .mark') || {}).textContent || '',"
+                                 "returned: !!document.querySelector('#dbody .mark.returned'),"
+                                 "wrong: (document.getElementById('wrong') || {}).textContent || ''})")
+            page.click("#undo")
+            copied = page.evaluate("() => window.__copied")
+            label = page.evaluate("() => document.getElementById('undo').textContent")
+            _goto_page_with(page, "unused")
+            page.evaluate("() => show('css_selector:cart')")
+            page.wait_for_function("() => document.querySelector('#dbody h2').textContent === 'cart'")
+            held = page.evaluate("() => ({"
+                                 "mark: (document.querySelector('#dbody .mark') || {}).textContent || '',"
+                                 "returned: !!document.querySelector('#dbody .mark.returned')})")
+            browser.close()
+
+        self.assertEqual(errors, [], page_url)
+        self.assertIn("1", hero)
+        self.assertIn("evidence has changed", hero)
+        self.assertEqual(dict(pills), {"/api/gone/": "returned", "cart": "approved · js-applied"})
+        self.assertTrue(card["returned"])
+        for word in ("alice", "2026-08-20", "feature-flagged", "consumed-by-dependency", "2026-09-01", "unresolved"):
+            self.assertIn(word, card["mark"])
+        self.assertEqual(card["wrong"], "Mark it again")
+        self.assertEqual(copied, "seamcheck triage 'fetch_target:/api/gone/' --undo")
+        self.assertIn("copied", label)
+        self.assertFalse(held["returned"])
+        self.assertIn("bob", held["mark"])
+        self.assertIn("js-applied", held["mark"])

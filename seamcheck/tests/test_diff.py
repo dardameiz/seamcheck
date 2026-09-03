@@ -69,7 +69,6 @@ class TriageInvalidationTests(SimpleTestCase):
             Graph([approved], []),
             Graph([_symbol("f", Status.UNUSED, snippet="new code")], []),
             triage_entries=[entry],
-            fingerprint_fn=fingerprint_for_symbol,
         )
 
         self.assertEqual(len(result.triage_invalidated), 1)
@@ -84,18 +83,32 @@ class TriageInvalidationTests(SimpleTestCase):
 
         result = diff_graphs(
             Graph([symbol], []), Graph([symbol], []),
-            triage_entries=[entry], fingerprint_fn=fingerprint_for_symbol,
+            triage_entries=[entry],
         )
 
         self.assertEqual(result.triage_invalidated, [])
 
 
 class FingerprintAgreementTests(SimpleTestCase):
-    def test_diff_uses_the_same_fingerprint_function_as_triage(self):
+    def test_diff_invalidates_exactly_what_triage_calls_stale(self):
         # Two copies of the formula drift apart and reappearance detection fails open,
-        # silently keeping approvals alive after their evidence changed.
-        import seamcheck.diff as diff_module
+        # silently keeping approvals alive after their evidence changed. The diff now
+        # asks triage which marks are stale rather than deciding for itself.
+        from seamcheck.triage import stale_entries
 
-        self.assertIs(
-            diff_module.diff_graphs.__defaults__[1], fingerprint_for_symbol
-        )
+        old = _symbol("f", Status.UNUSED, snippet="old code")
+        new = _symbol("f", Status.UNUSED, snippet="new code")
+        same = _symbol("g", Status.UNUSED)
+        entries = [
+            TriageEntry(symbol_id="f", fingerprint=fingerprint_for_symbol(old),
+                        status=TriageStatus.APPROVED, who="a", when="2026-08-29", reason=""),
+            TriageEntry(symbol_id="g", fingerprint=fingerprint_for_symbol(same),
+                        status=TriageStatus.APPROVED, who="a", when="2026-08-29", reason=""),
+        ]
+        after = Graph([new, same], [])
+
+        result = diff_graphs(Graph([old, same], []), after, triage_entries=entries)
+
+        self.assertEqual([item["symbol_id"] for item in result.triage_invalidated],
+                         [entry.symbol_id for entry in stale_entries(after, entries)])
+        self.assertEqual([item["symbol_id"] for item in result.triage_invalidated], ["f"])

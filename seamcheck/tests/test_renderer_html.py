@@ -247,3 +247,28 @@ class HtmlRenderTests(SimpleTestCase):
         out = html.render(_report(resolved=[_symbol("r1"), _symbol("r2")]))
 
         self.assertIn("Resolved since the baseline (2)", out)
+
+
+class ReturnedHtmlTests(SimpleTestCase):
+    def _returned(self, **kwargs):
+        base = {"symbol_id": "url:<x>", "label": "x", "kind": "url", "status": "unresolved",
+                "file": "a.py", "line": 7, "marked": "approved", "why": "js-applied",
+                "when": "2026-08-20", "who": "<alice>", "reason": "", "expired": "",
+                "returned": True}
+        base.update(kwargs)
+        return base
+
+    def test_a_returned_finding_is_shown_escaped_with_its_count(self):
+        out = html.render(_report(returned=[self._returned()]))
+
+        self.assertIn("Returned (1)", out)
+        self.assertIn("returned 1", out)
+        self.assertIn(html_lib.escape("<alice>"), out)
+        self.assertNotIn("<alice>", out)
+        self.assertIn("js-applied", out)
+
+    def test_no_returned_means_no_count_and_no_heading(self):
+        out = html.render(_report())
+
+        self.assertNotIn("Returned", out)
+        self.assertNotIn("returned", out)

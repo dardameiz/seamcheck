@@ -72,6 +72,17 @@ reference project - the first time a release was tested the way a user meets it.
   list travels only for the rows two pages reach, so a page of 3,000 nodes with three
   shared ones sends three. The reference project: 2,447 shared nodes (36 routes, 22
   handlers, 1,426 elements) over 22 pages, drawn in 0.6 s.
+- **Added** — **a mark is remembered, and a finding that comes back says so.** A mark
+  used to expire silently: the code changed under it, the finding was raised as if new,
+  and the person who had looked at it once was not told they had. Now the mark is kept,
+  stamped with the day the evidence changed, and the finding is raised as **returned** -
+  in the console summary (`returned N`, only when there is one), as a pill in the map's
+  findings list, and as a line on the card and in every report naming who marked it,
+  when, why, and what it is again. Re-marking settles it; `seamcheck triage <id> --undo`
+  takes the mark off for good, and the card has an **Undo the mark** button that puts
+  that command on the clipboard. `check` JSON carries the list as `returned`; a mark
+  whose finding is gone is listed softly as *outlived its finding*, not raised. Older
+  `triage.json` files load unchanged.
 
 Known open, recorded rather than hidden:
 

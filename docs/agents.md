@@ -35,10 +35,10 @@ claude mcp add seamcheck -- seamcheck-mcp
 
 | tool | what the agent gets |
 |---|---|
-| `seamcheck_check` | every finding, with counts and what is new since the last scan |
+| `seamcheck_check` | every finding, with counts, what is new since the last scan, and what has `returned` — marked fine once, evidence since changed |
 | `seamcheck_explain` | one symbol: where it is, how it was reached, why it is classified so |
 | `seamcheck_report` | the digest as markdown, to paste into a PR |
-| `seamcheck_triage` | records "this one is fine, and here is why", so it stops being raised |
+| `seamcheck_triage` | records "this one is fine, and here is why", so it stops being raised; `undo=true` takes the mark off |
 | `seamcheck_services` | which services this repository declares, and which are deployable |
 | `seamcheck_share` | the code-free scan report, for an agent to show you before you send it |
 | `seamcheck_why_wrong` | the nine fixed reasons, so an agent can pick one when it triages |

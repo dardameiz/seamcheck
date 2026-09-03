@@ -76,6 +76,11 @@ class TriageEntry:
     # The shareable half of `reason`: a fixed word, defaulted so every stored entry
     # written before this existed still loads.
     why: str = ""
+    # The day a scan first found the evidence changed out from under this mark. Empty
+    # while the mark holds. The entry is KEPT rather than dropped, because "someone
+    # looked at this on the 1st and said consumed-by-dependency" is the context a reader
+    # needs when the finding comes back on the 3rd - and it is somebody's work.
+    expired: str = ""
 
 
 def fingerprint_for_symbol(symbol: Symbol) -> str:
@@ -139,6 +144,61 @@ def valid_triage_entries(graph: Graph, entries: list[TriageEntry]) -> list[Triag
         if entry.symbol_id in by_id
         and fingerprint_for_symbol(by_id[entry.symbol_id]) == entry.fingerprint
     ]
+
+
+def stale_entries(graph: Graph, entries: list[TriageEntry]) -> list[TriageEntry]:
+    """The other half: entries whose symbol is still in the scan but whose evidence moved.
+
+    A symbol that vanished altogether is neither valid nor stale - there is nothing on
+    screen for the mark to describe or contradict - so it is in neither list, and the
+    entry waits in the file for the day the symbol returns.
+    """
+    by_id = {symbol.id: symbol for symbol in graph.symbols}
+    return [
+        entry
+        for entry in entries
+        if entry.symbol_id in by_id
+        and fingerprint_for_symbol(by_id[entry.symbol_id]) != entry.fingerprint
+    ]
+
+
+def note_expired(entries: list[TriageEntry], stale: list[TriageEntry], today: str) -> bool:
+    """Stamp the day on every stale mark that has none yet. True if any was stamped.
+
+    In place, so the caller can save the same list it loaded and the date survives to
+    the next scan - "expired 2026-09-01" is a fact about when the code moved, and a
+    scan a week later must not reset it to its own date.
+    """
+    changed = False
+    for entry in stale:
+        if not entry.expired:
+            entry.expired = today
+            changed = True
+    return changed
+
+
+def returned(graph: Graph, entries: list[TriageEntry]) -> list[tuple[Symbol, TriageEntry]]:
+    """Findings that came back: a finding-status symbol wearing a mark that no longer holds.
+
+    Not every stale mark is a return. A mark whose symbol is now CONNECTED outlived a
+    finding that went away, which is the good outcome and nothing to raise. The later
+    entry per symbol wins, as everywhere else, so a hand-edited duplicate cannot
+    resurrect a mark that was replaced.
+    """
+    by_id = {symbol.id: symbol for symbol in graph.symbols}
+    latest = {entry.symbol_id: entry for entry in stale_entries(graph, entries)}
+    valid = valid_triage_ids(graph, entries)
+    return [
+        (by_id[symbol_id], entry)
+        for symbol_id, entry in latest.items()
+        if symbol_id not in valid and by_id[symbol_id].status in _BLOCKING_STATUSES
+    ]
+
+
+def remove_mark(entries: list[TriageEntry], symbol_id: str) -> tuple[list[TriageEntry], int]:
+    """Every entry on the symbol gone - the undo. Returns what is left and how many went."""
+    kept = [entry for entry in entries if entry.symbol_id != symbol_id]
+    return kept, len(entries) - len(kept)
 
 
 def valid_triage_ids(graph: Graph, entries: list[TriageEntry]) -> set[str]:

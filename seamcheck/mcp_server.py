@@ -60,13 +60,14 @@ def seamcheck_explain(symbol_id: str, repo_root: str = ".") -> str:
 
 @mcp.tool()
 def seamcheck_triage(symbol_id: str, status: str, repo_root: str = ".", reason: str = "",
-                     why: str = "") -> dict:
+                     why: str = "", undo: bool = False) -> dict:
     """Record a human disposition (approved/confirmed/deferred) against a finding.
 
     `reason` is prose and stays local. `why` is one of a fixed set - see
     seamcheck_why_wrong - and is the only part `seamcheck share` can pass on.
+    `undo` takes an earlier mark off instead; the finding is raised again.
     """
-    return api.triage(symbol_id, status, repo_root, reason, why)
+    return api.triage(symbol_id, status, repo_root, reason, why, undo=undo)
 
 
 @mcp.tool()

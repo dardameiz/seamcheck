@@ -1,6 +1,8 @@
 import asyncio
+import json
 import tempfile
 from pathlib import Path
+from unittest import mock
 
 from django.test import SimpleTestCase, override_settings
 
@@ -46,15 +48,40 @@ class McpToolFunctionTests(SimpleTestCase):
             self.assertTrue(result["ok"], result["message"])
             self.assertTrue((Path(tmp) / "seamcheck" / "triage.json").is_file())
 
-    def test_the_four_tools_are_registered_on_the_server(self):
+    def test_every_tool_is_registered_on_the_server(self):
         from seamcheck.mcp_server import mcp
 
         self.assertEqual(mcp.name, "seamcheck")
 
         # mcp.list_tools() is FastMCP's public registry accessor (the same call the
         # MCP protocol's tools/list request serves); it's async because that request is.
+        # The full set, pinned: a tool added to the module but not registered is one an
+        # agent can never call, and this stayed red for four additions before anyone read it.
         registered = {tool.name for tool in asyncio.run(mcp.list_tools())}
         self.assertEqual(
             registered,
-            {"seamcheck_check", "seamcheck_explain", "seamcheck_triage", "seamcheck_report"},
+            {"seamcheck_check", "seamcheck_explain", "seamcheck_triage", "seamcheck_report",
+             "seamcheck_services", "seamcheck_unverified", "seamcheck_share", "seamcheck_why_wrong"},
         )
+
+
+class UndoTests(SimpleTestCase):
+    def test_undo_takes_the_mark_off_and_says_so(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            seamcheck_triage(GET_THING, "approved", repo_root=tmp, reason="fine")
+
+            result = seamcheck_triage(GET_THING, "approved", repo_root=tmp, undo=True)
+
+            self.assertTrue(result["ok"], result["message"])
+            self.assertIn("raised again", result["message"])
+            data = json.loads((Path(tmp) / "seamcheck" / "triage.json").read_text())
+            self.assertEqual(data["entries"], [])
+
+    def test_undo_on_a_symbol_never_marked_is_refused_without_a_scan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch("seamcheck.api.scan") as scan:
+                result = seamcheck_triage("url:never", "approved", repo_root=tmp, undo=True)
+
+            self.assertFalse(result["ok"])
+            self.assertIn("No mark", result["message"])
+            scan.assert_not_called()

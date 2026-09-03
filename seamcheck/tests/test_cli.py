@@ -355,3 +355,48 @@ class ServeAddressTests(SimpleTestCase):
             self.assertNotIn("lan", addresses)
         finally:
             server.server_close()
+
+
+@override_settings(SEAMCHECK_CONFIG=_CONFIG)
+class UndoTests(SimpleTestCase):
+    def _run(self, *args):
+        out = StringIO()
+        try:
+            call_command("seamcheck", *args, stdout=out, stderr=StringIO())
+        except SystemExit as exit_code:
+            return out.getvalue(), int(str(exit_code.code))
+        return out.getvalue(), 0
+
+    def test_undo_removes_the_mark_and_a_second_undo_is_refused(self):
+        from seamcheck.triage import load_triage
+
+        with tempfile.TemporaryDirectory() as tmp:
+            gone = "fetch:/api/does-not-exist/"
+            self._run("--triage", gone, "--wrong", "consumed-by-dependency", "--repo-root", tmp)
+            self.assertEqual(len(load_triage(tmp)), 1)
+            out, code = self._run("--triage", gone, "--undo", "--repo-root", tmp)
+            _, again = self._run("--triage", gone, "--undo", "--repo-root", tmp)
+
+        self.assertEqual(code, 0, out)
+        self.assertIn("raised again", out)
+        self.assertEqual(again, 2)
+
+    def test_check_names_a_returned_finding_with_its_date_and_reason(self):
+        from seamcheck.triage import TriageEntry, TriageStatus, load_triage, save_triage
+
+        with tempfile.TemporaryDirectory() as tmp:
+            save_triage([TriageEntry(
+                symbol_id="fetch:/api/does-not-exist/", fingerprint="older-evidence",
+                status=TriageStatus.APPROVED, who="alice", when="2026-08-20", reason="",
+                why="consumed-by-dependency",
+            )], tmp)
+            out, _ = self._run("--check", "--repo-root", tmp)
+            stamped = load_triage(tmp)[0].expired
+
+        self.assertIn("returned: fetch:/api/does-not-exist/", out)
+        self.assertIn("alice", out)
+        self.assertIn("consumed-by-dependency", out)
+        self.assertIn("--undo", out)
+        self.assertNotIn("mark outlived its finding", out)
+        # The first scan to notice stamps the day; the file is the memory.
+        self.assertTrue(stamped)

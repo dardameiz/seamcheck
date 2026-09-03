@@ -678,6 +678,14 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
 .whyopt:hover { border-color:var(--sig); }
 .whyopt.copied { border-color:var(--ok); }
 .whyopt.copied b { color:var(--ok); }
+.undobtn.copied { border-color:var(--ok) !important; color:var(--ok) !important; }
+.pill.marked { color:var(--sig); background:var(--sig-fill); border-color:var(--sig); }
+.pill.returned { color:var(--crit); background:var(--crit-fill); border-color:var(--crit); }
+.mark { font-size:12px; color:var(--muted); line-height:1.45; margin:2px 0 6px; }
+.mark b { color:var(--ink); }
+.mark.returned { color:var(--ink); border-left:2px solid var(--crit); padding-left:9px; }
+.returned-note { margin:10px 0 2px; font-size:12.5px; color:var(--muted); line-height:1.45; }
+.returned-note b { color:var(--ink); }
 /* The report view. A table of the exact values, because "we only send counts" is a claim
    and the counts on screen are the evidence for it. */
 .rep { background:var(--sunk); border:1px solid var(--line); border-radius:12px;
@@ -1380,6 +1388,32 @@ function pageIndexOf(id) {
 // replaces it - so "what changed" always means the thing the reader picked, never a
 // blend of a commit and a branch.
 let CHANGED = MAPDATA.changed, only = false;
+// Every mark a person made on a symbol in this scan, by id. A mark that still holds says
+// "someone looked, and said why"; one the code moved out from under says the finding
+// RETURNED - which is the one line a reader most needs on a card that is back.
+const MARKS = (typeof CONSOLE !== "undefined" && CONSOLE.marks) || {};
+function markPill(id) {
+  const m = MARKS[id];
+  if (!m) return "";
+  const by = `by ${esc(m.who)} on ${esc(m.when)}`;
+  return m.returned
+    ? `<span class="pill returned" title="marked ${esc(m.marked)} ${by}; the evidence has changed">returned</span>`
+    : `<span class="pill marked" title="${by}">${esc(m.marked)}${m.why ? " · " + esc(m.why) : ""}</span>`;
+}
+// The sentence a card carries. Date and reason both: "returned" alone says the tool
+// remembered something; who said what, and when the code moved, is what lets the reader
+// pick up where that person left off instead of judging it cold.
+function markLine(id) {
+  const m = MARKS[id];
+  if (!m) return "";
+  const said = `${esc(m.marked)}${m.why ? " (" + esc(m.why) + ")" : ""} by ${esc(m.who)} on ${esc(m.when)}`;
+  const own = m.reason ? ` — "${esc(m.reason)}"` : "";
+  return m.returned
+    ? `<div class="mark returned"><b>Returned.</b> Marked ${said}${own}; the evidence changed${
+        m.expired ? " on " + esc(m.expired) : ""} and it is ${esc(m.status)} again. Look once more,
+        then re-mark it or undo the mark.</div>`
+    : `<div class="mark"><b>Marked</b> ${said}${own}.</div>`;
+}
 const ORDER = new Map(COLS.map((c, i) => [c[0], i]));
 // Labels are raw project source: 163 of this project's URL patterns contain
 // <path:object_id> and friends, which the parser eats as bogus elements, leaving a
@@ -3248,8 +3282,11 @@ function show(id) {
     <div class="acts">
       <button id="iso" type="button">${isolate ? "Show the whole page" : "Show only this chain"}</button>
       ${n.status === "unresolved" || n.status === "unused"
-        ? `<button id="wrong" type="button" class="wrongbtn">This is wrong</button>` : ""}
+        ? `<button id="wrong" type="button" class="wrongbtn">${
+            MARKS[id] && MARKS[id].returned ? "Mark it again" : "This is wrong"}</button>` : ""}
+      ${MARKS[id] ? `<button id="undo" type="button" class="undobtn" data-id="${esc(id)}">Undo the mark</button>` : ""}
     </div>
+    ${markLine(id)}
     <div class="whybox" id="whybox" hidden>
       <div class="lbl">Why is it wrong? One tap copies the command that records it.</div>
       ${Object.entries(WHY).map(([key, help]) =>
@@ -3275,6 +3312,14 @@ function show(id) {
   // A static file cannot write to disk, so it does the honest thing: it hands over the
   // exact command that does. One tap, no typing, and the reader can see what it will do
   // before running it - which is the same contract as the pre-filled issue link.
+  const undoBtn = document.getElementById("undo");
+  if (undoBtn) {
+    undoBtn.onclick = () => {
+      navigator.clipboard?.writeText(`seamcheck triage '${undoBtn.dataset.id}' --undo`);
+      undoBtn.classList.add("copied");
+      undoBtn.textContent = "copied - run it in the project";
+    };
+  }
   const wrongBtn = document.getElementById("wrong");
   if (wrongBtn) {
     const box = document.getElementById("whybox");
@@ -3842,11 +3887,23 @@ function heroHtml() {
     ${looking ? `<div class="split">${seg("unresolved")}${seg("unused")}</div>
     <div class="splitkey">${key("unresolved")}${key("unused")}</div>`
       : `<div class="gap">Nothing unresolved and nothing unused. That is the whole to-do list.</div>`}
+    ${returnedHtml()}
     <p class="rest">The other ${n(rest)} are not findings —
       <b>${n(all.connected)}</b> connected (${pct(all.connected, total)}), evidence attached, and
       <b>${n(all.uncertain)}</b> uncertain (${pct(all.uncertain, total)}), which is the scan
       declining to guess rather than a claim that anything is dead.</p>
   </div>`;
+}
+
+// Findings that came back. A person marked them fine and the code has moved since; they
+// are counted among the findings above, and named here because a reader who marked
+// something last week wants to know it is back before they want anything else.
+function returnedHtml() {
+  const back = Object.values(MARKS).filter(m => m.returned);
+  if (!back.length) return "";
+  return `<div class="returned-note"><span class="pill returned">returned</span>
+    <b>${n(back.length)}</b> marked fine once — the evidence has changed. Each one names
+    who marked it, when, and why; look once more, then re-mark or undo.</div>`;
 }
 
 // Backend against frontend, on ONE scale. Two cards each drawn to their own width made 854
@@ -4351,7 +4408,7 @@ function renderPanel() {
           `<option value="${v}"${v === cstatus ? " selected" : ""}>${v} (${totals[v].toLocaleString()})</option>`
         ).join("")}
       </select></div>
-    ${page.map((r, i) => `<div class="row"><span class="badge ${esc(r.status)}">${esc(r.status)}</span>
+    ${page.map((r, i) => `<div class="row"><span class="badge ${esc(r.status)}">${esc(r.status)}</span>${markPill(r.id)}
        <div class="t">${esc(r.label)}</div>
        <div class="w">${esc(r.kind)}${r.file ? " · " + loc(r.file, r.line) : ""}</div>
        ${r.note ? `<div class="n">${esc(r.note)}</div>` : ""}
@@ -5183,6 +5240,7 @@ def _console_payload(console, chunks: list[Chunk] | None = None) -> str:
         "offscreen": getattr(console, "offscreen", {}) or {},
         "groups": [[title, count, gloss] for title, count, gloss in console.groups],
         "sections": [_section(section) for section in console.sections],
+        "marks": getattr(console, "marks", {}) or {},
     }
     return json.dumps(data).replace("</", "<\\/")
 

@@ -172,3 +172,50 @@ class BaselineTests(SimpleTestCase):
 
     def test_the_report_records_the_commit_it_describes(self):
         self.assertEqual(_report([]).git_sha, "abc123")
+
+
+class MarkMemoryTests(SimpleTestCase):
+    """The report carries every mark, and raises the ones the code moved out from under."""
+
+    def _entry(self, symbol_id, fingerprint, **kwargs):
+        base = {"status": TriageStatus.APPROVED, "who": "alice", "when": "2026-08-20",
+                "reason": "flagged", "why": "consumed-by-dependency"}
+        base.update(kwargs)
+        return TriageEntry(symbol_id=symbol_id, fingerprint=fingerprint, **base)
+
+    def test_a_stale_mark_on_a_finding_is_returned_with_who_when_and_why(self):
+        symbol = _symbol("t")
+        entry = self._entry("t", "older-evidence", expired="2026-09-01")
+
+        report = _report([symbol], entries=[entry])
+
+        self.assertEqual([m["symbol_id"] for m in report.returned], ["t"])
+        item = report.marks["t"]
+        self.assertTrue(item["returned"])
+        self.assertEqual((item["marked"], item["why"], item["who"], item["when"], item["expired"]),
+                         ("approved", "consumed-by-dependency", "alice", "2026-08-20", "2026-09-01"))
+        self.assertEqual(item["status"], "unresolved")
+
+    def test_a_mark_that_still_holds_is_carried_and_not_returned(self):
+        symbol = _symbol("t")
+
+        report = _report([symbol], entries=[self._entry("t", fingerprint_for_symbol(symbol))])
+
+        self.assertEqual(report.returned, [])
+        self.assertFalse(report.marks["t"]["returned"])
+
+    def test_a_stale_mark_on_a_connected_symbol_is_neither_returned_nor_carried(self):
+        # The finding is gone. The mark outlived it; there is nothing to look at again.
+        symbol = _symbol("t", status=Status.CONNECTED)
+
+        report = _report([symbol], entries=[self._entry("t", "older-evidence")])
+
+        self.assertEqual(report.returned, [])
+        self.assertNotIn("t", report.marks)
+
+    def test_returned_findings_come_in_the_reports_order(self):
+        symbols = [_symbol("z", status=Status.UNUSED), _symbol("a"), _symbol("m", kind="multi_writer_element")]
+
+        report = _report(symbols, entries=[self._entry(s.id, "stale") for s in symbols])
+
+        self.assertEqual([m["symbol_id"] for m in report.returned], ["m", "a", "z"])

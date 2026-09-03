@@ -300,3 +300,40 @@ class VersionTests(SimpleTestCase):
             self.assertEqual(main(["version"]), 0)
 
         self.assertIn("seamcheck ", out.getvalue())
+
+
+class UndoFlagTests(SimpleTestCase):
+    """`seamcheck triage X --undo` takes the mark off, on both front doors."""
+
+    def test_the_django_door_forwards_undo(self):
+        with _Dispatch() as run:
+            main(["triage", "url:x", "--undo"])
+
+        self.assertEqual(run.args, ("seamcheck", "--triage", "url:x", "--undo"))
+
+    def test_the_plain_door_undoes_without_a_scan(self):
+        import os
+
+        from seamcheck.cli import _run_without_django
+        from seamcheck.triage import TriageEntry, TriageStatus, load_triage, save_triage
+
+        with tempfile.TemporaryDirectory() as tmp:
+            pathlib.Path(tmp, "package.json").write_text("{}")
+            save_triage([TriageEntry(symbol_id="url:x", fingerprint="f", status=TriageStatus.APPROVED,
+                                     who="a", when="2026-08-20", reason="")], tmp)
+            cwd = os.getcwd()
+            os.chdir(tmp)
+            try:
+                with (mock.patch("seamcheck.cli._worth_scanning", return_value=True),
+                      mock.patch("seamcheck.api.scan") as scan,
+                      redirect_stdout(io.StringIO()) as out):
+                    code = _run_without_django(["--triage", "url:x", "--undo"], verbose=False)
+                    again = _run_without_django(["--triage", "url:x", "--undo"], verbose=False)
+            finally:
+                os.chdir(cwd)
+
+            self.assertEqual(code, 0)
+            self.assertIn("raised again", out.getvalue())
+            self.assertEqual(load_triage(tmp), [])
+            self.assertEqual(again, 2)
+            scan.assert_not_called()

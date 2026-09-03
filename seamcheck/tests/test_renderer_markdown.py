@@ -103,3 +103,17 @@ class MarkdownRenderTests(SimpleTestCase):
 
         positions = [out.index(status.value) for status in Status]
         self.assertEqual(positions, sorted(positions))
+
+
+class ReturnedMarkdownTests(SimpleTestCase):
+    def test_a_returned_finding_has_its_own_heading_and_count(self):
+        item = {"symbol_id": "x", "label": "x", "kind": "url", "status": "unused",
+                "file": "a.py", "line": 7, "marked": "approved", "why": "", "when": "2026-08-20",
+                "who": "alice", "reason": "", "expired": "2026-09-01", "returned": True}
+
+        out = markdown.render(_report(returned=[item]))
+
+        self.assertIn("### Returned (1)", out)
+        self.assertIn("returned **1**", out)
+        self.assertIn("alice", out)
+        self.assertNotIn("Returned", markdown.render(_report()))

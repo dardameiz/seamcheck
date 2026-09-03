@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from seamcheck.renderers._shared import where
+from seamcheck.renderers.terminal import returned_line
 from seamcheck.report import Report, ReportGroup
 
 CAP = 10
@@ -54,9 +55,16 @@ def render(report: Report) -> str:
     else:
         lines += ["Nothing new since the baseline.", ""]
 
-    if report.triage_invalidated:
-        lines += ["### Triage marks that no longer apply", ""]
-        lines += [f"- `{item['symbol_id']}` — {item['note']}" for item in report.triage_invalidated]
+    if report.returned:
+        lines += [f"### Returned ({len(report.returned)}) — marked fine once; the evidence has changed", ""]
+        lines += [f"- {returned_line(item)}" for item in report.returned]
+        lines.append("")
+
+    outlived = [item for item in report.triage_invalidated
+                if item["symbol_id"] not in {r["symbol_id"] for r in report.returned}]
+    if outlived:
+        lines += ["### Marks that outlived their finding", ""]
+        lines += [f"- `{item['symbol_id']}` — {item['note']}" for item in outlived]
         lines.append("")
 
     if report.resolved:
@@ -69,5 +77,7 @@ def render(report: Report) -> str:
 
     # No sort - build_report() owns the order; see the terminal renderer.
     counts = " · ".join(f"{name} **{value}**" for name, value in report.counts.items())
+    if report.returned:
+        counts += f" · returned **{len(report.returned)}**"
     lines += [counts, "", _UNCERTAIN_GLOSS]
     return "\n".join(lines)

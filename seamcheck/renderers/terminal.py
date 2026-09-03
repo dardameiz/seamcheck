@@ -17,6 +17,16 @@ def _finding_lines(symbols, cap: int) -> list[str]:
     return lines
 
 
+def returned_line(item: dict) -> str:
+    """One returned finding, in words: what it is, what was said about it, and when the
+    code moved. Shared with the markdown renderer so the two never phrase it apart."""
+    said = item["marked"] + (f" ({item['why']})" if item["why"] else "")
+    moved = f", changed {item['expired']}" if item["expired"] else ""
+    return (f"{item['symbol_id']} — marked {said} by {item['who']} on {item['when']}"
+            f"{moved}; now {item['status']} again. "
+            f"Look once more, then re-mark it or `seamcheck triage '{item['symbol_id']}' --undo`.")
+
+
 def _group_block(group: ReportGroup) -> list[str]:
     triaged = f", {group.triaged} triaged" if group.triaged else ""
     lines = [f"  {group.title} ({len(group.symbols)}{triaged})"]
@@ -38,9 +48,18 @@ def render(report: Report) -> str:
     else:
         lines += ["Nothing new since the baseline.", ""]
 
-    for item in report.triage_invalidated:
-        lines.append(f"  triage invalidated: {item['symbol_id']} — {item['note']}")
-    if report.triage_invalidated:
+    if report.returned:
+        lines.append(f"RETURNED ({len(report.returned)}) — marked fine once; the evidence has changed")
+        lines += [f"    {returned_line(item)}" for item in report.returned]
+        lines.append("")
+
+    # A mark whose finding went away is not a return - nothing to raise - but the mark
+    # is now dead weight in triage.json, and `--undo` is one line.
+    outlived = [item for item in report.triage_invalidated
+                if item["symbol_id"] not in {r["symbol_id"] for r in report.returned}]
+    for item in outlived:
+        lines.append(f"  mark outlived its finding: {item['symbol_id']} — {item['note']}")
+    if outlived:
         lines.append("")
 
     if report.resolved:
@@ -57,5 +76,7 @@ def render(report: Report) -> str:
     # ordering choice belongs to the model - re-sorting it here would just be a different
     # renderer bug from the one this file exists to avoid.
     counts = "  ".join(f"{name} {value}" for name, value in report.counts.items())
+    if report.returned:
+        counts += f"  returned {len(report.returned)}"
     lines += [counts, _UNCERTAIN_GLOSS]
     return "\n".join(lines)

@@ -113,3 +113,41 @@ class TerminalRenderTests(SimpleTestCase):
         out = terminal.render(_report(counts=counts))
 
         self.assertIn("connected 1  unused 2  unresolved 3  uncertain 4", out)
+
+
+def _returned(symbol_id="x", **kwargs):
+    base = {"symbol_id": symbol_id, "label": symbol_id, "kind": "url", "status": "unresolved",
+            "file": "a.py", "line": 7, "marked": "approved", "why": "consumed-by-dependency",
+            "when": "2026-08-20", "who": "alice", "reason": "", "expired": "2026-09-01",
+            "returned": True}
+    base.update(kwargs)
+    return base
+
+
+class ReturnedRenderTests(SimpleTestCase):
+    def test_a_returned_finding_names_the_date_the_reason_and_the_way_out(self):
+        out = terminal.render(_report(returned=[_returned()]))
+
+        self.assertIn("RETURNED (1)", out)
+        for word in ("alice", "2026-08-20", "consumed-by-dependency", "changed 2026-09-01",
+                     "unresolved again", "seamcheck triage 'x' --undo"):
+            self.assertIn(word, out)
+
+    def test_the_counts_line_mentions_returned_only_when_there_is_one(self):
+        quiet = terminal.render(_report())
+        loud = terminal.render(_report(returned=[_returned()]))
+
+        self.assertNotIn("returned", quiet)
+        self.assertIn("returned 1", loud)
+
+    def test_an_invalidated_mark_that_is_not_returned_is_listed_softly_and_once(self):
+        # Same id in both: the RETURNED block owns it; the "outlived" line is for the
+        # marks whose finding is gone.
+        out = terminal.render(_report(
+            returned=[_returned("x")],
+            triage_invalidated=[{"symbol_id": "x", "note": "re-triage"},
+                                {"symbol_id": "y", "note": "re-triage"}],
+        ))
+
+        self.assertEqual(out.count("mark outlived its finding"), 1)
+        self.assertIn("mark outlived its finding: y", out)

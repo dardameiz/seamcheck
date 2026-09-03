@@ -73,13 +73,19 @@ COMMANDS: dict[str, Command] = {
             "  genuinely-dead          nothing wrong with it - it really is dead\n"
             "  other                   none of the above\n\n"
             "`genuinely-dead` matters as much as the rest: a finding confirmed RIGHT is "
-            "evidence too."
+            "evidence too.\n\n"
+            "The mark is remembered. When the evidence changes it is kept, stamped with "
+            "the day, and the finding is raised as RETURNED - with who marked it, when, "
+            "and why - rather than as something new. Look once more; then re-mark it, or "
+            "`--undo` to take the mark off for good."
         ),
         examples=[
             ("seamcheck triage 'css_selector:class:x' --wrong consumed-by-dependency",
              "mark it wrong, and say why in a word that can be shared"),
             ("seamcheck triage 'url:/api/x' --wrong genuinely-dead --reason 'removing in PR 412'",
              "confirm it IS dead; the prose stays local"),
+            ("seamcheck triage 'url:/api/x' --undo",
+             "take the mark off; the finding is raised again"),
         ],
     ),
     "share": Command(
@@ -530,7 +536,7 @@ def _run_without_django(arguments, verbose: bool) -> int:
     with quiet(not verbose):
         if options["triage"]:
             result = api.triage(options["triage"], options["status"] or "approved",
-                                root, options["reason"], options["why"])
+                                root, options["reason"], options["why"], undo=options["undo"])
             print(result["message"])
             return 0 if result.get("ok") else 2
         if options["explain"]:
@@ -670,7 +676,7 @@ def _plain_args(arguments) -> dict:
         # `json` and `explain` as the agent-facing interface. The MCP server got them
         # right, so the two surfaces disagreed, which is the one thing they must never do.
         "explain": None, "show_config": False, "triage": None, "status": None,
-        "reason": "", "why": "",
+        "reason": "", "why": "", "undo": False,
     }
     items = list(arguments)
     for index, item in enumerate(items):
@@ -685,6 +691,8 @@ def _plain_args(arguments) -> dict:
             options["triage"] = following
         elif item == "--status" and following:
             options["status"] = following
+        elif item == "--undo":
+            options["undo"] = True
         elif item == "--reason" and following:
             options["reason"] = following
         elif item in ("--why", "--wrong") and following:

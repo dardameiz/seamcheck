@@ -12,6 +12,7 @@ from django.core.management.base import BaseCommand, CommandError
 
 from seamcheck import api
 from seamcheck.progress import Progress
+from seamcheck.renderers.terminal import returned_line
 
 # Formats whose output is a whole document rather than a few lines. Printing one to a
 # terminal is a wall of markup and a lost scrollback, so each has a default destination
@@ -37,6 +38,8 @@ class Command(BaseCommand):
         parser.add_argument("--why", "--wrong", dest="why", default="",
                             help="Why it was wrong, as a fixed word - the only part "
                                  "`seamcheck share` can pass on. See `help triage`.")
+        parser.add_argument("--undo", action="store_true",
+                            help="Take the mark off --triage's symbol; it is raised again.")
         parser.add_argument("--repo-root", default=".", help="Repo to read snapshots/triage from.")
         parser.add_argument(
             "--backfill", type=int, metavar="N", default=None,
@@ -273,6 +276,12 @@ class Command(BaseCommand):
         )
 
     def _triage(self, options):
+        if options.get("undo"):
+            result = api.triage(options["triage"], "approved", options["repo_root"], undo=True)
+            self.stdout.write(result["message"])
+            if not result["ok"]:
+                raise SystemExit(2)
+            return
         # `--wrong X` says the finding was wrong, which IS the disposition - requiring
         # `--status approved` as well made the command in `seamcheck help triage` fail on
         # copy-paste, blocking the exact feedback loop the release exists for.
@@ -324,8 +333,12 @@ class Command(BaseCommand):
         for key in ("new_unresolved", "new_unused"):
             for item in outcome[key]:
                 self.stdout.write(f"{key}: {item['id']}")
+        for item in outcome["returned"]:
+            self.stdout.write(f"returned: {returned_line(item)}")
+        came_back = {item["symbol_id"] for item in outcome["returned"]}
         for item in outcome["triage_invalidated"]:
-            self.stdout.write(f"triage invalidated: {item['symbol_id']} - {item['note']}")
+            if item["symbol_id"] not in came_back:
+                self.stdout.write(f"mark outlived its finding: {item['symbol_id']} - {item['note']}")
         self.stdout.write(f"counts: {outcome['counts']}")
         if not outcome["passed"]:
             raise SystemExit(1)

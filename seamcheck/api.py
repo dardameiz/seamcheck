@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import glob
 import os
@@ -22,7 +23,11 @@ from seamcheck.triage import (
     fingerprint_for_symbol,
     has_blocking_findings,
     load_triage,
+    note_expired,
+    remove_mark,
+    returned,
     save_triage,
+    stale_entries,
 )
 
 
@@ -358,10 +363,28 @@ def _rev_parse(ref: str, repo_root: str) -> str:
     ).stdout.strip()
 
 
+def _marks(graph: Graph, repo_root: str) -> list[TriageEntry]:
+    """The marks, with today's date stamped on any the scan just found expired.
+
+    Every command that reads the marks against a scan comes through here, so the day a
+    mark expired is recorded by whichever scan noticed first - `check` in CI, a report,
+    the map - and never by more than one. A checkout that cannot be written to (CI with
+    a read-only tree) still gets the answer; only the stamp is lost, and the next
+    writable scan lays it down.
+    """
+    entries = load_triage(repo_root)
+    if note_expired(entries, stale_entries(graph, entries), dt.date.today().isoformat()):
+        with contextlib.suppress(OSError):
+            save_triage(entries, repo_root)
+    return entries
+
+
 def check(repo_root: str = ".", graph: Graph | None = None) -> dict:
     if graph is None:
         graph = scan(repo_root)
-    entries = load_triage(repo_root)
+    from seamcheck.report import mark_dict
+
+    entries = _marks(graph, repo_root)
     graph = apply_triage(graph, entries)
     result, _, message = diff_against(graph, "HEAD", repo_root)
 
@@ -374,6 +397,9 @@ def check(repo_root: str = ".", graph: Graph | None = None) -> dict:
         "new_unresolved": _ids(result.new_unresolved) if result else [],
         "new_unused": _ids(result.new_unused) if result else [],
         "triage_invalidated": result.triage_invalidated if result else [],
+        # Marked fine once, and the evidence has changed. Needs no baseline - the mark
+        # is its own - so this is filled on a first run where `triage_invalidated` is not.
+        "returned": [mark_dict(symbol, entry, True) for symbol, entry in returned(graph, entries)],
         "counts": {
             status.value: sum(1 for s in graph.symbols if s.status is status) for status in Status
         },
@@ -435,7 +461,7 @@ def _report(repo_root, fmt, ref, graph, progress) -> str:
     built = build_report(
         graph=graph,
         diff=diff,
-        entries=load_triage(repo_root),
+        entries=_marks(graph, repo_root),
         git_sha=sha,
         # baseline_sha names the commit the diff was actually taken against - the
         # resolved `ref`, not `sha` (the commit just scanned). They coincide only when
@@ -492,9 +518,21 @@ def unverified(repo_root: str = ".", limit: int = 25, kind: str = "") -> dict:
 
 
 def triage(symbol_id: str, status: str, repo_root: str = ".", reason: str = "",
-           why: str = "") -> dict:
-    """Record a disposition. `why` is the shareable half - a fixed word, see WhyWrong."""
+           why: str = "", undo: bool = False) -> dict:
+    """Record a disposition. `why` is the shareable half - a fixed word, see WhyWrong.
+
+    `undo` takes the mark off again. No scan: the file is the whole truth about what
+    was marked, and a person undoing a mark on a symbol the scan no longer produces
+    is exactly the case that must still work.
+    """
     from seamcheck.triage import WhyWrong
+
+    if undo:
+        entries, removed = remove_mark(load_triage(repo_root), symbol_id)
+        if not removed:
+            return {"ok": False, "message": f"No mark on `{symbol_id}` to undo."}
+        save_triage(entries, repo_root)
+        return {"ok": True, "message": f"{symbol_id} unmarked - it will be raised again."}
 
     try:
         triage_status = TriageStatus(status)
@@ -712,7 +750,7 @@ def _map_document(repo_root: str, ref: str, progress: Progress | None = None):
     diff, baseline_message_sha, message = diff_against(graph, ref, repo_root)
     progress.step("building the report")
     console = build_console(graph, build_report(
-        graph=graph, diff=diff, entries=load_triage(repo_root), git_sha=sha,
+        graph=graph, diff=diff, entries=_marks(graph, repo_root), git_sha=sha,
         baseline_sha=baseline_message_sha, baseline_message=message,
     ))
     progress.step("page attribution")

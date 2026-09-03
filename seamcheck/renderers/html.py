@@ -9,6 +9,7 @@ from __future__ import annotations
 import html as html_lib
 
 from seamcheck.renderers._shared import where
+from seamcheck.renderers.terminal import returned_line
 from seamcheck.report import Report, ReportGroup
 
 _UNCERTAIN_GLOSS = (
@@ -155,12 +156,23 @@ def render(report: Report) -> str:
     else:
         parts.append("<p>Nothing new since the baseline.</p>")
 
-    if report.triage_invalidated:
-        parts.append("<h2 class='warn'>Triage marks that no longer apply</h2>")
+    if report.returned:
+        parts.append(f"<h2 class='warn'>Returned ({len(report.returned)}) — marked fine once; "
+                     "the evidence has changed</h2>")
+        parts += [
+            f"<div class='item'><div class='label'>{_esc(item['symbol_id'])}</div>"
+            f"<div class='note'>{_esc(returned_line(item))}</div></div>"
+            for item in report.returned
+        ]
+
+    outlived = [item for item in report.triage_invalidated
+                if item["symbol_id"] not in {r["symbol_id"] for r in report.returned}]
+    if outlived:
+        parts.append("<h2 class='warn'>Marks that outlived their finding</h2>")
         parts += [
             f"<div class='item'><div class='label'>{_esc(item['symbol_id'])}</div>"
             f"<div class='note'>{_esc(item['note'])}</div></div>"
-            for item in report.triage_invalidated
+            for item in outlived
         ]
 
     if report.resolved:
@@ -175,6 +187,8 @@ def render(report: Report) -> str:
         f"<span class='count'>{_esc(name)} {value}</span>"
         for name, value in report.counts.items()
     )
+    if report.returned:
+        counts += f"<span class='count'>returned {len(report.returned)}</span>"
     parts.append(f"<div class='counts'>{counts}</div>")
     parts.append(f"<p class='gloss'>{_esc(_UNCERTAIN_GLOSS)}</p>")
     parts.append(_FILTER_SCRIPT)

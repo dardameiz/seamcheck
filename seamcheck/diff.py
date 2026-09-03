@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from seamcheck.graph import Graph, Status, Symbol
-from seamcheck.triage import fingerprint_for_symbol
+from seamcheck.triage import fingerprint_for_symbol, stale_entries
 
 
 @dataclass
@@ -27,9 +26,6 @@ def diff_graphs(
     old: Graph,
     new: Graph,
     triage_entries: list | None = None,
-    # One definition, imported: two copies of this formula silently stop agreeing and
-    # reappearance detection fails open. triage imports only graph, so there is no cycle.
-    fingerprint_fn: Callable[[Symbol], str] = fingerprint_for_symbol,
 ) -> DiffResult:
     old_by_id = {symbol.id: symbol for symbol in old.symbols}
     new_by_id = {symbol.id: symbol for symbol in new.symbols}
@@ -52,24 +48,21 @@ def diff_graphs(
         and old_by_id[symbol.id].status in _BAD_STATUSES
     ]
 
-    triage_invalidated = []
-    for entry in triage_entries or []:
-        symbol = new_by_id.get(entry.symbol_id)
-        if symbol is None:
-            continue
-        current = fingerprint_fn(symbol)
-        if current != entry.fingerprint:
-            triage_invalidated.append(
-                {
-                    "symbol_id": entry.symbol_id,
-                    "stored_fingerprint": entry.fingerprint,
-                    "current_fingerprint": current,
-                    "note": (
-                        "The evidence behind this disposition changed, so the mark no longer "
-                        "applies. Re-triage rather than treating it as a brand-new finding."
-                    ),
-                }
-            )
+    # The predicate is triage.stale_entries' - the one that also decides what the report
+    # raises as returned - so the diff and the report can never disagree about which
+    # marks moved. The dict shape is the `check` JSON an agent reads.
+    triage_invalidated = [
+        {
+            "symbol_id": entry.symbol_id,
+            "stored_fingerprint": entry.fingerprint,
+            "current_fingerprint": fingerprint_for_symbol(new_by_id[entry.symbol_id]),
+            "note": (
+                "The evidence behind this disposition changed, so the mark no longer "
+                "applies. Re-triage rather than treating it as a brand-new finding."
+            ),
+        }
+        for entry in stale_entries(new, triage_entries or [])
+    ]
 
     return DiffResult(
         new_unresolved=new_unresolved,

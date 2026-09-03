@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from seamcheck.coverage import CoverageResult
 from seamcheck.diff import DiffResult
 from seamcheck.graph import Graph, Status, Symbol
-from seamcheck.triage import TriageEntry, valid_triage_ids
+from seamcheck.triage import TriageEntry, returned, valid_triage_entries, valid_triage_ids
 
 # Only these two statuses are findings. CONNECTED needs no action, and UNCERTAIN is the
 # scan saying it has no evidence either way - presenting it as actionable would undo the
@@ -87,6 +87,13 @@ class Report:
     groups: list[ReportGroup]
     counts: dict[str, int]
     coverage: CoverageResult | None = field(default=None)
+    # Findings that came back: marked fine once, and the evidence has since changed.
+    # Independent of the baseline - a mark is its own baseline - so a report with no
+    # snapshot to diff against still says so. Each is a `mark_dict()`.
+    returned: list[dict] = field(default_factory=list)
+    # Every mark whose symbol is in this scan, keyed by symbol id: the ones that hold
+    # and the ones that came back, so a card can say which it is wearing.
+    marks: dict[str, dict] = field(default_factory=dict)
 
 
 def _severity(symbol: Symbol) -> int:
@@ -133,6 +140,18 @@ def _group_status(symbols: list[Symbol]) -> Status:
     return Status.UNRESOLVED if any(s.status is Status.UNRESOLVED for s in symbols) else Status.UNUSED
 
 
+def mark_dict(symbol: Symbol, entry: TriageEntry, came_back: bool) -> dict:
+    """One mark as the renderers see it: what was said, by whom, when - and whether the
+    code has since moved out from under it."""
+    return {
+        "symbol_id": symbol.id, "label": symbol.label, "kind": symbol.kind,
+        "status": symbol.status.value, "file": symbol.file, "line": symbol.line,
+        "marked": entry.status.value, "why": entry.why, "when": entry.when,
+        "who": entry.who, "reason": entry.reason, "expired": entry.expired,
+        "returned": came_back,
+    }
+
+
 def build_report(
     graph: Graph,
     diff: DiffResult | None,
@@ -154,6 +173,15 @@ def build_report(
 
     already_reported = {symbol.id for symbol in new_findings}
     triaged_ids = valid_triage_ids(graph, entries)
+    by_id = {symbol.id: symbol for symbol in graph.symbols}
+    # Later valid entry per id wins, the same rule triage.py applies everywhere.
+    marks = {
+        entry.symbol_id: mark_dict(by_id[entry.symbol_id], entry, False)
+        for entry in valid_triage_entries(graph, entries)
+    }
+    came_back = sorted(returned(graph, entries), key=lambda pair: _sort_key(pair[0]))
+    for symbol, entry in came_back:
+        marks[symbol.id] = mark_dict(symbol, entry, True)
 
     by_kind: dict[str, list[Symbol]] = {}
     counts: dict[str, int] = {status.value: 0 for status in Status}
@@ -188,4 +216,6 @@ def build_report(
         groups=groups,
         counts=counts,
         coverage=coverage,
+        returned=[marks[symbol.id] for symbol, _ in came_back],
+        marks=marks,
     )

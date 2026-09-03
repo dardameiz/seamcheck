@@ -81,6 +81,11 @@ class Console:
     # Defaults, and last: a dataclass cannot take a defaulted field before a bare one.
     store: dict[str, int] = field(default_factory=dict)
     offscreen: dict[str, int] = field(default_factory=dict)
+    # Report.marks, verbatim: every mark on a symbol in this scan, keyed by id, so a
+    # row in a list and a card on the map can say "marked fine" or "returned" and by
+    # whom. The map cannot write a mark, but it can show one - and the finding that came
+    # back is the one a reader most needs to see wearing its history.
+    marks: dict[str, dict] = field(default_factory=dict)
 
 
 def _row(symbol: Symbol) -> Row:
@@ -185,4 +190,5 @@ def build_console(graph: Graph, report: Report) -> Console:
         counts=report.counts,
         sections=sections,
         groups=[(g.title, len(g.symbols), g.kind) for g in report.groups],
+        marks=report.marks,
     )

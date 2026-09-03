@@ -65,6 +65,42 @@ each is a false-positive class measured on a real repository:
 
 `genuinely-dead` matters as much as the rest. A finding confirmed **right** is evidence too.
 
+What each word does for you, the author, once it is on the mark:
+
+- `consumed-by-dependency` — the finding is filed as *someone else's code*, so it never
+  counts against yours again.
+- `built-at-runtime` — tells the next reader the name is assembled, before they go looking
+  for a literal that does not exist.
+- `read-outside-repo` — names the boundary: the consumer is real, it is just not here.
+- `declared-elsewhere` — points at the other place, so the next scan of that place is where
+  to look.
+- `generated` — keeps build output out of every future count.
+- `test-or-fixture` — keeps the tests out of the product's numbers.
+- `framework-implicit` — records the framework rule once, so nobody rediscovers it.
+- `genuinely-dead` — turns a finding into a confirmed one; the tool learns it was right.
+- `other` — keeps the mark without claiming a reason it does not have.
+
+### A mark is remembered
+
+The mark stays on the symbol. When the code under it changes — the fingerprint no longer
+matches — it is **kept**, stamped with the day, and the finding is raised again as
+**returned**: `returned N` in the console counts, a pill in the map's findings list, and a
+line on the card and in every report that says who marked it, when, why, when the evidence
+moved, and what it is again. That line is the difference between judging a finding cold and
+picking it up where the last person left it.
+
+Two ways to answer a returned finding:
+
+```bash
+seamcheck triage '<symbol-id>' --wrong <reason>   # look again, mark it again
+seamcheck triage '<symbol-id>' --undo             # take the mark off for good
+```
+
+The card has an **Undo the mark** button that puts the second command on your clipboard.
+`--undo` reads the file and never scans, so it works on a symbol the scan no longer
+produces. A mark whose finding has gone — the symbol is connected now — is not raised; it
+is listed once, softly, as *a mark that outlived its finding*.
+
 ### Seeing it before you send it
 
 The map has a **Send a report** view: the exact values, in a table, with a Copy button and a

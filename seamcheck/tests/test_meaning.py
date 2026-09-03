@@ -22,7 +22,9 @@ class MeaningTests(SimpleTestCase):
         specific, _ = meaning("fetch_target", "unresolved")
 
         self.assertNotEqual(specific, generic)
-        self.assertIn("URL pattern", specific)
+        # The wording was rewritten in e6e049b (plain words, no framework jargon); what
+        # this pins is that the fetch gets its own sentence about a route.
+        self.assertIn("route", specific)
 
     def test_an_unknown_status_says_nothing_rather_than_inventing_something(self):
         self.assertEqual(meaning("url", "banana"), ("", ""))
