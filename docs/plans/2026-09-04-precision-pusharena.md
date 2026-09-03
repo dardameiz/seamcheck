@@ -227,6 +227,24 @@ substring search said `obtained-buttons` was in the template - it was
 `obtained-buttons-modal`. That is the adjudication's own trap 1, in the other direction,
 hit while checking the tool. Whole-token comparison, both ways round.
 
+## 10. Shipped: F17, and the check it turned into
+
+Resolving a `/static/…` reference against the static directories the scan already knows
+(`_static_candidates`, the same list the CSS reader uses) rather than against the route
+table, where the answer could only ever be `uncertain`.
+
+On the reference project: **103 static references, 91 resolved, 9 still uncertain**
+(runtime-composed, or a directory prefix rather than a file) **and 3 missing** -
+`hot_air_balloon`, `coral_reef` and `castle_builder` store previews, whose directories do
+not exist at all while every other button has one. Hand-verified. That is the check this
+was worth doing for; the eleven false `uncertain` rows were the smaller half.
+
+One implementation note worth keeping: the verdict had to be applied to the **symbol**,
+not only to an edge. A fetch target that arrives `uncertain` is passed through by the
+classifier untouched - deliberately, because a URL-shaped literal is a sighting and a
+sighting is not a call - so a CONNECTED edge was never read. The filesystem is not a
+sighting: the file is there or it is not, and that outranks the sighting rule.
+
 ## Measured, 2026-09-04
 
 Reference project, claims (`unresolved` + `unused`) before and after §1-§4 and §8:

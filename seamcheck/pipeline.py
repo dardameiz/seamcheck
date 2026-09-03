@@ -237,6 +237,7 @@ def run_scan(
     repo_root: str = ".",
     static_urls: bool = False,
     server_adapter: str | None = None,
+    static_roots: list[str] | None = None,
 ) -> Graph:
     progress = progress or null()
 
@@ -316,6 +317,29 @@ def run_scan(
     js_edges += inline_edges
     progress.step("matching calls to endpoints")
     match_edges = match_js_to_django(server_symbols, js_symbols)
+    # ...and the ones that are not routes at all. A `/static/…` reference asked of the
+    # route table can only ever come back uncertain; asked of the filesystem it comes
+    # back yes or no, and "no" is a 404 waiting to happen.
+    from seamcheck.matcher import match_static_assets
+
+    asset_edges = match_static_assets(js_symbols, static_roots or [])
+    if asset_edges:
+        asset_ids = {edge.from_id for edge in asset_edges}
+        match_edges = [e for e in match_edges
+                       if not (e.from_id in asset_ids and e.from_id == e.to_id)]
+        match_edges += asset_edges
+        # On the SYMBOL, not only on an edge. A fetch target that arrives `uncertain` -
+        # which every URL-shaped literal does, deliberately, because a sighting is not a
+        # call - is passed through by the classifier untouched, so an edge saying
+        # "connected" would never be read. The filesystem is not a sighting: the file is
+        # there or it is not, and that answer outranks the sighting rule.
+        verdict = {edge.from_id: edge for edge in asset_edges}
+        js_symbols = [
+            dataclasses.replace(symbol, status=verdict[symbol.id].status,
+                                note=verdict[symbol.id].note)
+            if symbol.id in verdict else symbol
+            for symbol in js_symbols
+        ]
     progress.step("GraphQL")
     # A GraphQL API has ONE route, so every adapter reports it as a single connected
     # endpoint and stops. The real API is the schema, and the seam is a query naming a

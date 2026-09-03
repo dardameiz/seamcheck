@@ -282,6 +282,9 @@ def scan(
         static_urls=(
             config.get("static_urls", False) if static_urls is None else static_urls
         ),
+        # The directories that actually serve files, so a `/static/…` reference can be
+        # asked of the filesystem rather than of the route table.
+        static_roots=static_candidates,
     ), repo_root)
     return _with_observations(scanned, repo_root)
 

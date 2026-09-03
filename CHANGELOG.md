@@ -199,6 +199,16 @@ reference project - the first time a release was tested the way a user meets it.
   invisible and every `getElementById` for one read as a query for nothing. The
   dead-region pass then turned that single miss into a claim about **161 unreachable
   lines that run perfectly well**, which is how a good finding kind earns distrust.
+- **Added** — **a `/static/…` reference is asked of the filesystem, not the route table.**
+  Asked of the routes it could only ever come back `uncertain` - which is what happened to
+  every static path on one surface of the reference project, all of them files sitting on
+  disk. Resolved against the static directories the scan already knows, the same code path
+  becomes a check for the opposite case: **a reference to an asset that is not there**,
+  which is a 404 at runtime with its own source line attached. On the reference project:
+  103 static references, 91 resolved, and **3 genuinely missing** - the store previews for
+  `hot_air_balloon`, `coral_reef` and `castle_builder`, whose directories do not exist
+  while every other button has one. Collected copies under `staticfiles/` are deliberately
+  not proof: a file that exists only there exists only as a build artefact.
 - **Added** — **`seamcheck observe` settles multi-writer findings, which reading never
   could.** Two files writing one element is a *risk*; it is a *defect* when they disagree,
   and disagreement has a runtime signature: a value that changes while nothing is touching

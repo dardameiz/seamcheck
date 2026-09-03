@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pathlib
 import re
 
 from seamcheck.graph import Edge, Status, Symbol
@@ -113,6 +114,77 @@ class UrlIndex:
         """Routes whose path ends with `path` - for a reference with no leading slash."""
         normalised = _normalize(path)
         return [s for s in self.urls if _normalize(s.label).endswith("/" + normalised)]
+
+
+# A static asset is not a route, and asking the route table about one produces an answer
+# about the wrong question. Every `/static/…` path on one surface of the reference project
+# was reported `uncertain` - "a URL-shaped string that matches no route" - and all eleven
+# were files sitting on disk. Resolved against the filesystem, the same code path becomes
+# a check for the opposite case, which is a real bug class here: a season's `icon_folder`
+# pointing at art nobody ever uploaded.
+_ASSET_SUFFIXES = (
+    ".css", ".js", ".mjs", ".map", ".json", ".svg", ".png", ".jpg", ".jpeg", ".gif",
+    ".webp", ".avif", ".ico", ".woff", ".woff2", ".ttf", ".otf", ".eot", ".mp3", ".mp4",
+    ".webm", ".ogg", ".wav", ".pdf", ".txt", ".xml", ".webmanifest",
+)
+_ASSET_FOUND = (
+    "A static file, and it is there: {where}. Not a route, so the route table was never "
+    "the right place to ask."
+)
+_ASSET_MISSING = (
+    "A static file, and it is NOT on disk. Looked under {roots}. This is a 404 at "
+    "runtime - the reference for it is right here, and nothing serves it."
+)
+
+
+def _asset_path(label: str) -> str:
+    """The part of a static URL after its prefix, or "" if this is not one."""
+    text = label.split("?")[0].split("#")[0]
+    if not text.lower().endswith(_ASSET_SUFFIXES):
+        return ""
+    for marker in ("/static/", "/assets/", "/media/"):
+        if marker in text:
+            return text.split(marker, 1)[1].strip("/")
+    return ""
+
+
+def match_static_assets(js_symbols: list[Symbol], static_roots: list[str]) -> list[Edge]:
+    """Resolve `/static/…` references against the directories that serve them.
+
+    Collected copies are deliberately not proof: `staticfiles/` holds what
+    `collectstatic` duplicated, so a file that exists only there exists only as a build
+    artefact - and counting one as evidence is the mistake that made a first sample of
+    the reference project's findings score 10 out of 10 wrong.
+    """
+    import os
+
+    roots = [r for r in static_roots
+             if r and "staticfiles" not in pathlib.Path(r).parts]
+    if not roots:
+        return []
+    edges: list[Edge] = []
+    for symbol in js_symbols:
+        if symbol.kind != "fetch_target":
+            continue
+        relative = _asset_path(symbol.label)
+        if not relative:
+            continue
+        found = ""
+        for root in roots:
+            candidate = os.path.join(root, relative.replace("/", os.sep))
+            if os.path.isfile(candidate):
+                found = os.path.relpath(candidate, os.getcwd()) \
+                    if candidate.startswith(os.getcwd()) else candidate
+                break
+        if found:
+            edges.append(Edge(from_id=symbol.id, to_id=symbol.id, status=Status.CONNECTED,
+                              note=_ASSET_FOUND.format(where=found)))
+        else:
+            edges.append(Edge(from_id=symbol.id, to_id=symbol.id, status=Status.UNRESOLVED,
+                              note=_ASSET_MISSING.format(
+                                  roots=", ".join(os.path.basename(r.rstrip("/"))
+                                                  for r in roots[:3]))))
+    return edges
 
 
 def match_js_to_django(django_symbols: list[Symbol], js_symbols: list[Symbol]) -> list[Edge]:
