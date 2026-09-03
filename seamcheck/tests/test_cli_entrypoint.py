@@ -108,16 +108,18 @@ class DispatchTests(SimpleTestCase):
         ):
             self.assertEqual(main(["check"]), 1)
 
-    def test_outside_a_project_it_says_so_instead_of_a_traceback(self):
-        err = io.StringIO()
+    def test_outside_a_django_project_the_scan_still_runs(self):
+        # It used to answer "no Django project here" and stop - which is why an Express
+        # or Nest repository, five of the six adapters, could never be scanned from the
+        # CLI. No settings module means no Django bootstrap, not no scan.
         with (
             mock.patch("seamcheck.cli.find_project", return_value=None),
             mock.patch.dict("os.environ", {}, clear=True),
-            redirect_stderr(err),
+            mock.patch("seamcheck.cli._run_without_django", return_value=0) as run,
         ):
-            self.assertEqual(main(["scan"]), 2)
+            self.assertEqual(main(["scan"]), 0)
 
-        self.assertIn("no Django project here", err.getvalue())
+        run.assert_called_once()
 
 
 class _Dispatch:

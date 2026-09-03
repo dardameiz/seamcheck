@@ -38,8 +38,16 @@ def _config() -> dict:
     """
     from seamcheck.autoconfig import effective
 
-    merged, _ = effective(_CONFIG_ROOT[0])
-    return merged
+    root = _CONFIG_ROOT[0]
+    if _CONFIG_CACHE.get("root") != root:
+        # Detection walks the repository looking for settings, package.json and the
+        # like - seven seconds on the reference project - and a report asks five times.
+        merged, _ = effective(root)
+        _CONFIG_CACHE.update(root=root, config=merged)
+    return dict(_CONFIG_CACHE["config"])
+
+
+_CONFIG_CACHE: dict = {}
 
 
 # Detection is relative to the repo, and every public entry point already takes a
@@ -418,6 +426,17 @@ def report(
     progress: Progress | None = None,
 ) -> str:
     """Render the report. One model, chosen serializer - ordering lives in report.py."""
+    from seamcheck.extractors.js_extractor import clear_parse_cache
+
+    try:
+        return _report(repo_root, fmt, ref, graph, progress)
+    finally:
+        # The parsed ASTs served every extractor and the map's page attribution; a
+        # long-lived process (the MCP server) should not keep a repository's worth.
+        clear_parse_cache()
+
+
+def _report(repo_root, fmt, ref, graph, progress) -> str:
     from seamcheck.renderers import html as html_renderer
     from seamcheck.renderers import markdown as markdown_renderer
     from seamcheck.renderers import terminal as terminal_renderer

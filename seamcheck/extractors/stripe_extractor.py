@@ -31,6 +31,7 @@ import re
 
 from seamcheck.adapters.discovery import SKIP_DIRS
 from seamcheck.graph import Edge, Status, Symbol
+from seamcheck.nodetools import node_line
 
 # The one skip list, plus the one directory this reader alone must avoid: a migration
 # file mentioning Stripe is a schema, not an integration. Keeping a private copy of the
@@ -356,7 +357,7 @@ def _scan_js(root: str) -> tuple[list, dict, dict, set]:
 
 
 def _js_line(node: dict) -> int:
-    return ((node.get("loc") or {}).get("start") or {}).get("line") or 1
+    return node_line(node) or 1
 
 
 def extract_stripe(root: str) -> tuple[list[Symbol], list[Edge]]:

@@ -1,3 +1,4 @@
+import io
 import pathlib
 from unittest import mock
 
@@ -37,38 +38,57 @@ class ParserLocationTests(SimpleTestCase):
         self.assertTrue(path.endswith("parse_js.mjs"))
 
 
+def _process(returncode, stdout="", stderr=""):
+    """What Popen hands back: three pipes and an exit code."""
+    return mock.Mock(
+        stdin=io.BytesIO(), stdout=io.BytesIO(stdout.encode()),
+        stderr=io.BytesIO(stderr.encode()), returncode=returncode,
+        wait=mock.Mock(return_value=returncode),
+    )
+
+
 class DegradationTests(SimpleTestCase):
     def setUp(self):
         nodetools._reported.clear()
 
     def test_a_missing_node_costs_its_symbols_and_nothing_else(self):
         # check=True raised, which took the other half of the graph down with it.
-        with mock.patch("subprocess.run", side_effect=FileNotFoundError):
-            self.assertEqual(run_parser("p.mjs", ["a.js"], "JavaScript"), [])
+        with mock.patch("subprocess.Popen", side_effect=FileNotFoundError):
+            self.assertEqual(list(run_parser("p.mjs", ["a.js"], "JavaScript")), [])
 
     def test_a_parser_that_exits_non_zero_is_reported_not_raised(self):
-        failed = mock.Mock(returncode=1, stdout="", stderr="ERR_MODULE_NOT_FOUND")
         with (
-            mock.patch("subprocess.run", return_value=failed),
+            mock.patch("subprocess.Popen", return_value=_process(1, stderr="ERR_MODULE_NOT_FOUND")),
             self.assertLogs("seamcheck.nodetools", "WARNING") as logs,
         ):
-            self.assertEqual(run_parser("p.mjs", ["a.css"], "CSS"), [])
+            self.assertEqual(list(run_parser("p.mjs", ["a.css"], "CSS")), [])
 
         self.assertIn("no CSS symbols", logs.output[0])
+
+    def test_a_parser_that_dies_part_way_keeps_what_it_sent(self):
+        # 21,000 files of NDJSON once overflowed the pipe and the whole batch was lost.
+        # The records that arrived before the crash are real; only the rest is missing.
+        with (
+            mock.patch("subprocess.Popen", return_value=_process(1, '{"a":1}\n', "ENOBUFS")),
+            self.assertLogs("seamcheck.nodetools", "WARNING") as logs,
+        ):
+            self.assertEqual(list(run_parser("p.mjs", ["a.js", "b.js"], "JavaScript")), ['{"a":1}'])
+
+        self.assertIn("incomplete JavaScript symbols", logs.output[0])
+        self.assertIn("after 1 file(s)", logs.output[0])
 
     def test_it_says_so_once_not_once_per_batch(self):
         # Parsers run once per batch of files, so an unguarded warning repeats per batch.
         with (
-            mock.patch("subprocess.run", side_effect=FileNotFoundError),
+            mock.patch("subprocess.Popen", side_effect=FileNotFoundError),
             self.assertLogs("seamcheck.nodetools", "WARNING") as logs,
         ):
             for _ in range(5):
-                run_parser("p.mjs", ["a.js"], "JavaScript")
+                list(run_parser("p.mjs", ["a.js"], "JavaScript"))
 
         self.assertEqual(len(logs.output), 1)
 
-    def test_a_working_parser_returns_its_lines(self):
-        ok = mock.Mock(returncode=0, stdout='{"a":1}\n{"b":2}\n', stderr="")
-        with mock.patch("subprocess.run", return_value=ok):
-            self.assertEqual(run_parser("p.mjs", ["a.js"], "JavaScript"),
+    def test_a_working_parser_streams_its_lines(self):
+        with mock.patch("subprocess.Popen", return_value=_process(0, '{"a":1}\n{"b":2}\n')):
+            self.assertEqual(list(run_parser("p.mjs", ["a.js"], "JavaScript")),
                              ['{"a":1}', '{"b":2}'])

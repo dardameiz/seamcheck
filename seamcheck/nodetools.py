@@ -13,10 +13,13 @@ which is strictly worse than one that says what it lost.
 
 from __future__ import annotations
 
+import io
 import logging
 import os
 import subprocess
 import sys
+import threading
+from collections.abc import Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -61,24 +64,82 @@ def parser_path(directory: str, name: str) -> str:
     return bundled if os.path.isfile(bundled) else os.path.join(directory, f"{name}.mjs")
 
 
-def run_parser(script: str, paths: list[str], what: str) -> list[str]:
-    """Feed newline-separated paths to a parser, return its NDJSON lines."""
+def run_parser(script: str, paths: list[str], what: str) -> Iterator[str]:
+    """Feed newline-separated paths to a parser, yield its NDJSON lines as they arrive.
+
+    Streamed, not collected. The parser answers with one record per file and a record is
+    the file's whole syntax tree; holding the run's output as one string before reading
+    a line of it cost 2.6 GB on a 21,000-file monorepo, on top of the trees built from
+    it. Read this way, a line is parsed and dropped before the next one lands. A parser
+    that dies part-way still yields every record it finished: the files it did read are
+    not lost to the ones it did not.
+    """
     try:
-        result = subprocess.run(
-            ["node", script], input="\n".join(paths),
-            capture_output=True, text=True, check=False,
+        process = subprocess.Popen(
+            ["node", script], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
         )
     except FileNotFoundError:
         _report(what, "seamcheck: no %s symbols - Node.js is not on PATH. Every other "
                       "extractor still ran.", what)
-        return []
-    if result.returncode != 0:
-        _report(what, "seamcheck: no %s symbols - %s exited %s. Every other extractor "
-                      "still ran. %s", what, os.path.basename(script), result.returncode,
-                (result.stderr or "").strip().splitlines()[-1:] or "")
-        return []
-    # split("\n"), never splitlines(): Python also breaks on U+2028 and U+2029, which are
-    # legal unescaped inside a JSON string and appear verbatim in real JavaScript source.
-    # One of them in one file of a 6,378-file repository cut a record in half and made the
-    # whole run unparseable.
-    return [line for line in result.stdout.split("\n") if line]
+        return
+
+    # The parser reads all of stdin before it writes, so the path list is handed over on
+    # its own thread: past the pipe's buffer, a single-threaded write would wait on a
+    # reader that is itself waiting on us.
+    def feed() -> None:
+        try:
+            process.stdin.write("\n".join(paths).encode("utf-8"))
+            process.stdin.close()
+        except (BrokenPipeError, OSError):
+            pass  # the parser is gone; its exit code says so below
+
+    stderr_text: list[bytes] = []
+    feeder = threading.Thread(target=feed, daemon=True)
+    drainer = threading.Thread(target=lambda: stderr_text.append(process.stderr.read()), daemon=True)
+    feeder.start()
+    drainer.start()
+    # split on "\n" only, never splitlines(): Python also breaks on U+2028 and U+2029,
+    # which are legal unescaped inside a JSON string and appear verbatim in real
+    # JavaScript source. One of them in one file of a 6,378-file repository cut a record
+    # in half and made the whole run unparseable.
+    records = 0
+    with io.TextIOWrapper(process.stdout, encoding="utf-8", errors="replace", newline="\n") as out:
+        for line in out:
+            line = line.rstrip("\n")
+            if line:
+                records += 1
+                yield line
+    feeder.join()
+    drainer.join()
+    if process.wait() != 0:
+        stderr = b"".join(stderr_text).decode("utf-8", errors="replace").strip()
+        _report(what, "seamcheck: %s %s symbols - %s exited %s%s. Every other extractor "
+                      "still ran. %s", "incomplete" if records else "no", what,
+                os.path.basename(script), process.returncode,
+                f" after {records} file(s)" if records else "", stderr.splitlines()[-1:] or "")
+
+
+def node_line(node) -> int | None:
+    """The line an AST node starts on, whichever shape `loc` arrived in.
+
+    parse_js emits `loc` as `[start_line, end_line]` - the only two numbers anything
+    here reads, in place of the three dicts and four ints ESTree carries per node, which
+    were most of the 1.2 GB the reference project's ASTs took. A hand-built tree in a
+    test may still use the ESTree dict, so both are read.
+    """
+    loc = node.get("loc") if isinstance(node, dict) else None
+    if isinstance(loc, list):
+        return loc[0] if loc else None
+    if isinstance(loc, dict):
+        return (loc.get("start") or {}).get("line")
+    return None
+
+
+def node_end_line(node) -> int | None:
+    loc = node.get("loc") if isinstance(node, dict) else None
+    if isinstance(loc, list):
+        return loc[1] if len(loc) > 1 else None
+    if isinstance(loc, dict):
+        return (loc.get("end") or {}).get("line")
+    return None

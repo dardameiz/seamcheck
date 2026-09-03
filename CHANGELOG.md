@@ -19,6 +19,22 @@ backend that answered `uncertain` everywhere would score 100% precision and be u
 
 ## Unreleased
 
+- **A scan of a 21,000-file monorepo no longer loses every JavaScript symbol.** The
+  parser writes one JSON line per file to a pipe; on macOS those writes are asynchronous
+  and unbounded, and at 2.6 GB of output (n8n) node died with `write ENOBUFS` - the whole
+  batch was gone, the report said "no JavaScript symbols" and every route it should have
+  found was missing. The parser now waits for the pipe to drain before writing the next
+  file, and Python reads the stream as it arrives instead of buffering it whole; when a
+  parser does still die part-way, the files that arrived are kept and the message says
+  how many. n8n: 0 → 24 routes, 25 views.
+- **Generation of the pointlessbutton map: 187 s → 48 s, peak memory 1.9 GB.** Every
+  JavaScript file is parsed once per scan (a keyed cache the extractors share, cleared
+  when the report is done) instead of once per extractor; the syntax tree carries a
+  compact `[start, end]` line pair instead of a full location record (parser output
+  1.24 GB → 0.80 GB on n8n); tree walks are iterative; response-field matching reads
+  the cached tree instead of spawning node per edge (93 spawns removed); the commit
+  history diffs snapshot rows straight from JSON and drops each baseline once its last
+  reader is done (13.1 s → 4.7 s, 1.4 GB → 0.3 GB, byte-identical series). Same map.
 - **The map opens in under half a second on a 500k-line codebase, at 6 MB JS heap.** The
   node rows used to sit in one inline `MAPDATA` literal that the browser parsed and
   inflated in full before the first paint (pointlessbutton: 22.6 MB file, ~1 KB of heap

@@ -35,6 +35,7 @@ import re
 
 from seamcheck.adapters.discovery import SKIP_DIRS
 from seamcheck.graph import Edge, Status, Symbol
+from seamcheck.nodetools import node_line
 
 _JS_EXTENSIONS = (".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx")
 _MAX_BYTES = 400_000
@@ -283,7 +284,7 @@ def _scan_js(root: str) -> tuple[dict, list, list]:
 
 
 def _line(node: dict) -> int:
-    return ((node.get("loc") or {}).get("start") or {}).get("line") or 1
+    return node_line(node) or 1
 
 
 def _decorator_name(node: ast.AST) -> str:

@@ -1,6 +1,7 @@
 // Mirrors js_tools/parse_js.mjs: newline-separated paths on stdin, one NDJSON record
 // per file on stdout. .mjs for the same reason - the host project's package.json
 // decides what a bare .js means, and this must not depend on that.
+import { once } from 'node:events';
 import { readFileSync } from 'node:fs';
 import postcss from 'postcss';
 
@@ -13,7 +14,7 @@ process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => {
   buffer += chunk;
 });
-process.stdin.on('end', () => {
+process.stdin.on('end', async () => {
   for (const filePath of buffer.split('\n').filter(Boolean)) {
     const record = { path: filePath, selectors: [], tokenDefs: [], tokenUses: [], imports: [] };
     try {
@@ -36,6 +37,8 @@ process.stdin.on('end', () => {
     } catch (err) {
       record.error = err.message;
     }
-    process.stdout.write(JSON.stringify(record) + '\n');
+    // Wait for the pipe to drain between records - see parse_js.mjs: on macOS an
+    // unbounded write queue dies with ENOBUFS on a large enough repository.
+    if (!process.stdout.write(JSON.stringify(record) + '\n')) await once(process.stdout, 'drain');
   }
 });

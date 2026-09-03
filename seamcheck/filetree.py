@@ -18,6 +18,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 
 from seamcheck.graph import Graph
+from seamcheck.nodetools import node_end_line, node_line
 
 
 @dataclass
@@ -66,8 +67,8 @@ def _js_declarations(tree: dict) -> list[tuple[str, int, int]]:
         ):
             name = (node.get("id") or {}).get("name")
         if name:
-            start = ((node.get("loc") or {}).get("start") or {}).get("line") or 0
-            end = ((node.get("loc") or {}).get("end") or {}).get("line") or start
+            start = node_line(node) or 0
+            end = node_end_line(node) or start
             found.append((name, start, end))
         stack.extend(value for value in node.values() if isinstance(value, (dict, list)))
     return found

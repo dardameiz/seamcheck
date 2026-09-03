@@ -20,6 +20,7 @@
 // The `estree` plugin matters as much as the syntax ones: it makes Babel emit the same
 // node shapes acorn did (`Literal`, `Property`), so every extractor downstream is
 // untouched.
+import { once } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { parse } from '@babel/parser';
 
@@ -76,8 +77,17 @@ function options(filePath, sourceType, modern = false) {
 // to care - and one `123n` anywhere in a 6,378-file repository threw during serialisation
 // and killed the process, losing every OTHER file's AST with it. A replacer fixes the
 // value; the try/catch below fixes the blast radius, which is the part that matters.
+//
+// The same replacer shrinks what crosses the pipe. Python reads two numbers off a node's
+// position - the start line, and the end line for one file-tree span - and ESTree carries
+// seven (`start`, `end`, and `loc` as two dicts of two). Sent as `loc: [startLine,
+// endLine]` instead, the reference project's ASTs went from 1.24 GB of Python dicts to
+// 0.80 GB, and the JSON they came from is a third shorter.
 function safe(key, value) {
-  return typeof value === 'bigint' ? value.toString() : value;
+  if (typeof value === 'bigint') return value.toString();
+  if (key === 'loc' && value && value.start && value.end) return [value.start.line, value.end.line];
+  if ((key === 'start' || key === 'end') && typeof value === 'number') return undefined;
+  return value;
 }
 
 let buffer = '';
@@ -85,7 +95,16 @@ process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => {
   buffer += chunk;
 });
-process.stdin.on('end', () => {
+// Every record waits for the pipe to drain before the next is written. On macOS a pipe
+// is asynchronous: without this, a repository's whole output is queued in memory at
+// once, and past a couple of gigabytes the queue dies with `write ENOBUFS` - which is
+// exactly what a 21,000-file monorepo did, taking every JavaScript symbol with it and
+// reporting the routes it never read as absent.
+async function emit(line) {
+  if (!process.stdout.write(line)) await once(process.stdout, 'drain');
+}
+
+process.stdin.on('end', async () => {
   for (const filePath of buffer.split('\n').filter(Boolean)) {
     let record;
     try {
@@ -108,14 +127,14 @@ process.stdin.on('end', () => {
     } catch (err) {
       record = { path: filePath, error: err.message };
     }
+    let line;
     try {
-      process.stdout.write(JSON.stringify(record, safe) + '\n');
+      line = JSON.stringify(record, safe) + '\n';
     } catch (err) {
       // One unserialisable file must never cost the run. It is reported as a failure like
       // any other, and the reporter on the Python side names it.
-      process.stdout.write(
-        JSON.stringify({ path: filePath, error: `could not serialise AST: ${err.message}` }) + '\n'
-      );
+      line = JSON.stringify({ path: filePath, error: `could not serialise AST: ${err.message}` }) + '\n';
     }
+    await emit(line);
   }
 });

@@ -23,7 +23,7 @@ from seamcheck.adapters.base import ServerScan
 from seamcheck.adapters.discovery import SKIP_DIRS, declares
 from seamcheck.extractors.js_extractor import _parse_files, _walk
 from seamcheck.graph import Edge, Status, Symbol
-from seamcheck.nodetools import report
+from seamcheck.nodetools import node_line, report
 
 _METHODS = ("get", "post", "put", "delete", "patch", "options", "head", "all")
 # Names that hold an HTTP CLIENT, not a router. `axios.post('/api/x', body)` is
@@ -75,7 +75,7 @@ def _resolve(importer: str, target: str) -> str:
 
 
 def _line(node: dict) -> int | None:
-    return ((node.get("loc") or {}).get("start") or {}).get("line")
+    return node_line(node)
 
 
 def _join(*parts: str) -> str:

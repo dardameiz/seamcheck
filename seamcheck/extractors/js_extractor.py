@@ -10,7 +10,7 @@ import shutil
 import tempfile
 
 from seamcheck.graph import Edge, Status, Symbol
-from seamcheck.nodetools import parser_path, report, run_parser
+from seamcheck.nodetools import node_line, parser_path, report, run_parser
 
 _JS_TOOLS = os.path.join(os.path.dirname(__file__), os.pardir, "js_tools")
 # .js first, deliberately: where a project ships `foo.js` beside `foo.ts` the .js is
@@ -112,6 +112,36 @@ def _static_url(node: dict | None) -> tuple[str | None, bool]:
 _FUNCTION_TYPES = ("FunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression")
 
 
+# path -> ((mtime_ns, size), ast). Eleven extractors and adapters each ask for the AST
+# of the same JavaScript files - on the reference project the DOM extractor alone asked
+# four times, and the map's page attribution once more per entry point - so a file was
+# parsed by node and json.loads'd two hundred times per scan. Now once, validated by the
+# file's stamp, held for the process. Nothing evicts it during a scan; clear_parse_cache()
+# at the end of a report hands the memory back.
+_AST_CACHE: dict[str, tuple[tuple[int, int], dict]] = {}
+# Other per-scan memos that hang off the ASTs (an extractor's per-file result, the inline
+# blocks) register here so one call empties them all.
+_CACHES: list[dict] = [_AST_CACHE]
+
+
+def register_cache(cache: dict) -> dict:
+    _CACHES.append(cache)
+    return cache
+
+
+def clear_parse_cache() -> None:
+    for cache in _CACHES:
+        cache.clear()
+
+
+def _stamp(path: str) -> tuple[int, int] | None:
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return None
+    return (stat.st_mtime_ns, stat.st_size)
+
+
 def _parse_files(paths: list[str], *, report_failures: bool = True) -> dict[str, dict]:
     """Parse each path. `report_failures=False` when the caller has better names.
 
@@ -122,11 +152,24 @@ def _parse_files(paths: list[str], *, report_failures: bool = True) -> dict[str,
     if not paths:
         return {}
     parsed: dict[str, dict] = {}
+    stamps = {path: _stamp(path) for path in dict.fromkeys(paths)}
+    fresh = []
+    for path, stamp in stamps.items():
+        hit = _AST_CACHE.get(path)
+        if hit is not None and stamp is not None and hit[0] == stamp:
+            parsed[path] = hit[1]
+        else:
+            fresh.append(path)
+    if not fresh:
+        return parsed
     failed: list[str] = []
-    for line in run_parser(parser_path(_JS_TOOLS, "parse_js"), paths, "JavaScript"):
+    for line in run_parser(parser_path(_JS_TOOLS, "parse_js"), fresh, "JavaScript"):
         record = json.loads(line)
         if "ast" in record:
             parsed[record["path"]] = record["ast"]
+            stamp = stamps.get(record["path"])
+            if stamp is not None:
+                _AST_CACHE[record["path"]] = (stamp, record["ast"])
         else:
             # A file the parser could not read used to vanish here without a word. Every
             # symbol in it then went missing from a scan that still reported success --
@@ -169,17 +212,34 @@ def _carrier_name(node: dict) -> str | None:
     return None
 
 
+# Position metadata, never a node - and `loc` alone is three dicts per node. Nothing
+# else is excluded by name: `value` carries a function on a Property, `name` a
+# JSXIdentifier on a JSXAttribute.
+_NOT_A_CHILD = frozenset(("loc", "range"))
+
+
 def _walk(node, enclosing: str = ""):
-    """Yield (node, enclosing_function_name) once per AST node, in a single pass."""
-    if isinstance(node, dict):
-        enclosing = _carrier_name(node) or enclosing
-        if node.get("type"):
-            yield node, enclosing
-        for value in node.values():
-            yield from _walk(value, enclosing)
-    elif isinstance(node, list):
-        for item in node:
-            yield from _walk(item, enclosing)
+    """Yield (node, enclosing_function_name) once per AST node, pre-order, in one pass.
+
+    An explicit stack, not recursion: a recursive generator re-yields every node through
+    every frame above it, so a node forty levels deep cost forty resumptions - 692 million
+    frames for 24 million nodes on the reference project, half the scan.
+    """
+    stack = [(node, enclosing)]
+    pop, push = stack.pop, stack.extend
+    while stack:
+        node, enclosing = pop()
+        if isinstance(node, dict):
+            if node.get("type"):
+                enclosing = _carrier_name(node) or enclosing
+                yield node, enclosing
+            push(
+                (value, enclosing)
+                for key, value in reversed(list(node.items()))
+                if key not in _NOT_A_CHILD and isinstance(value, (dict, list))
+            )
+        elif isinstance(node, list):
+            push((item, enclosing) for item in reversed(node))
 
 
 def _imported_paths(ast: dict) -> list[str]:
@@ -331,7 +391,7 @@ def _url_literals(
         if target_id in known:
             continue
         known.add(target_id)
-        line = ((node.get("loc") or {}).get("start") or {}).get("line")
+        line = node_line(node)
         line = (line + line_offset) if line else None
         basename = os.path.basename(path)
         symbols.append(
@@ -357,7 +417,7 @@ def _http_symbols(
         if not is_http:
             continue
 
-        line = ((node.get("loc") or {}).get("start") or {}).get("line")
+        line = node_line(node)
         line = (line + line_offset) if line else None
         basename = os.path.basename(path)
         chain = [basename, enclosing] if enclosing else [basename]
@@ -594,6 +654,12 @@ def parse_inline_blocks(template_files: list[str]) -> list[tuple[str, dict, int]
     contains its line, and a line number relative to the start of a <script> block points
     at the wrong place in the file a reader is about to open.
     """
+    # Three extractors ask for the same templates' blocks in one scan; the answer is
+    # the same until a template changes.
+    key = tuple((path, _stamp(path)) for path in template_files)
+    hit = _INLINE_CACHE.get(key)
+    if hit is not None:
+        return hit
     blocks = list(inline_script_blocks(template_files))
     if not blocks:
         return []
@@ -620,8 +686,12 @@ def parse_inline_blocks(template_files: list[str]) -> list[tuple[str, dict, int]
             )
     finally:
         shutil.rmtree(directory, ignore_errors=True)
-    return [
+    _INLINE_CACHE[key] = [
         (template, parsed.get(path) or {}, offset)
         for path, (template, _, offset) in zip(paths, blocks, strict=True)
         if (parsed.get(path) or {}).get("type")
     ]
+    return _INLINE_CACHE[key]
+
+
+_INLINE_CACHE: dict[tuple, list[tuple[str, dict, int]]] = register_cache({})

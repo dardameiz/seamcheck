@@ -123,12 +123,9 @@ def _field_symbols(
         view_source = _function_source(view.file, view.label)
         if not view_source:
             continue
-        try:
-            js_source = pathlib.Path(target.file).read_text(encoding="utf-8")
-        except OSError:
+        if not pathlib.Path(target.file).is_file():
             continue
-
-        matched, _ = match_json_response_fields(view_source, js_source)
+        matched, _ = match_json_response_fields(view_source, js_path=target.file)
         for field in matched:
             # The JS side is a whole module, which talks to many endpoints, so only
             # CONNECTED survives as-is. 'Read but never sent' says nothing here (the

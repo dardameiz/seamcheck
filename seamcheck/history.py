@@ -12,15 +12,16 @@ attribute changes to whichever commit happened to be next in the log.
 
 from __future__ import annotations
 
+import json
 import os
 import pathlib
 import re
 import shutil
 import subprocess
+from collections import Counter
 from dataclasses import dataclass, field
 
-from seamcheck.graph import Graph
-from seamcheck.snapshot import _SCANS_DIR, load_snapshot
+from seamcheck.snapshot import _SCANS_DIR, _snapshot_path
 
 # Copied into each temporary worktree before scanning it. A checkout of an old commit has
 # the source but not the git-ignored things the scan needs to run - the interpreter's
@@ -102,8 +103,11 @@ def _commit_order(shas: list[str], repo_root: str) -> list[tuple[int, str, str, 
 
 _LINE_SUFFIX = re.compile(r":\d+$")
 
+# What the diff reads of a symbol, and nothing else: status, id, label, kind, file, line.
+_Row = tuple[str, str, str, str, str, int | None]
 
-def _identity(symbol) -> str:
+
+def _identity(symbol_id: str, line: int | None) -> str:
     """What a symbol IS, with where it sits removed.
 
     Most ids end in the line the symbol was found on. Inserting two lines above a block
@@ -111,37 +115,59 @@ def _identity(symbol) -> str:
     115 untouched selectors from :143 to :145 and reported all 115 as removed AND added.
     A diff that loud about a line shift hides the one real change inside it.
     """
-    return _LINE_SUFFIX.sub("", symbol.id) if symbol.line else symbol.id
+    return _LINE_SUFFIX.sub("", symbol_id) if line else symbol_id
 
 
-def _detail(symbol, change: str) -> dict:
-    return {"id": symbol.id, "label": symbol.label, "kind": symbol.kind,
-            "file": symbol.file or "", "line": symbol.line, "change": change}
+def _load_table(sha: str, repo_root: str) -> tuple[int, dict[str, _Row]] | None:
+    """A snapshot's symbols by identity, straight from the JSON.
+
+    Loading a snapshot as a Graph builds a dataclass per symbol AND per edge, though no
+    edge is read here, and a series held every one of those graphs until it was done.
+    On the reference project that was thirty commits of 70,000 objects each: 1.8 GB and
+    23 s of the map's 86, most of it the garbage collector walking what nothing needed.
+    Six fields per symbol, and the table is dropped as soon as no later commit can take
+    the commit as its baseline.
+    """
+    path = _snapshot_path(sha, repo_root)
+    if not path.is_file():
+        return None
+    rows = json.loads(path.read_bytes())["symbols"]
+    table: dict[str, _Row] = {}
+    for row in rows:
+        symbol_id, line = row["id"], row.get("line")
+        table[_identity(symbol_id, line)] = (
+            row["status"], symbol_id, row.get("label", ""), row.get("kind", ""),
+            row.get("file") or "", line,
+        )
+    return len(rows), table
 
 
-def _change_detail(before: Graph, after: Graph) -> list[dict]:
+def _detail(row: _Row, change: str) -> dict:
+    status, symbol_id, label, kind, file, line = row
+    return {"id": symbol_id, "label": label, "kind": kind, "file": file, "line": line,
+            "change": change}
+
+
+def _change_detail(was: dict[str, _Row], now: dict[str, _Row]) -> list[dict]:
     """Every changed symbol, named, whether or not it still exists to be drawn."""
-    was = {_identity(symbol): symbol for symbol in before.symbols}
-    now = {_identity(symbol): symbol for symbol in after.symbols}
     changes = [_detail(was[key], "removed") for key in sorted(was.keys() - now.keys())]
     changes += [_detail(now[key], "added") for key in sorted(now.keys() - was.keys())]
     changes += [
         _detail(now[key], "status")
         for key in sorted(now.keys() & was.keys())
-        if was[key].status is not now[key].status
+        if was[key][0] != now[key][0]
     ]
     return changes
 
 
-def _changes(before: Graph, after: Graph) -> dict[str, str]:
-    was = {_identity(symbol): symbol.status for symbol in before.symbols}
-    now = {_identity(symbol): (symbol.status, symbol.id) for symbol in after.symbols}
+def _changes(was: dict[str, _Row], now: dict[str, _Row]) -> dict[str, str]:
     changed: dict[str, str] = {}
-    for key, (status, symbol_id) in now.items():
-        if key not in was:
-            changed[symbol_id] = "added"
-        elif was[key] is not status:
-            changed[symbol_id] = "status"
+    for key, row in now.items():
+        before = was.get(key)
+        if before is None:
+            changed[row[1]] = "added"
+        elif before[0] != row[0]:
+            changed[row[1]] = "status"
     # A removed symbol has no id in the current graph and is never drawn; its identity is
     # all there is left to count it by.
     changed.update(dict.fromkeys(was.keys() - now.keys(), "removed"))
@@ -181,20 +207,31 @@ def commit_series(repo_root: str = ".") -> list[CommitEntry]:
     ordered = _commit_order(snapshot_shas(repo_root), repo_root)
     scanned = {sha for _, sha, _, _ in ordered}
     parents = _parents(repo_root)
-    graphs: dict[str, Graph] = {}
+    baselines = {sha: _nearest_scanned_ancestor(sha, scanned, parents) for sha in scanned}
+    # How many later commits still need each table. A linear history keeps one table
+    # alive at a time; a fork keeps one per open branch, never the whole series.
+    readers = Counter(baseline for baseline in baselines.values() if baseline)
+    tables: dict[str, dict[str, _Row]] = {}
     series: list[CommitEntry] = []
     for _, sha, date, subject in ordered:
-        graph = load_snapshot(sha, repo_root)
-        if graph is None:
+        loaded = _load_table(sha, repo_root)
+        if loaded is None:
             continue
-        graphs[sha] = graph
-        baseline = _nearest_scanned_ancestor(sha, scanned, parents)
+        count, table = loaded
+        baseline = baselines[sha]
+        was = tables.get(baseline) if baseline else None
         series.append(CommitEntry(
-            sha=sha, subject=subject, date=date, symbols=len(graph.symbols),
-            changed=_changes(graphs[baseline], graph) if baseline in graphs else {},
-            changes=_change_detail(graphs[baseline], graph) if baseline in graphs else [],
-            baseline_sha=baseline if baseline in graphs else None,
+            sha=sha, subject=subject, date=date, symbols=count,
+            changed=_changes(was, table) if was is not None else {},
+            changes=_change_detail(was, table) if was is not None else [],
+            baseline_sha=baseline if was is not None else None,
         ))
+        if was is not None:
+            readers[baseline] -= 1
+            if not readers[baseline]:
+                del tables[baseline]
+        if readers[sha]:
+            tables[sha] = table
     return list(reversed(series))
 
 

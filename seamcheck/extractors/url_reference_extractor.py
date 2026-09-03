@@ -29,6 +29,7 @@ import pathlib
 import re
 
 from seamcheck.graph import Edge, Status, Symbol
+from seamcheck.nodetools import node_line
 
 # {% url 'name' %} and {% url "name" arg %}. The tag may span lines in a formatted template.
 _URL_TAG_RE = re.compile(r"\{%\s*url\s+(['\"])([^'\"]+)\1", re.S)
@@ -170,7 +171,7 @@ def _js_nav_targets(ast: dict) -> list[tuple[str, int, str]]:
     found: list[tuple[str, int, str]] = []
 
     def _line(node: dict) -> int:
-        return ((node.get("loc") or {}).get("start") or {}).get("line") or 0
+        return node_line(node) or 0
 
     for node, _ in _walk(ast):
         node_type = node.get("type")

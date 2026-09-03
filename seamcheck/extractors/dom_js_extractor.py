@@ -5,8 +5,9 @@ from __future__ import annotations
 import os
 import re
 
-from seamcheck.extractors.js_extractor import _parse_files, _walk
+from seamcheck.extractors.js_extractor import _parse_files, _walk, register_cache
 from seamcheck.graph import Status, Symbol
+from seamcheck.nodetools import node_line
 
 _SELECTOR_CALLEES = frozenset({"getElementById", "querySelector", "querySelectorAll", "closest"})
 # The other two ways JavaScript reaches a data attribute. Only `[data-x]` selector syntax
@@ -17,6 +18,8 @@ _ATTRIBUTE_CALLEES = frozenset(
     {"getAttribute", "setAttribute", "hasAttribute", "removeAttribute"}
 )
 _CAMEL_BOUNDARY = re.compile(r"(?<!^)(?=[A-Z])")
+
+_SELECTORS_CACHE: dict[tuple, tuple[dict, list]] = register_cache({})
 
 
 def _dataset_name(camel: str) -> str:
@@ -149,7 +152,23 @@ def _writing_call_ids(ast_root: dict) -> set[int]:
 
 
 def _dom_selectors_in(path: str, ast_root: dict, line_offset: int = 0) -> list[Symbol]:
-    """Every DOM query in one parsed unit, whether that unit was a file or a <script>."""
+    """Every DOM query in one parsed unit, whether that unit was a file or a <script>.
+
+    Memoised per parsed unit: the pipeline asks three times - entry files for claims,
+    the rest of the tree for evidence, the whole tree again for multi-writer detection -
+    and the answer for a given AST does not change between them. The AST is kept in the
+    key so its id cannot be reused by another tree.
+    """
+    key = (path, id(ast_root), line_offset)
+    hit = _SELECTORS_CACHE.get(key)
+    if hit is not None and hit[0] is ast_root:
+        return list(hit[1])
+    symbols = _dom_selectors_in_uncached(path, ast_root, line_offset)
+    _SELECTORS_CACHE[key] = (ast_root, symbols)
+    return list(symbols)
+
+
+def _dom_selectors_in_uncached(path: str, ast_root: dict, line_offset: int = 0) -> list[Symbol]:
     symbols: list[Symbol] = []
     writing = _writing_call_ids(ast_root)
     basename = os.path.basename(path)
@@ -182,7 +201,7 @@ def _dom_selectors_in(path: str, ast_root: dict, line_offset: int = 0) -> list[S
                 assigned.add(id(target))
 
     for node, enclosing in _walk(ast_root):
-        raw = ((node.get("loc") or {}).get("start") or {}).get("line")
+        raw = node_line(node)
         at = (raw + line_offset) if raw else raw
 
         # el.dataset.buttonType -> the data-button-type attribute
@@ -213,7 +232,7 @@ def _dom_selectors_in(path: str, ast_root: dict, line_offset: int = 0) -> list[S
 
         arguments = node.get("arguments") or []
         first = arguments[0] if arguments else {}
-        raw_line = ((node.get("loc") or {}).get("start") or {}).get("line")
+        raw_line = node_line(node)
         line = (raw_line + line_offset) if raw_line else raw_line
         access = "write" if id(node) in writing else "read"
         chain = [basename, enclosing] if enclosing else [basename]
@@ -311,7 +330,7 @@ def extract_js_css_tokens(
 
     for path, ast_root, line_offset in units:
         def _line(node, _offset=line_offset):
-            raw = ((node.get("loc") or {}).get("start") or {}).get("line")
+            raw = node_line(node)
             return (raw + _offset) if raw else raw
 
         for node, enclosing in _walk(ast_root):
@@ -501,7 +520,7 @@ def extract_js_class_usages(
         module_bindings = _css_module_bindings(ast_root)
 
         for node, enclosing in _walk(ast_root):
-            raw_line = ((node.get("loc") or {}).get("start") or {}).get("line")
+            raw_line = node_line(node)
             line = (raw_line + line_offset) if raw_line else raw_line
             node_type = node.get("type")
             sources: list[tuple[str, str]] = []
@@ -641,7 +660,7 @@ def _definitions_in(path: str, ast_root: dict, line_offset: int = 0) -> list[Sym
             symbols.append(symbol)
 
     for node, enclosing in _walk(ast_root):
-        raw = ((node.get("loc") or {}).get("start") or {}).get("line")
+        raw = node_line(node)
         line = (raw + line_offset) if raw else raw
         node_type = node.get("type")
 

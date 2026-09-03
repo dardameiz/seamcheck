@@ -282,6 +282,19 @@ Files: `api.py:566-583` (parse-once page attribution; share ASTs with `filetree.
 
 Verify: `tools/synth_map.py` at 3.7M symbols under `/usr/bin/time -l` (macOS) or a Linux container with `--memory=8g`; wall time and peak RSS recorded in the commit message per the house rule.
 
+**Phase 5 progress (2026-09-03, measured on pointlessbutton, 511k lines, M4 Pro):**
+
+| step | before | after | how |
+|---|---|---|---|
+| whole `map` run | 187 s wall, 1404 MB at the JS-modules step | 48 s, 835 MB at that step, 1846 MB peak | per-scan AST cache keyed on (path, mtime, size), cleared in `api.report`; compact `loc: [start, end]`; iterative `_walk` |
+| commit history | 13.1 s, +1387 MB | 4.7 s, +309 MB (standalone; 7.2 s inside the run) | diff snapshot rows from `json.loads` directly, `Counter` of readers releases each baseline |
+| response fields | 93 node spawns per run | 0 | `match_json_response_fields(js_path=…)` reads the shared AST |
+| parser transport | `subprocess.run` buffers all NDJSON; node's async pipe writes overflow at ~2 GB (`write ENOBUFS`, n8n 21,394 files) → batch lost, NO ROUTES | node awaits `drain`; Python streams `Popen` stdout line by line; partial output kept on a crash | `nodetools.run_parser` is a generator; `parse_js.mjs` / `parse_css.mjs` `emit()` |
+
+Remaining in this phase, in order of what the numbers say: **per-file streaming extraction** (the AST cache still holds every tree of the repo at once - n8n peaks at 3.4 GB RSS - so at 10M lines the cache itself is the bound; extractors must consume each tree and release it), rendering 6.2 s, commit history 7.2 s in-run, selectors-used-by-JS 5.8 s, JS modules 5.2 s, Redis 3.5 s. Map identity is checked by comparing `MAPDATA` and every chunk against the previous render (`pb_map7` vs `pb_map8`: 255/256 chunks identical; the `commits` chunk differs only in which commit is `head`, because the repository moved).
+
+Pre-existing failures logged as backlog while gating this phase (all fail on `db4eebf08` too): `test_mcp_server … four_tools_are_registered`, `test_meaning … specific_kind_beats_the_generic_status_text`, `test_pipeline_dom_css_regression … two_writer_element_is_flagged`, `test_pipeline_fixture_regression … every_symbol_carries_its_evidence`, plus the 13 stale renderer tests already queued.
+
 ### Phase 6 — optional served extras
 
 SQLite index (`map.sqlite`), `/symbol/<id>` cross-page resolution, FTS. WebGL only if a real page needs > 20k visible primitives after LOD, which the design is built to prevent.

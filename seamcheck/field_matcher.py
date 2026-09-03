@@ -5,7 +5,7 @@ from __future__ import annotations
 import ast
 import re
 
-from seamcheck.extractors.js_extractor import parse_js_source
+from seamcheck.extractors.js_extractor import _parse_files, parse_js_source
 from seamcheck.graph import Edge, Status, Symbol
 
 _JSON_SCRIPT_TAG_RE = re.compile(r"json_script:\"([^\"]+)\"")
@@ -17,14 +17,19 @@ _FUNCTION_TYPES = ("ArrowFunctionExpression", "FunctionExpression", "FunctionDec
 
 
 def _walk(node):
-    if isinstance(node, dict):
-        if node.get("type"):
-            yield node
-        for value in node.values():
-            yield from _walk(value)
-    elif isinstance(node, list):
-        for item in node:
-            yield from _walk(item)
+    """Every typed node under `node`, pre-order. Iterative: see js_extractor._walk."""
+    stack = [node]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            if node.get("type"):
+                yield node
+            stack.extend(
+                value for key, value in reversed(list(node.items()))
+                if key not in ("loc", "range") and isinstance(value, (dict, list))
+            )
+        elif isinstance(node, list):
+            stack.extend(reversed(node))
 
 
 def _is_json_call(node: dict) -> bool:
@@ -85,9 +90,8 @@ def _json_result_bindings(ast_root: dict) -> tuple[set[str], set[str]]:
     return names, destructured
 
 
-def _reads_and_uncertainty(js_source: str) -> tuple[set[str], bool]:
+def _reads_and_uncertainty(ast_root: dict) -> tuple[set[str], bool]:
     """(field names read, whether access was computed/spread and so unresolvable)."""
-    ast_root = parse_js_source(js_source)
     names, reads = _json_result_bindings(ast_root)
     if not names and not reads:
         return set(), False
@@ -136,9 +140,23 @@ def _field_symbol(kind: str, key: str, status: Status, snippet: str, note: str =
     )
 
 
-def match_json_response_fields(view_source: str, js_source: str) -> tuple[list[Symbol], list[Edge]]:
+def match_json_response_fields(
+    view_source: str, js_source: str = "", js_path: str = ""
+) -> tuple[list[Symbol], list[Edge]]:
+    """Fields the view sends against fields the consumer reads.
+
+    Pass `js_path` for a file on disk: the scan has already parsed every JavaScript file
+    once, and the path finds that tree in the parse cache. `js_source` is for a snippet
+    held in memory; it costs a parser process per call - which is what this step used to
+    pay per matched endpoint, 93 times on the reference project, re-parsing files whose
+    trees were already in hand.
+    """
     sent_keys = _json_response_keys(view_source)
-    read_keys, uncertain = _reads_and_uncertainty(js_source)
+    ast_root = (
+        _parse_files([js_path], report_failures=False).get(js_path, {}) if js_path
+        else parse_js_source(js_source)
+    )
+    read_keys, uncertain = _reads_and_uncertainty(ast_root)
 
     if uncertain:
         return [

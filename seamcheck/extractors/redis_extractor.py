@@ -37,6 +37,7 @@ import re
 from seamcheck.adapters.discovery import SKIP_DIRS
 from seamcheck.extractors.js_extractor import _parse_files, _walk
 from seamcheck.graph import Edge, Status, Symbol
+from seamcheck.nodetools import node_line
 
 # What a call to Redis is called, and whether it reads or writes. Names shared with dicts
 # and Maps (`get`, `set`, `keys`) are the reason a receiver check matters below.
@@ -297,7 +298,7 @@ def _scan_js(root: str) -> list[_Hit]:
             nx = lowered == "setnx" or any(
                 _js_pattern(a) == "NX" or _has_nx_option(a) for a in args[1:]
             )
-            line = ((node.get("loc") or {}).get("start") or {}).get("line") or 0
+            line = node_line(node) or 0
             hits.append(_Hit(
                 _normalise(pattern), pattern, rel, line,
                 lowered in _WRITES, ttl, receiver, lowered, nx,

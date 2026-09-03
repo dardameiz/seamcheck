@@ -14618,6 +14618,7 @@ var require_lib = __commonJS({
 
 // seamcheck/js_tools/parse_js.mjs
 var import_parser = __toESM(require_lib(), 1);
+import { once } from "node:events";
 import { readFileSync } from "node:fs";
 var LEGACY = "decorators-legacy";
 var TS = ["typescript", LEGACY];
@@ -14658,14 +14659,20 @@ function options(filePath, sourceType, modern = false) {
   };
 }
 function safe(key, value) {
-  return typeof value === "bigint" ? value.toString() : value;
+  if (typeof value === "bigint") return value.toString();
+  if (key === "loc" && value && value.start && value.end) return [value.start.line, value.end.line];
+  if ((key === "start" || key === "end") && typeof value === "number") return void 0;
+  return value;
 }
 var buffer = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => {
   buffer += chunk;
 });
-process.stdin.on("end", () => {
+async function emit(line) {
+  if (!process.stdout.write(line)) await once(process.stdout, "drain");
+}
+process.stdin.on("end", async () => {
   for (const filePath of buffer.split("\n").filter(Boolean)) {
     let record;
     try {
@@ -14685,12 +14692,12 @@ process.stdin.on("end", () => {
     } catch (err) {
       record = { path: filePath, error: err.message };
     }
+    let line;
     try {
-      process.stdout.write(JSON.stringify(record, safe) + "\n");
+      line = JSON.stringify(record, safe) + "\n";
     } catch (err) {
-      process.stdout.write(
-        JSON.stringify({ path: filePath, error: `could not serialise AST: ${err.message}` }) + "\n"
-      );
+      line = JSON.stringify({ path: filePath, error: `could not serialise AST: ${err.message}` }) + "\n";
     }
+    await emit(line);
   }
 });

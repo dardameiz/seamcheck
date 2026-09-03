@@ -34,7 +34,7 @@ from seamcheck.adapters.discovery import SKIP_DIRS
 from seamcheck.extractors.js_extractor import _parse_files, _walk
 from seamcheck.extractors.sql_schema_extractor import Schema, find_sql, read_schema
 from seamcheck.graph import Edge, Status, Symbol
-from seamcheck.nodetools import report
+from seamcheck.nodetools import node_line, report
 
 _EXTENSIONS = (".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx")
 
@@ -99,7 +99,7 @@ def _literal(node) -> str | None:
 
 
 def _line(node) -> int:
-    return ((node.get("loc") or {}).get("start") or {}).get("line") or 0
+    return node_line(node) or 0
 
 
 def _receiver_name(callee: dict) -> str:

@@ -148,13 +148,21 @@ def _static_dirs(repo_root: pathlib.Path) -> list[pathlib.Path]:
 
 
 def _find_file(repo_root: pathlib.Path, names: tuple[str, ...]) -> pathlib.Path | None:
-    """Shallowest match, so a stray copy deep in a subproject does not win."""
-    matches = [
-        path
-        for name in names
-        for path in repo_root.rglob(name)
-        if not excluded(path, repo_root)
-    ]
+    """Shallowest match, so a stray copy deep in a subproject does not win.
+
+    Prunes excluded directories as it goes rather than listing everything and filtering:
+    `rglob` walked node_modules and the virtualenv in full - 3.5 s per name on the
+    reference project, and detection asks for several.
+    """
+    wanted = set(names)
+    matches: list[pathlib.Path] = []
+    for directory, dirnames, filenames in os.walk(repo_root):
+        dirnames[:] = sorted(
+            d for d in dirnames if d not in EXCLUDED_DIRS and d.lower() not in _COLLECTED_HINTS
+        )
+        for filename in filenames:
+            if filename in wanted:
+                matches.append(pathlib.Path(directory) / filename)
     matches.sort(key=lambda path: (len(path.relative_to(repo_root).parts), str(path)))
     return matches[0] if matches else None
 

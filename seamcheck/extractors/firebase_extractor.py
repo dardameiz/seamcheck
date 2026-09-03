@@ -32,6 +32,7 @@ import re
 from seamcheck.adapters.discovery import SKIP_DIRS
 from seamcheck.extractors.js_extractor import _parse_files, _walk
 from seamcheck.graph import Edge, Status, Symbol
+from seamcheck.nodetools import node_line
 
 _EXTENSIONS = (".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx")
 
@@ -92,7 +93,7 @@ def _literal(node) -> str | None:
 
 
 def _line(node) -> int:
-    return ((node.get("loc") or {}).get("start") or {}).get("line") or 0
+    return node_line(node) or 0
 
 
 def detected(root: str) -> bool:

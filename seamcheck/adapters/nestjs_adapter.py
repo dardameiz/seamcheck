@@ -22,6 +22,7 @@ from seamcheck.adapters.base import ServerScan
 from seamcheck.adapters.discovery import SKIP_DIRS, declares
 from seamcheck.extractors.js_extractor import _parse_files, _walk
 from seamcheck.graph import Edge, Status, Symbol
+from seamcheck.nodetools import node_line
 
 _METHODS = ("Get", "Post", "Put", "Delete", "Patch", "Options", "Head", "All")
 _EXTENSIONS = (".ts", ".mts", ".cts")
@@ -79,7 +80,7 @@ def _join(*parts: str) -> str:
 
 
 def _line(node: dict) -> int | None:
-    return ((node.get("loc") or {}).get("start") or {}).get("line")
+    return node_line(node)
 
 
 def _files(repo_root: str, limit: int | None = None) -> list[str]:

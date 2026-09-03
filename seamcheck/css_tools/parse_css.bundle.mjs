@@ -6127,6 +6127,7 @@ var require_postcss = __commonJS({
 });
 
 // seamcheck/css_tools/parse_css.mjs
+import { once } from "node:events";
 import { readFileSync } from "node:fs";
 
 // node_modules/postcss/lib/postcss.mjs
@@ -6164,7 +6165,7 @@ process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => {
   buffer += chunk;
 });
-process.stdin.on("end", () => {
+process.stdin.on("end", async () => {
   for (const filePath of buffer.split("\n").filter(Boolean)) {
     const record = { path: filePath, selectors: [], tokenDefs: [], tokenUses: [], imports: [] };
     try {
@@ -6187,6 +6188,6 @@ process.stdin.on("end", () => {
     } catch (err) {
       record.error = err.message;
     }
-    process.stdout.write(JSON.stringify(record) + "\n");
+    if (!process.stdout.write(JSON.stringify(record) + "\n")) await once(process.stdout, "drain");
   }
 });
