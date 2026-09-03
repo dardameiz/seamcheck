@@ -330,7 +330,7 @@ def _read_js_references(js_files: list[str], index, _add) -> None:
     """
     if not js_files:
         return
-    from seamcheck.extractors.js_extractor import _parse_files
+    from seamcheck.extractors.js_extractor import iter_parsed
 
     candidates = []
     for path in js_files:
@@ -344,7 +344,7 @@ def _read_js_references(js_files: list[str], index, _add) -> None:
         if any(needle in text for needle in _NAV_NEEDLES):
             candidates.append(path)
 
-    for path, parsed in _parse_files(candidates).items():
+    for path, parsed in iter_parsed(candidates):
         for target_path, line, snippet in _js_nav_targets(parsed):
             resolved = index.resolve(target_path)
             if resolved is None:

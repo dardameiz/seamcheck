@@ -314,7 +314,7 @@ def _member_path(callee: dict) -> str:
 
 def _scan_js(root: str) -> tuple[list, dict, dict, set]:
     """(webhook sites, handled events, calls that cause events, files verifying signatures)."""
-    from seamcheck.extractors.js_extractor import _parse_files, _walk
+    from seamcheck.extractors.js_extractor import _walk, iter_parsed
 
     candidates = []
     for path in _js_files(root):
@@ -332,7 +332,7 @@ def _scan_js(root: str) -> tuple[list, dict, dict, set]:
     causes: dict[str, tuple[str, int, str]] = {}
     verified: set[str] = set()
 
-    for path, parsed in _parse_files(candidates).items():
+    for path, parsed in iter_parsed(candidates):
         relative = os.path.relpath(path, root)
         for name, line in _dispatched_events(parsed):
             events.setdefault(name, (relative, line))

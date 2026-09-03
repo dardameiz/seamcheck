@@ -35,6 +35,17 @@ backend that answered `uncertain` everywhere would score 100% precision and be u
   the cached tree instead of spawning node per edge (93 spawns removed); the commit
   history diffs snapshot rows straight from JSON and drops each baseline once its last
   reader is done (13.1 s → 4.7 s, 1.4 GB → 0.3 GB, byte-identical series). Same map.
+- **Memory during a scan is now bounded.** Parsed trees are kept for the length of a
+  scan only up to a budget - a quarter of physical memory by default,
+  `SEAMCHECK_AST_CACHE_MB` to set it - and the extractors read every tree past the budget
+  as a stream instead of holding all of them at once. Two places pinned every tree
+  regardless: the per-file selector memo kept a reference to each AST it had read
+  (+1.8 GB on n8n), and two class-usage readers built a list of every tree before
+  walking it (+1.1 GB). n8n, 21,000 files, with a 1 GB budget: 3.7 GB → 1.4 GB peak
+  RSS. Above the budget a file is re-parsed once per extractor that needs it, so a
+  small budget trades time for memory, never correctness.
+- The list of files removed since the last snapshot is now sorted before it is written,
+  so two renders of the same repository produce the same `commits` chunk.
 - **The map opens in under half a second on a 500k-line codebase, at 6 MB JS heap.** The
   node rows used to sit in one inline `MAPDATA` literal that the browser parsed and
   inflated in full before the first paint (pointlessbutton: 22.6 MB file, ~1 KB of heap

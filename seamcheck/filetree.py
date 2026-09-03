@@ -76,7 +76,7 @@ def _js_declarations(tree: dict) -> list[tuple[str, int, int]]:
 
 def build_file_tree(graph: Graph, js_files: list[str] | None = None) -> list[FileRecord]:
     """One record per file any symbol came from, plus any JS file that produced none."""
-    from seamcheck.extractors.js_extractor import _parse_files
+    from seamcheck.extractors.js_extractor import iter_parsed
 
     per_file: dict[str, list] = defaultdict(list)
     for symbol in graph.symbols:
@@ -84,7 +84,12 @@ def build_file_tree(graph: Graph, js_files: list[str] | None = None) -> list[Fil
             per_file[symbol.file].append(symbol)
 
     javascript = sorted({p for p in list(per_file) + list(js_files or []) if p.endswith(".js")})
-    trees = _parse_files([p for p in javascript if pathlib.Path(p).is_file()])
+    # What each tree declares is a short list of (name, start, end); keep that, not the
+    # tree, so the whole repository's trees never have to be resident at once.
+    declared_js = {
+        path: _js_declarations(tree)
+        for path, tree in iter_parsed([p for p in javascript if pathlib.Path(p).is_file()])
+    }
 
     records: list[FileRecord] = []
     for path in sorted(set(per_file) | set(javascript)):
@@ -93,12 +98,8 @@ def build_file_tree(graph: Graph, js_files: list[str] | None = None) -> list[Fil
         for symbol in symbols:
             counts[symbol.status.value] = counts.get(symbol.status.value, 0) + 1
 
-        if path.endswith(".py"):
-            declared = _python_declarations(path)
-        elif path in trees:
-            declared = _js_declarations(trees[path])
-        else:
-            declared = []
+        declared = (_python_declarations(path) if path.endswith(".py")
+                    else declared_js.get(path, []))
 
         names = {symbol.label for symbol in symbols}
         lines = {symbol.line for symbol in symbols if symbol.line}

@@ -35,7 +35,7 @@ import os
 import re
 
 from seamcheck.adapters.discovery import SKIP_DIRS
-from seamcheck.extractors.js_extractor import _parse_files, _walk
+from seamcheck.extractors.js_extractor import _walk, iter_parsed
 from seamcheck.graph import Edge, Status, Symbol
 from seamcheck.nodetools import node_line
 
@@ -269,7 +269,7 @@ def _scan_js(root: str) -> list[_Hit]:
     if not paths:
         return []
     hits: list[_Hit] = []
-    for path, tree in _parse_files(paths, report_failures=False).items():
+    for path, tree in iter_parsed(paths, report_failures=False):
         rel = os.path.relpath(path, root)
         for node, _ in _walk(tree):
             if node.get("type") != "CallExpression":

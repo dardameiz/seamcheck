@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import itertools
 import os
 import re
 
-from seamcheck.extractors.js_extractor import _parse_files, _walk, register_cache
+from seamcheck.extractors.js_extractor import _stamp, _walk, iter_parsed, register_cache
 from seamcheck.graph import Status, Symbol
 from seamcheck.nodetools import node_line
 
@@ -19,7 +20,7 @@ _ATTRIBUTE_CALLEES = frozenset(
 )
 _CAMEL_BOUNDARY = re.compile(r"(?<!^)(?=[A-Z])")
 
-_SELECTORS_CACHE: dict[tuple, tuple[dict, list]] = register_cache({})
+_SELECTORS_CACHE: dict[tuple, tuple[dict | None, list]] = register_cache({})
 
 
 def _dataset_name(camel: str) -> str:
@@ -156,15 +157,24 @@ def _dom_selectors_in(path: str, ast_root: dict, line_offset: int = 0) -> list[S
 
     Memoised per parsed unit: the pipeline asks three times - entry files for claims,
     the rest of the tree for evidence, the whole tree again for multi-writer detection -
-    and the answer for a given AST does not change between them. The AST is kept in the
-    key so its id cannot be reused by another tree.
+    and the answer for a given AST does not change between them.
+
+    Keyed by the file's stamp, not by the tree: this memo used to hold a reference to
+    every tree it had answered for, which made it a second, unbudgeted copy of the whole
+    parse cache - 1.8 GB on a 21,000-file monorepo, after the parse cache itself had
+    stopped at its budget. An inline <script> has no stamp of its own; its tree lives in
+    the inline cache for the scan, so its id is stable and the tree is kept to prove it.
     """
-    key = (path, id(ast_root), line_offset)
+    stamp = _stamp(path)
+    if stamp is not None:
+        key, guard = (path, stamp, line_offset), None
+    else:
+        key, guard = (path, id(ast_root), line_offset), ast_root
     hit = _SELECTORS_CACHE.get(key)
-    if hit is not None and hit[0] is ast_root:
+    if hit is not None and hit[0] is guard:
         return list(hit[1])
     symbols = _dom_selectors_in_uncached(path, ast_root, line_offset)
-    _SELECTORS_CACHE[key] = (ast_root, symbols)
+    _SELECTORS_CACHE[key] = (guard, symbols)
     return list(symbols)
 
 
@@ -284,7 +294,7 @@ def extract_dom_selectors(js_files: list[str], template_files: list[str] | None 
     from seamcheck.extractors.js_extractor import parse_inline_blocks
 
     symbols: list[Symbol] = []
-    for path, ast_root in _parse_files([f for f in js_files if os.path.isfile(f)]).items():
+    for path, ast_root in iter_parsed([f for f in js_files if os.path.isfile(f)]):
         symbols += _dom_selectors_in(path, ast_root)
     for template, ast_root, offset in parse_inline_blocks(template_files or []):
         symbols += _dom_selectors_in(template, ast_root, line_offset=offset)
@@ -322,11 +332,13 @@ def extract_js_css_tokens(
     symbols: list[Symbol] = []
     seen: set[str] = set()
 
-    units = [
-        (path, ast_root, 0)
-        for path, ast_root in _parse_files([f for f in js_files if os.path.isfile(f)]).items()
-    ]
-    units += list(parse_inline_blocks(template_files or []))
+    # A generator, not a list: a list here held every tree the budget had refused to
+    # cache, 1.1 GB on a 21,000-file monorepo, for the length of the loop.
+    units = itertools.chain(
+        ((path, ast_root, 0)
+         for path, ast_root in iter_parsed([f for f in js_files if os.path.isfile(f)])),
+        parse_inline_blocks(template_files or []),
+    )
 
     for path, ast_root, line_offset in units:
         def _line(node, _offset=line_offset):
@@ -503,13 +515,14 @@ def extract_js_class_usages(
             )
         )
 
-    units = [
-        (path, ast_root, 0)
-        for path, ast_root in _parse_files([f for f in js_files if os.path.isfile(f)]).items()
-    ]
     # Inline <script> applies classes like any other JavaScript. Reading only .js files
     # left 46 rules that a template's own script demonstrably applies looking unreferenced.
-    units += list(parse_inline_blocks(template_files or []))
+    # Chained lazily for the same reason as in extract_js_css_tokens.
+    units = itertools.chain(
+        ((path, ast_root, 0)
+         for path, ast_root in iter_parsed([f for f in js_files if os.path.isfile(f)])),
+        parse_inline_blocks(template_files or []),
+    )
 
     for path, ast_root, line_offset in units:
         # CSS Modules: `import styles from "./X.module.css"` makes every `styles.foo` and
@@ -738,7 +751,7 @@ def extract_js_dom_definitions(
     from seamcheck.extractors.js_extractor import parse_inline_blocks
 
     symbols: list[Symbol] = []
-    for path, ast_root in _parse_files([f for f in js_files if os.path.isfile(f)]).items():
+    for path, ast_root in iter_parsed([f for f in js_files if os.path.isfile(f)]):
         symbols += _definitions_in(path, ast_root)
     for template, ast_root, offset in parse_inline_blocks(template_files or []):
         symbols += _definitions_in(template, ast_root, line_offset=offset)

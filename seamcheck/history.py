@@ -169,8 +169,9 @@ def _changes(was: dict[str, _Row], now: dict[str, _Row]) -> dict[str, str]:
         elif before[0] != row[0]:
             changed[row[1]] = "status"
     # A removed symbol has no id in the current graph and is never drawn; its identity is
-    # all there is left to count it by.
-    changed.update(dict.fromkeys(was.keys() - now.keys(), "removed"))
+    # all there is left to count it by. Sorted: a set difference comes out in hash order,
+    # which differs per process, and two renders of the same graph must be the same bytes.
+    changed.update(dict.fromkeys(sorted(was.keys() - now.keys()), "removed"))
     return changed
 
 

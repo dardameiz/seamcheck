@@ -8,6 +8,7 @@ import pathlib
 import re
 import shutil
 import tempfile
+from collections.abc import Iterator
 
 from seamcheck.graph import Edge, Status, Symbol
 from seamcheck.nodetools import node_line, parser_path, report, run_parser
@@ -116,12 +117,35 @@ _FUNCTION_TYPES = ("FunctionDeclaration", "FunctionExpression", "ArrowFunctionEx
 # of the same JavaScript files - on the reference project the DOM extractor alone asked
 # four times, and the map's page attribution once more per entry point - so a file was
 # parsed by node and json.loads'd two hundred times per scan. Now once, validated by the
-# file's stamp, held for the process. Nothing evicts it during a scan; clear_parse_cache()
-# at the end of a report hands the memory back.
+# file's stamp, held for the process up to a budget; clear_parse_cache() at the end of a
+# report hands the memory back.
 _AST_CACHE: dict[str, tuple[tuple[int, int], dict]] = {}
+# The cache admits files until their parser output adds up to the budget, then stops
+# admitting: every extractor after that re-parses the tail, but the memory stays put.
+# Admit-until-full rather than evict-least-recent because every extractor reads the files
+# in the same order - an LRU would throw out each file just before the next extractor asks
+# for it and cache nothing at all. Measured: a tree costs ~5.8x its NDJSON bytes as Python
+# dicts (pointlessbutton: 36 MB of parser output, 211 MB held), and a 21,000-file monorepo
+# came to 3.4 GB of RSS with no bound, which is fine on a 48 GB workstation and fatal on an
+# 8 GB CI box - so the default is a quarter of physical memory.
+_AST_BYTES_PER_NDJSON_BYTE = 5.8
+_ast_cached_bytes = 0
 # Other per-scan memos that hang off the ASTs (an extractor's per-file result, the inline
 # blocks) register here so one call empties them all.
 _CACHES: list[dict] = [_AST_CACHE]
+
+
+def _ast_budget() -> int:
+    """Bytes of parser output the cache may hold. SEAMCHECK_AST_CACHE_MB is in RSS terms."""
+    setting = os.environ.get("SEAMCHECK_AST_CACHE_MB", "")
+    if setting.isdigit():
+        rss = int(setting) * 1024 * 1024
+    else:
+        try:
+            rss = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") // 4
+        except (ValueError, OSError, AttributeError):
+            rss = 2 * 1024 ** 3
+    return int(rss / _AST_BYTES_PER_NDJSON_BYTE)
 
 
 def register_cache(cache: dict) -> dict:
@@ -130,8 +154,10 @@ def register_cache(cache: dict) -> dict:
 
 
 def clear_parse_cache() -> None:
+    global _ast_cached_bytes
     for cache in _CACHES:
         cache.clear()
+    _ast_cached_bytes = 0
 
 
 def _stamp(path: str) -> tuple[int, int] | None:
@@ -143,33 +169,42 @@ def _stamp(path: str) -> tuple[int, int] | None:
 
 
 def _parse_files(paths: list[str], *, report_failures: bool = True) -> dict[str, dict]:
-    """Parse each path. `report_failures=False` when the caller has better names.
+    """Every tree at once. For a handful of files; a whole repository goes through
+    iter_parsed so that only one tree at a time has to fit next to the cache."""
+    return dict(iter_parsed(paths, report_failures=report_failures))
 
-    Inline <script> blocks are written to a scratch directory as 0.js, 1.js, ... so the
-    generic message named temp files and blamed TypeScript. The template is what a reader
-    can actually open, so parse_inline_blocks reports its own.
+
+def iter_parsed(paths: list[str], *, report_failures: bool = True) -> Iterator[tuple[str, dict]]:
+    """Yield (path, ast) for each path, cached ones first, the rest as the parser sends them.
+
+    `report_failures=False` when the caller has better names: inline <script> blocks are
+    written to a scratch directory as 0.js, 1.js, ... so the generic message named temp
+    files and blamed TypeScript. The template is what a reader can actually open, so
+    parse_inline_blocks reports its own.
     """
+    global _ast_cached_bytes
     if not paths:
-        return {}
-    parsed: dict[str, dict] = {}
+        return
     stamps = {path: _stamp(path) for path in dict.fromkeys(paths)}
     fresh = []
     for path, stamp in stamps.items():
         hit = _AST_CACHE.get(path)
         if hit is not None and stamp is not None and hit[0] == stamp:
-            parsed[path] = hit[1]
+            yield path, hit[1]
         else:
             fresh.append(path)
     if not fresh:
-        return parsed
+        return
+    budget = _ast_budget()
     failed: list[str] = []
     for line in run_parser(parser_path(_JS_TOOLS, "parse_js"), fresh, "JavaScript"):
         record = json.loads(line)
         if "ast" in record:
-            parsed[record["path"]] = record["ast"]
             stamp = stamps.get(record["path"])
-            if stamp is not None:
+            if stamp is not None and _ast_cached_bytes + len(line) <= budget:
                 _AST_CACHE[record["path"]] = (stamp, record["ast"])
+                _ast_cached_bytes += len(line)
+            yield record["path"], record["ast"]
         else:
             # A file the parser could not read used to vanish here without a word. Every
             # symbol in it then went missing from a scan that still reported success --
@@ -183,7 +218,6 @@ def _parse_files(paths: list[str], *, report_failures: bool = True) -> dict[str,
             "Anything they reference will look unused.",
             len(failed), shown, ", ..." if len(failed) > 3 else "",
         )
-    return parsed
 
 
 def _carrier_name(node: dict) -> str | None:
@@ -346,7 +380,7 @@ def discover_js_files(entry_files: list[str], project_root: str) -> list[str]:
         if not batch:
             break
         visited.update(batch)
-        for path, ast in _parse_files(batch).items():
+        for path, ast in iter_parsed(batch):
             for import_path in _imported_paths(ast):
                 resolved = _resolve_import(path, import_path)
                 if resolved and resolved not in visited:
@@ -509,7 +543,7 @@ def extract_js(
             break
         visited.update(batch)
 
-        for path, ast in _parse_files(batch).items():
+        for path, ast in iter_parsed(batch):
             for import_path in _imported_paths(ast):
                 resolved = _resolve_import(path, import_path)
                 if resolved and resolved not in visited:
@@ -533,7 +567,7 @@ def extract_js(
         path for path in dict.fromkeys(extra_files or [])
         if path not in visited and path.endswith(_JS_EXTENSIONS) and os.path.isfile(path)
     ]
-    for path, ast in _parse_files(remaining).items():
+    for path, ast in iter_parsed(remaining):
         found, found_edges = _http_symbols(ast, path, seen_target_ids)
         symbols += found
         edges += found_edges

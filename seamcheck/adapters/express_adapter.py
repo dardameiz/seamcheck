@@ -21,7 +21,7 @@ import pathlib
 
 from seamcheck.adapters.base import ServerScan
 from seamcheck.adapters.discovery import SKIP_DIRS, declares
-from seamcheck.extractors.js_extractor import _parse_files, _walk
+from seamcheck.extractors.js_extractor import _walk, iter_parsed
 from seamcheck.graph import Edge, Status, Symbol
 from seamcheck.nodetools import node_line, report
 
@@ -100,9 +100,8 @@ def _files(repo_root: str, limit: int | None = None) -> list[str]:
 class _File:
     """One JavaScript file, read for routers, routes and mounts."""
 
-    def __init__(self, path: str, ast: dict) -> None:
+    def __init__(self, path: str) -> None:
         self.path = path
-        self.ast = ast
         self.routers: set[str] = set()          # variables holding a Router() or an app
         self.apps: set[str] = set()             # variables holding the application itself
         self.routes: list[tuple[str, str, str, int]] = []   # owner, METHOD, path, line
@@ -119,8 +118,10 @@ class _File:
         self.exports_factory = False
         self.reexports: str | None = None    # `module.exports = require('./routes')` 
 
-    def read(self) -> None:
-        for node, _ in _walk(self.ast):
+    def read(self, ast: dict) -> None:
+        # The tree is read once and not kept: on a large repository the trees do not all
+        # fit at once, and everything this file needs from it is in the fields above.
+        for node, _ in _walk(ast):
             kind = node.get("type")
             if kind == "VariableDeclarator":
                 self._read_declaration(node)
@@ -304,13 +305,11 @@ class ExpressAdapter:
         paths = _files(repo_root)
         if not paths:
             return ServerScan()
-        parsed = _parse_files(paths, report_failures=False)
-
         files: list[_File] = []
         _all: list[_File] = []
-        for path, tree in parsed.items():
-            source = _File(path, tree)
-            source.read()
+        for path, tree in iter_parsed(paths, report_failures=False):
+            source = _File(path)
+            source.read(tree)
             _all.append(source)
             if source.routes or source.mounts:
                 files.append(source)

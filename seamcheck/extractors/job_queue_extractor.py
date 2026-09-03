@@ -210,7 +210,7 @@ def _named(node: dict | None, constants: dict[str, str]) -> str:
 
 def _scan_js(root: str) -> tuple[dict, list, list]:
     """(registered handlers, enqueue sites, cron expressions) across the JavaScript tree."""
-    from seamcheck.extractors.js_extractor import _parse_files, _walk
+    from seamcheck.extractors.js_extractor import _walk, iter_parsed
 
     candidates = _candidates(_files(root, _JS_EXTENSIONS))
     uses_inngest = {
@@ -220,7 +220,7 @@ def _scan_js(root: str) -> tuple[dict, list, list]:
     enqueued: list[tuple[str, str, int, str]] = []
     crons: list[tuple[str, str, int, bool]] = []
 
-    for path, parsed in _parse_files([p for p, _ in candidates]).items():
+    for path, parsed in iter_parsed([p for p, _ in candidates]):
         relative = _relativise(path, root)
         constants = _const_strings(parsed)
         for node, _enclosing in _walk(parsed):
