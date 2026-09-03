@@ -142,6 +142,12 @@ reference project - the first time a release was tested the way a user meets it.
   every line number after them still lands where it did), and a string that spells an
   attribute name is read as a *reference* to it instead - which is what it is.
 
+- **Fixed** — **a display string is no longer read as an endpoint.**
+  `periodsTotalElement.textContent = '/24'` - the "/24" in "period 3/24" - was reported as
+  a URL the frontend names, twice on the reference project. A string being written into an
+  element is text, and a path has a letter in it; both rules now apply before a literal is
+  read as a sighting.
+
   Measured on the reference project: claims 3,960 → 3,756, `connected` +431. Replayed
   against the graded push_arena table, 29 of the false claims whose code still exists are
   no longer claims, and **every real finding that still exists is still reported**.

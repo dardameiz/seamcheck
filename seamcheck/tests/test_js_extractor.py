@@ -76,3 +76,44 @@ class JsFileDiscoveryTests(SimpleTestCase):
 
         self.assertTrue(any(f.endswith("fixture_entry.js") for f in files))
         self.assertTrue(any(f.endswith("fixture_module.js") for f in files))
+
+
+class DisplayStringsAreNotEndpointsTests(SimpleTestCase):
+    """`textContent = '/24'` is the "/24" in "period 3/24", not a route.
+
+    Both shapes shipped as fetch targets on the reference project. A URL-shaped string
+    is only a sighting to begin with - never evidence either way - so this is noise
+    rather than a false claim, and noise in this list is what stops people reading it.
+    """
+
+    def _targets(self, text: str):
+        import tempfile
+        import textwrap
+
+        path = Path(tempfile.mkdtemp()) / "app.js"
+        path.write_text(textwrap.dedent(text), encoding="utf-8")
+        symbols, _ = extract_js([str(path)], str(path.parent))
+        return sorted(s.label for s in symbols if s.kind == "fetch_target")
+
+    def test_a_path_written_into_an_element_is_not_an_endpoint(self):
+        self.assertEqual(self._targets("""
+            export function show(el) {
+              el.textContent = '/api/periods/';
+            }
+        """), [])
+
+    def test_a_slash_and_digits_is_not_an_endpoint(self):
+        self.assertEqual(self._targets("""
+            export function show(el) {
+              const label = '/24';
+              return label;
+            }
+        """), [])
+
+    def test_a_real_path_in_a_variable_is_still_seen(self):
+        # The sighting this pass exists for: an endpoint named by a literal that some
+        # helper later fetches. Losing these was the risk of both rules above.
+        self.assertEqual(self._targets("""
+            const ENDPOINT = '/api/orders/';
+            export function load() { return call(ENDPOINT); }
+        """), ["/api/orders/"])

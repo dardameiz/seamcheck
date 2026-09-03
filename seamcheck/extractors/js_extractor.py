@@ -389,7 +389,16 @@ def discover_js_files(entry_files: list[str], project_root: str) -> list[str]:
 
 
 # A path-shaped string: leading slash, no whitespace, at least one more segment.
+# A path, and a path has a letter in it. `periodsTotalElement.textContent = '/24'` - the
+# "/24" in "period 3/24" - matched this and was reported as an endpoint the frontend
+# names, twice on the reference project. Nothing routes `/24`, and the digits give it
+# away without needing to know what the line does with it.
 _URL_LITERAL_RE = re.compile(r"\A/[\w\-./]*[\w\-]/?\Z")
+_HAS_A_LETTER = re.compile(r"[A-Za-z]").search
+# Where a string is going, when that settles what it is. Text written into an element is
+# text; a path is never written to `textContent`.
+_DISPLAY_TARGETS = frozenset({"textContent", "innerText", "innerHTML", "nodeValue",
+                              "outerHTML", "placeholder", "title", "alt", "value"})
 _LITERAL_NOTE = (
     "A URL-shaped string sits here, but the request is made somewhere else - through a "
     "variable, a helper, or a ternary. That this endpoint is called is not proven, and "
@@ -410,11 +419,24 @@ def _url_literals(
     """
     symbols: list[Symbol] = []
     edges: list[Edge] = []
+    # Collected first, because `_walk` yields no parents: the strings this pass must not
+    # read as endpoints are the ones being written into an element.
+    display: set[int] = set()
+    for node, _enclosing in _walk(ast):
+        if node.get("type") != "AssignmentExpression":
+            continue
+        target = node.get("left") or {}
+        if (target.get("property") or {}).get("name") in _DISPLAY_TARGETS:
+            right = node.get("right")
+            if isinstance(right, dict):
+                display.add(id(right))
     for node, enclosing in _walk(ast):
-        if node.get("type") != "Literal":
+        if node.get("type") != "Literal" or id(node) in display:
             continue
         value = node.get("value")
         if not isinstance(value, str) or not _URL_LITERAL_RE.match(value):
+            continue
+        if not _HAS_A_LETTER(value):
             continue
         target = value.split("?")[0]
         # `known` holds ids, not paths. Comparing the bare path against it never matched,
