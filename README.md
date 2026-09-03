@@ -57,12 +57,13 @@ writes — one character apart. No compiler on either side spans that gap.</sub>
 four times. Whichever runs last wins, which is how a display bug survives being "fixed" in
 one of them.</sub>
 
-**One page per script.** The map is not one drawing of the whole codebase — the dropdown
-lists the *scripts* your pages load, and each is a page of its own: the code that actually
-runs from that script tag, followed through every import to the selectors, URLs and keys it
-touches. A widget on a forty-module page is a page you can open alone. Whatever no page
-ever reaches sits in the **Not reached from any page** buckets, which is a finding in
-itself. [More on reading the map →](docs/the-map.md)
+**A page, then its sections.** The map is not one drawing of the whole codebase — the
+**Page** picker lists your HTML pages, and **Section** lists the *scripts* each one loads:
+the code that actually runs from that script tag, followed through every import to the
+selectors, URLs and keys it touches. A widget on a forty-module page is a section you can
+open alone; **Whole page** is all of them at once. Whatever no page ever reaches sits in
+the **Not reached from any page** buckets, which is a finding in itself.
+[More on reading the map →](docs/the-map.md)
 
 ## The four words
 

@@ -42,6 +42,15 @@ reference project - the first time a release was tested the way a user meets it.
   and the server never let the buffer fill: a run served for hours with its link unseen.
   The address block is flushed now.
 - **Changed** — the map's footer credits its author, not the tool.
+- **Added** — the map's page picker is now two: **Page** and **Section**. Page lists the
+  HTML pages a person knows (Push Arena, Leaderboard); Section lists the bundles that page
+  loads, with "Whole page" first. Whole page is a union page built at write time
+  (`group:<n>`) - one chunk that loads like any other page, never seventy-seven chunks
+  merged in the browser - so a page with one bundle shows no Section picker at all.
+  Union pages are left out of search: each of their nodes is already there under its own
+  section. Pages that share a title and route (`where` up to its first ` - `) form one
+  group. The readout beside the pickers no longer repeats the page's name - the pickers
+  say it - and it starts where they end instead of centred, where two of them covered it.
 
 Known open, recorded rather than hidden:
 
@@ -50,6 +59,12 @@ Known open, recorded rather than hidden:
   `unused` (1,485), `unresolved` (2,581) and `uncertain` (3,711) fixed. The total moves
   with it, so a few symbols come and go, not a few statuses. Something in the scan is
   order- or timing-dependent; not yet found.
+- **Section attribution follows the file, not the page.** On the reference project, 70
+  of Push Arena's 77 sections are `static/admin/regression/plugins/*` - test plugins the
+  arena template happens to load under one flag - and they crowd out the seven bundles
+  that are the page. The grouping is right (they really are reachable from that
+  template); the picker needs a way to say which sections are the page and which are
+  passengers. Not yet designed.
 
 ## 0.9.0 — 3 Sep 2026
 

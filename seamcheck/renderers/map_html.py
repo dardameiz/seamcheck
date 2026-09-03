@@ -248,8 +248,11 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overf
 .menuwrap { position:relative; }
 /* The page picker, on the glass beside the menu, so moving from one page to the next is
    one tap instead of three. Same shape as the menu button: the two read as one strip. */
-/* Capped so it cannot grow into the readout sitting centred behind it. */
+/* Capped so the readout, which starts where the pickers end, keeps room to say anything. */
+.pagepicks { display:flex; gap:6px; flex:none; min-width:0; }
 .pagepick { flex:none; max-width:min(34vw, 340px); min-width:0; }
+/* The section list is the narrower ask; the page keeps the width. */
+#secwrap { max-width:min(22vw, 220px); }
 .pagepick select {
   max-width:100%; height:36px; padding:0 30px 0 13px; cursor:pointer;
   border:1.2px solid var(--line-2); background:var(--panel); color:var(--ink);
@@ -1065,7 +1068,8 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
      squeezed into a corner it has to share. */
   .hud.tl { top:12px; left:12px; right:12px; flex-wrap:wrap; }
   .hud.tl > .menuwrap { flex:none; }
-  .pagepick { flex-basis:100%; max-width:none; order:2; }
+  .pagepicks { flex-basis:100%; order:2; }
+  .pagepick, #secwrap { flex:1 1 0; max-width:none; }
   /* Clear of the right corner's own controls, which stay on row one. */
   .hud.tr { top:12px; right:12px; gap:6px; z-index:7; }
   .menubtn { max-width:44vw; }
@@ -1526,49 +1530,76 @@ function withFiles(drawn) {
 }
 
 // The pages a reader recognises, each holding the bundles it loads. A scrolling rail of
-// 34 rows cost more than half a phone screen; an optgroup says the same thing in one
+// 34 rows cost more than half a phone screen; a select says the same thing in one
 // control and gives every pixel of it back to the canvas.
 // "Push Arena · /push_arena/" - the name and the address, which is how a reader knows
 // where they are. Falls back to the entry filename for a root no template references,
 // because inventing a nicer name for it would be inventing evidence.
-// Two entries can render the same template and so carry the same title AND the same URL -
-// "Push Arena · /push_arena/" listed twice, different node counts, nothing to tell them
-// apart. Where a name is not unique the entry that produced it is appended, because two
-// identical rows is worse than a long one.
-let _labelCounts = null;
 function pageLabel(p) {
   const where = (p.where || "").split(" - ")[0].trim();
   const title = p.title || p.page;
-  const base = !where || title === where ? title : `${title} · ${where}`;
-  if (!_labelCounts) {
-    _labelCounts = {};
-    PAGES.forEach(other => {
-      if (other.layer) return;
-      const w = (other.where || "").split(" - ")[0].trim();
-      const t = other.title || other.page;
-      _labelCounts[!w || t === w ? t : `${t} · ${w}`] = (_labelCounts[!w || t === w ? t : `${t} · ${w}`] || 0) + 1;
-    });
-  }
-  return _labelCounts[base] > 1 ? `${base} · ${p.page}` : base;
+  return !where || title === where ? title : `${title} · ${where}`;
 }
 
+// One template loads many bundles, and each bundle is a page entry of its own: the
+// reference project's arena was 77 rows under one name, with nothing to tell them apart
+// but a build artefact's filename. So the picker is two: the PAGE, one row per name and
+// address, and the SECTION inside it - the whole page, or one of its bundles. "The whole
+// page" is a union page the writer built (`group:N`), so it loads as one chunk.
+const GROUP_WHOLE = new Map();    // group -> the page that stands for all of it
+const GROUP_ENTRIES = new Map();  // group -> its entries, in order
+PAGES.forEach((p, i) => {
+  if (p.layer || p.g === undefined) return;
+  // The union comes first in its group, so the first page seen for a group is the
+  // union where there is one and the lone entry where there is not - and the groups
+  // keep the order the pages came in, which is by name.
+  if (!GROUP_WHOLE.has(p.g)) GROUP_WHOLE.set(p.g, i);
+  if (!p.union) (GROUP_ENTRIES.get(p.g) || GROUP_ENTRIES.set(p.g, []).get(p.g)).push(i);
+});
+const sections = document.getElementById("sec");
+const secwrap = document.getElementById("secwrap");
+
+// What the lists were last built for, so a page change inside the same group only moves
+// the selection, and one into another group rebuilds the section list with the same
+// tails (node counts, or "changed" under a commit) it had.
+let _pickers = {group: undefined, counts: null};
 function fillPages(counts) {
   // Each option says what a PERSON would call the page. The title and the URL were
   // already known and were spent on a grey optgroup heading, while the option itself read
   // "base-main — 392 nodes" - the name of a build artefact and a number. On a phone the
   // heading is the first thing to truncate, so the only legible part named nothing.
-  const out = PAGES.map((p, i) => {
-    if (p.layer) return "";
-    const drawn = lensedCount(p);
-    const tail = counts ? `${counts[i]} changed` : `${drawn} node${drawn === 1 ? "" : "s"}`;
-    return `<option value="${i}">${esc(pageLabel(p))} — ${tail}</option>`;
-  });
-  pages.innerHTML = out.join("");
-  pages.value = String(current);
+  const tail = i => {
+    if (counts) return `${counts[i]} changed`;
+    const drawn = lensedCount(PAGES[i]);
+    return `${drawn} node${drawn === 1 ? "" : "s"}`;
+  };
+  const here = PAGES[current] || EMPTY_PAGE;
+  pages.innerHTML = [...GROUP_WHOLE].map(([, i]) =>
+    `<option value="${i}">${esc(pageLabel(PAGES[i]))} — ${tail(i)}</option>`).join("");
+  pages.value = String(GROUP_WHOLE.has(here.g) ? GROUP_WHOLE.get(here.g) : current);
+  const entries = GROUP_ENTRIES.get(here.g) || [];
+  if (entries.length > 1) {
+    const whole = GROUP_WHOLE.get(here.g);
+    sections.innerHTML = [`<option value="${whole}">Whole page — ${tail(whole)}</option>`]
+      .concat(entries.map(i => `<option value="${i}">${esc(PAGES[i].page)} — ${tail(i)}</option>`))
+      .join("");
+    sections.value = String(current);
+  } else {
+    sections.innerHTML = "";
+  }
+  secwrap.hidden = entries.length < 2;
+  _pickers = {group: here.g, counts: counts};
 }
 
-pages.onchange = e => {
-  current = Number(e.target.value); focus = null; view = {x:0, y:0, k:1};
+function syncPickers() {
+  const here = PAGES[current] || EMPTY_PAGE;
+  if (_pickers.group !== here.g) { fillPages(_pickers.counts); return; }
+  pages.value = String(GROUP_WHOLE.has(here.g) ? GROUP_WHOLE.get(here.g) : current);
+  if (!secwrap.hidden) sections.value = String(current);
+}
+
+function pickPage(i) {
+  current = i; focus = null; view = {x:0, y:0, k:1};
   closeSheet(); draw();
   if (window.syncReadout) syncReadout();
   // The colour key counts the CURRENT page, and changing the page did not refresh it - so
@@ -1577,7 +1608,10 @@ pages.onchange = e => {
   // sharpest way this tool could contradict itself: a control insisting there is nothing
   // to look at while the thing to look at is on screen in red.
   if (window.syncChrome) syncChrome();
-};
+  syncPickers();
+}
+pages.onchange = e => pickPage(Number(e.target.value));
+sections.onchange = e => pickPage(Number(e.target.value));
 
 // Clicking a colour in the key filters the canvas to that status. Toggling, so several
 // can be on at once, and clicking the last one off restores everything rather than
@@ -2331,7 +2365,7 @@ function searchEverywhere(term, limit = 60) {
 function jumpTo(id, page) {
   if (typeof page === "number" && page !== current) {
     current = page;
-    pages.value = String(current);
+    syncPickers();
     view = {x: 0, y: 0, k: 1};
   }
   layer = "";
@@ -2458,8 +2492,13 @@ function draw() {
     return;
   }
   readPack();
-  pages.value = String(current);
-  const here = p.where ? `${p.title} · ${p.where}` : p.title;
+  syncPickers();
+  // The pickers already say the page and the section, so the readout says what they
+  // do not: the script this section is (or the template, for the whole page). It used
+  // to repeat the page's name first, and at 1100px that was all that fit.
+  const tail = (p.where || "").split(" - ").slice(1).join(" - ").trim();
+  const here = p.layer || p.g === undefined ? (p.where ? `${p.title} · ${p.where}` : p.title)
+             : p.union ? (tail || p.title) : p.page;
   // Count what is DRAWN, not what the file holds: now that a filter narrows a file
   // selection instead of replacing it, the two differ, and a breadcrumb reading "674 of
   // 674" over a canvas showing nine is the same lie the filter bug was.
@@ -4436,6 +4475,16 @@ ly.onchange = e => {
     // opacity:0 still reserves a painted capsule on some engines, and an empty pill
     // floating over the map reads as a bug. Take it out of the tree entirely.
     readout.hidden = !has;
+    if (!has) return;
+    // The readout used to sit centred; with two pickers the left corner reaches past the
+    // centre and covered its first words. It starts where the pickers end and stops
+    // where the right corner begins, so neither corner can sit on it.
+    const tl = document.querySelector(".hud.tl").getBoundingClientRect();
+    const tr = document.querySelector(".hud.tr").getBoundingClientRect();
+    const left = Math.round(tl.right) + 10;
+    readout.style.left = left + "px";
+    readout.style.transform = "none";
+    readout.style.maxWidth = Math.max(0, Math.round(tr.left) - left - 10) + "px";
   };
 
   // How much of the canvas the floating controls occupy. The panel pads itself by these,
@@ -4493,7 +4542,7 @@ ly.onchange = e => {
   syncChrome();
   syncReadout();
   chromeMeasure();
-  window.addEventListener("resize", () => chromeMeasure());
+  window.addEventListener("resize", () => { chromeMeasure(); syncReadout(); });
   if (window.ResizeObserver) new ResizeObserver(() => chromeMeasure()).observe(menubtn);
 })();
 """
@@ -4655,6 +4704,41 @@ class MapDocument:
         return index, {f"{prefix}{c[0]}.js": _asset(c) for c in self.chunks}
 
 
+def _grouped(pages) -> list[tuple[int, list]]:
+    """Ordinary pages, grouped by the page a person recognises.
+
+    One template can load many bundles, and each bundle is its own page entry - the
+    reference project's arena is 77 of them, listed 77 times under one name. The name and
+    the address are what a reader picks by; the entries are sections inside it. Grouped
+    in the order the entries come, which is already by title.
+    """
+    groups: dict[tuple[str, str], list] = {}
+    for page in pages:
+        where = (page.where or "").split(" - ")[0].strip()
+        groups.setdefault((page.title or page.page, where), []).append(page)
+    return list(enumerate(groups.values()))
+
+
+def _union(entries) -> tuple[list, list]:
+    """Every node and edge across a group's entries, each once - the whole page.
+
+    Built here, at write time, so it loads as one chunk like any other page; merging 77
+    chunks in the browser would mean fetching all 77 to draw one picture.
+    """
+    nodes: dict[str, object] = {}
+    for page in entries:
+        for node in page.nodes:
+            nodes.setdefault(node.id, node)
+    edges, seen = [], set()
+    for page in entries:
+        for edge in page.edges:
+            pair = (edge.source, edge.target)
+            if pair not in seen:
+                seen.add(pair)
+                edges.append(edge)
+    return list(nodes.values()), edges
+
+
 def _payload(connectivity_map: ConnectivityMap) -> tuple[str, list[Chunk], dict[str, int]]:
     """The map as (inline meta, deferred chunks).
 
@@ -4682,8 +4766,18 @@ def _payload(connectivity_map: ConnectivityMap) -> tuple[str, list[Chunk], dict[
             row.pop()
         return row
 
-    pages = [(page.page, page.title or page.page, page.where, "", page.nodes, page.edges)
-             for page in connectivity_map.pages]
+    # (name, title, where, layer, nodes, edges, group, union): a page is an entry - the
+    # bundle a template loads - and belongs to the GROUP of entries that share a title
+    # and an address, which is the page a person recognises.
+    pages = []
+    for group, entries in _grouped(connectivity_map.pages):
+        if len(entries) > 1:
+            nodes, edges = _union(entries)
+            pages.append((f"group:{group}", entries[0].title or entries[0].page,
+                          entries[0].where, "", nodes, edges, group, True))
+        for page in entries:
+            pages.append((page.page, page.title or page.page, page.where, "",
+                          page.nodes, page.edges, group, False))
     for key, title, wanted in _SERVICE_LAYERS:
         want = set(wanted)
         seen: dict[str, object] = {}
@@ -4700,14 +4794,14 @@ def _payload(connectivity_map: ConnectivityMap) -> tuple[str, list[Chunk], dict[
                 if e.source in seen and e.target in seen and pair not in seen_edges:
                     seen_edges.add(pair)
                     edges.append(e)
-        pages.append((f"layer:{key}", title, "", key, list(seen.values()), edges))
+        pages.append((f"layer:{key}", title, "", key, list(seen.values()), edges, None, False))
 
     meta_pages, chunks = [], []
     file_best: dict[str, tuple[int, int]] = {}
     search_rows, in_search = [], set()
     per_page_changed = []
     commit_per_page = [[] for _ in commits]
-    for index, (name, title, where, layer, nodes, edges) in enumerate(pages):
+    for index, (name, title, where, layer, nodes, edges, group, union) in enumerate(pages):
         rows = [_row(node) for node in nodes]
         by_status: dict[str, int] = {}
         by_kind_status: dict[tuple[int, int], int] = {}
@@ -4725,7 +4819,9 @@ def _payload(connectivity_map: ConnectivityMap) -> tuple[str, list[Chunk], dict[
             for c, commit in enumerate(commits):
                 if node.id in (commit.get("changed") or {}):
                     commit_here[c] += 1
-            if node.kind != "page" and node.id not in in_search and not layer:
+            # A union holds nothing its entries do not, and a search hit should land on
+            # the one entry that has it, so the union is not indexed.
+            if node.kind != "page" and node.id not in in_search and not layer and not union:
                 in_search.add(node.id)
                 search_rows.append([node.id, node.label, row[2], row[3],
                                     files(node.file or ""), node.line, index])
@@ -4736,11 +4832,16 @@ def _payload(connectivity_map: ConnectivityMap) -> tuple[str, list[Chunk], dict[
         per_page_changed.append(changed_here)
         for c, n in enumerate(commit_here):
             commit_per_page[c].append(n)
-        meta_pages.append({
+        meta = {
             "page": name, "title": title, "where": where, "layer": layer,
             "n": len(nodes), "st": by_status,
             "ks": [[k, st, n] for (k, st), n in by_kind_status.items()],
-        })
+        }
+        if group is not None:
+            meta["g"] = group
+        if union:
+            meta["union"] = True
+        meta_pages.append(meta)
         chunks.append(_chunk(f"p{index}", {
             "nodes": rows,
             "edges": [[e.source, e.target, statuses(e.status)] for e in edges],
@@ -4983,7 +5084,13 @@ def render_document(connectivity_map: ConnectivityMap, console=None, files=None,
         '</div></div>'
         # Choosing WHICH page you are looking at is the thing a reader does most often, and
         # it was two taps deep inside a dropdown. It sits on the glass, next to the view.
-        '<label id="pgwrap" class="pagepick"><select id="pg"></select></label>'
+        # Two of them: the page a person recognises, and the section - the bundle -
+        # inside it. The second only appears when a page has more than one.
+        '<div id="pgwrap" class="pagepicks">'
+        '<label class="pagepick"><select id="pg" aria-label="Page"></select></label>'
+        '<label id="secwrap" class="pagepick" hidden>'
+        '<select id="sec" aria-label="Section"></select></label>'
+        '</div>'
         "</div>",
 
         # ── appearance, top right ─────────────────────────────────────────────

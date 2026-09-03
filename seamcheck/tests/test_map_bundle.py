@@ -263,3 +263,76 @@ class LazySections(SimpleTestCase):
         self.assertIn('"count":1', index.replace(" ", ""))
         self.assertIn("a/b.py", index)
         self.assertNotIn("data/files.js", assets)
+
+
+class PagesAndSections(SimpleTestCase):
+    """One template loading many bundles is ONE page with sections, not many pages.
+
+    The reference project's arena was 77 rows under one name in the picker, told apart by
+    a build artefact's filename. The writer now unions the entries that share a title and
+    address into a `group:N` page - one chunk, so it loads like any other - and marks
+    every entry with its group, so the browser can offer a Page and a Section.
+    """
+
+    @staticmethod
+    def _entries():
+        def entry(name, node):
+            return PageMap(name, [MapNode(f"page:{name}", name, "page", "connected"),
+                                  MapNode(node, node, "url", "connected", file="v.py", line=1),
+                                  MapNode("url:both", "both", "url", "connected", file="v.py", line=2)],
+                           [MapEdge(f"page:{name}", node, "connected"),
+                            MapEdge(f"page:{name}", "url:both", "connected")],
+                           title="Arena", where="/arena/")
+        alone = PageMap("home-main", [MapNode("page:home-main", "home-main", "page", "connected"),
+                                      MapNode("url:home", "home", "url", "connected")],
+                        [MapEdge("page:home-main", "url:home", "connected")],
+                        title="Home", where="/")
+        return [entry("arena-main", "url:a"), entry("arena-side", "url:b"), alone]
+
+    def _meta(self):
+        import json
+        out = map_html.render(ConnectivityMap("0" * 12, "", self._entries()))
+        start = out.index("{", out.index("MAPDATA"))
+        return json.JSONDecoder().raw_decode(out, start)[0], out
+
+    def test_entries_sharing_a_name_get_one_union_page_and_a_group(self):
+        meta, _ = self._meta()
+        by_name = {p["page"]: p for p in meta["pages"]}
+        self.assertIn("group:0", by_name)
+        union = by_name["group:0"]
+        self.assertTrue(union.get("union"))
+        self.assertEqual(union["title"], "Arena")
+        # Two page roots, three distinct urls: the shared one is counted once.
+        self.assertEqual(union["n"], 5)
+        self.assertEqual({by_name[n]["g"] for n in ("group:0", "arena-main", "arena-side")}, {0})
+        self.assertEqual(by_name["home-main"]["g"], 1)
+        # A page with one entry gets no union: there is nothing to union.
+        self.assertNotIn("group:1", by_name)
+        self.assertEqual([p["page"] for p in meta["pages"]],
+                         ["group:0", "arena-main", "arena-side", "home-main"])
+
+    @staticmethod
+    def _chunk(out, name):
+        import json
+        tag = f'data-chunk="{name}" data-enc="json">'
+        start = out.index(tag) + len(tag)
+        return json.JSONDecoder().raw_decode(out, start)[0]
+
+    def test_the_union_is_one_chunk_that_holds_every_entrys_rows_once(self):
+        meta, out = self._meta()
+        index = [p["page"] for p in meta["pages"]].index("group:0")
+        body = self._chunk(out, f"p{index}")
+        ids = [row[0] for row in body["nodes"]]
+        self.assertEqual(len(ids), len(set(ids)), "a node the entries share is sent once")
+        self.assertEqual(sorted(ids), ["page:arena-main", "page:arena-side",
+                                       "url:a", "url:b", "url:both"])
+        self.assertEqual(sum(1 for e in body["edges"] if e[1] == "url:both"), 2,
+                         "each entry's own edge to the shared node survives")
+
+    def test_the_union_is_not_in_the_search_index(self):
+        """A hit lands on the entry that has it, never on the union."""
+        meta, out = self._meta()
+        index = [p["page"] for p in meta["pages"]].index("group:0")
+        body = self._chunk(out, "search")
+        self.assertNotIn(index, body["page"])
+        self.assertEqual(body["n"], 4, "url:both once, on the first entry that holds it")

@@ -35,24 +35,29 @@ oracle: `schema in repo` means a name can be checked, `no schema · pairing only
 cannot, and a grey card there is unknowable rather than dead. Redis never has one — nothing
 declares a key — so it can only ever show you that two halves of your own code disagree.</sub>
 
-## One page per script, not one map of everything
+## A page, then its sections
 
-The page dropdown does not list your templates. It lists **entry points**: every script a
-page loads is its own map page, named after the script — `Push Arena · /push_arena/ ·
-push-arena-main`, and next to it `… · cookie_consent`. A template that loads three scripts
-is three pages.
+Two pickers. **Page** lists the HTML pages a reader knows — `Push Arena · /push_arena/`,
+`Leaderboard · /leaderboard/`. **Section** lists what that page loads: every script tag is
+its own section, named after the script — `push-arena-main`, `cookie_consent` — and
+**Whole page** at the top is all of them together. A page that loads one script has no
+Section picker at all.
 
-That is deliberate, and it is what keeps a large codebase readable. A page is *the code
-that actually runs when a reader opens that URL*, followed from the script tag through
-every import to the selectors it queries, the URLs it fetches, the keys those handlers
-touch. The `achievements` widget on a page with forty modules is a page of its own, so you
-can check it without the other thirty-nine drawn over it — and a symbol that no page's
-scripts ever reach lands in the **Not reached from any page** buckets at the end of the
-list, which is itself a finding worth reading.
+A section is *the code that actually runs from that script tag*, followed through every
+import to the selectors it queries, the URLs it fetches, the keys those handlers touch. The
+`achievements` widget on a page with forty modules is a section of its own, so you can
+check it without the other thirty-nine drawn over it — and a symbol that no page's scripts
+ever reach lands in the **Not reached from any page** buckets at the end of the Page list,
+which is itself a finding worth reading.
 
-There is no "whole codebase" page, on purpose: every symbol in the scan is on exactly one
-of these pages or in a bucket, and a 40,000-node hairball would show you none of them.
-The findings list and the search box are the cross-cutting views; they see everything.
+Whole page is built when the map is written, as one page like any other, so opening it
+costs one chunk and not seventy. Its nodes are the union of the sections' nodes, each drawn
+once, and it is left out of search because every one of them is already there under its
+own section.
+
+There is still no "whole codebase" page, on purpose: a 40,000-node hairball would show you
+none of them. The findings list and the search box are the cross-cutting views; they see
+everything.
 
 One menu, and the counts are the current page's.
 

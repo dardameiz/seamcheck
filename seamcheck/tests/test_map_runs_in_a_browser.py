@@ -954,3 +954,96 @@ class GesturesAndCommits(DirectionAOnAPhone):
         out = render(self._map_for_source())
         self.assertIn("This commit changed nothing the scan reads", out)
         self.assertIn("Documentation, config and tests are not in the graph", out)
+
+
+class PageThenSection(SimpleTestCase):
+    """Two pickers: the page a person recognises, then the bundle inside it.
+
+    Own class for the reason RowsArriveWhenOpened is: the harness above runs its tests
+    once per group that inherits it.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        try:
+            from playwright.sync_api import sync_playwright  # noqa: F401
+        except ImportError:  # pragma: no cover - depends on the optional extra
+            raise unittest.SkipTest("playwright is not installed (the observe extra)") from None
+
+    def _url(self) -> str:
+        from seamcheck.mapdata import build_map
+        from seamcheck.pagenames import PageName
+        from seamcheck.renderers.map_html import render_document
+
+        graph = _fixture_graph()
+        # A page is seeded by FILES; two bundles on one template, one bundle on another.
+        every = {s.file for s in graph.symbols}
+        pages = {"orders-main": every, "orders-side": every, "home-main": every}
+        names = {"orders-main": PageName("Orders", "/orders/", "orders-main"),
+                 "orders-side": PageName("Orders", "/orders/", "orders-side"),
+                 "home-main": PageName("Home", "/", "home-main")}
+        connectivity = build_map(graph, pages, git_sha="0" * 12, names=names)
+        document = render_document(connectivity, console=_console_for(graph))
+        path = pathlib.Path(tempfile.mkdtemp()) / "map.html"
+        path.write_text(document.single_file(), encoding="utf-8")
+        return path.as_uri()
+
+    def test_the_page_list_is_by_name_and_the_section_list_appears_only_when_there_is_one(self):
+        from playwright.sync_api import sync_playwright
+
+        errors: list[str] = []
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch()
+            except Exception as error:  # pragma: no cover - no browser downloaded
+                raise unittest.SkipTest(f"no chromium: {error}") from None
+            page = browser.new_page()
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.goto(page_url := self._url(), wait_until="load")
+            page.wait_for_timeout(250)
+            _open_lens(page, "map")
+            page.wait_for_timeout(200)
+            read = "() => ({" \
+                "pages: [...document.querySelectorAll('#pg option')].map(o => o.textContent)," \
+                "sections: [...document.querySelectorAll('#sec option')].map(o => o.textContent)," \
+                "sectionShown: !document.getElementById('secwrap').hidden," \
+                "current: PAGES[current].page, crumb: document.getElementById('crumb').textContent," \
+                "clear: (() => { const r = document.getElementById('readout').getBoundingClientRect();" \
+                "  const l = document.querySelector('.hud.tl').getBoundingClientRect();" \
+                "  const t = document.querySelector('.hud.tr').getBoundingClientRect();" \
+                "  return r.width === 0 || (r.left >= l.right && r.right <= t.left); })()})"
+            first = page.evaluate(read)
+            # The other page, then one section inside it.
+            page.select_option("#pg", index=1)
+            page.wait_for_timeout(200)
+            third = page.evaluate(read)
+            page.select_option("#sec", index=1)
+            page.wait_for_timeout(200)
+            section = page.evaluate(read)
+            browser.close()
+
+        self.assertEqual(errors, [], page_url)
+        self.assertEqual([p.split(" — ")[0] for p in first["pages"]][:2],
+                         ["Home · /", "Orders · /orders/"],
+                         "one row per page a person recognises, not per bundle")
+        self.assertEqual(len(first["pages"]), 2 + 4, "then the not-reached buckets, as before")
+        # The map opens on the first page: Home, which has one bundle and so no sections.
+        self.assertEqual(first["current"], "home-main")
+        self.assertFalse(first["sectionShown"])
+        self.assertEqual(first["sections"], [])
+        # Orders has two, so it opens on the whole page with both bundles offered.
+        self.assertEqual(third["current"], "group:1")
+        self.assertTrue(third["sectionShown"])
+        self.assertEqual([s.split(" — ")[0] for s in third["sections"]],
+                         ["Whole page", "orders-main", "orders-side"])
+        # The readout does not repeat what the pickers say; it names what they do not.
+        self.assertTrue(third["crumb"].startswith("Orders — "), third["crumb"])
+        self.assertEqual(section["current"], "orders-main")
+        self.assertTrue(section["crumb"].startswith("orders-main — "), section["crumb"])
+        self.assertEqual(section["pages"], first["pages"],
+                         "picking a section leaves the page list alone")
+        # Two pickers reach past the centre of the screen, where the readout used to sit;
+        # it starts after them now, and the right corner's buttons end it.
+        for shot in (first, third, section):
+            self.assertTrue(shot["clear"], "the readout sits under a corner's controls")
