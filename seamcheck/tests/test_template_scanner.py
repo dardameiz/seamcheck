@@ -1,4 +1,6 @@
+import pathlib
 import tempfile
+import textwrap
 from pathlib import Path
 
 from django.test import SimpleTestCase
@@ -92,3 +94,47 @@ class BlockTagVersusInterpolationTests(SimpleTestCase):
         found = self._classes('<div class="a {% if x %}b{% endif %} c">')
 
         self.assertEqual(found, {"a", "b", "c"})
+
+
+class ScriptBlocksAreNotMarkupTests(SimpleTestCase):
+    """A string inside `<script>` names an attribute; it does not declare one.
+
+    `[['daily_hours_active', 'data-modal-daily-hours']]` is a mapping table. Read as
+    markup it invented an attribute at that line and then reported it unused - a finding
+    about an element that does not exist, sitting one screen from the real one.
+    """
+
+    def _scan(self, text: str):
+        path = pathlib.Path(tempfile.mkdtemp()) / "page.html"
+        path.write_text(textwrap.dedent(text), encoding="utf-8")
+        return scan_templates([str(path)])
+
+    def test_an_attribute_named_in_a_script_string_is_not_an_element(self):
+        found = self._scan("""
+            <div data-modal-daily-hours>0</div>
+            <script>
+              const MAP = [['daily_hours_active', 'data-modal-daily-hours']];
+            </script>
+        """)
+        rows = [(s.label, s.line) for s in found if s.kind == "dom_attr"]
+        self.assertEqual(rows, [("modal-daily-hours", 2)])
+
+    def test_a_class_named_in_a_style_block_is_not_an_element(self):
+        found = self._scan("""
+            <style>.only-in-css { color: red }</style>
+            <div class="real-one"></div>
+        """)
+        self.assertEqual([s.label for s in found if s.kind == "dom_attr"], ["real-one"])
+
+    def test_the_lines_after_a_script_still_report_their_own_line(self):
+        # Blanked, not removed: a shorter replacement would move every attribute after
+        # the first script block and every finding would point at the wrong line.
+        found = self._scan("""
+            <script>
+              let a = 1;
+              let b = 2;
+            </script>
+            <div id="after-the-script"></div>
+        """)
+        rows = {s.label: s.line for s in found if s.kind == "dom_attr"}
+        self.assertEqual(rows["after-the-script"], 6)

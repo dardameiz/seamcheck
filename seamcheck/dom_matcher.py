@@ -54,6 +54,19 @@ def match_dom_selectors(dom_attrs: list[Symbol], dom_selectors: list[Symbol]) ->
     for attr in dom_attrs:
         attrs_by_key.setdefault((attr.sub, attr.label), []).append(attr)
 
+    # A class JavaScript APPLIES is proof the class exists on an element, so a reader of
+    # it is not reaching for nothing - the element is built at runtime and no template
+    # will ever mention it. Those apply-sites are recorded already (as evidence, so that
+    # twenty modules adding `.active` never reach multi-writer detection), and this loop
+    # simply never consulted them: `el.classList.add('goal-celebrated')` on one line and
+    # `querySelector('.goal-celebrated')` on another were a finding about a file that is
+    # its own proof. The declaring file's own line does not count - the index is keyed by
+    # label and an apply is never a read, so a symbol cannot satisfy itself.
+    applied: dict[str, Symbol] = {}
+    for selector in dom_selectors:
+        if selector.sub.startswith(("class:apply", "class:stem")) and selector.label:
+            applied.setdefault(selector.label, selector)
+
     edges: list[Edge] = []
     reached: set[str] = set()
     for selector in dom_selectors:
@@ -75,6 +88,9 @@ def match_dom_selectors(dom_attrs: list[Symbol], dom_selectors: list[Symbol]) ->
             for attr in matched:
                 reached.add(attr.id)
                 edges.append(Edge(from_id=selector.id, to_id=attr.id, status=Status.CONNECTED))
+        elif _base_sub(selector) == "class" and selector.label in applied:
+            edges.append(Edge(from_id=selector.id, to_id=applied[selector.label].id,
+                              status=Status.CONNECTED, note=_APPLIED_NOTE))
         elif ":write" in selector.sub:
             # A WRITE is a claim even from a file outside the entry graph, and this is the
             # single most valuable finding this tool has produced. Reading a selector is
@@ -102,6 +118,12 @@ def match_dom_selectors(dom_attrs: list[Symbol], dom_selectors: list[Symbol]) ->
             edges.append(Edge(from_id=attr.id, to_id=attr.id, status=Status.UNUSED))
     return edges
 
+
+_APPLIED_NOTE = (
+    "No template renders this class; JavaScript puts it on an element, and that line is "
+    "the evidence. The element is built at runtime, so a search of the markup for it was "
+    "always going to come back empty."
+)
 
 _SAME_FILE_NOTE = (
     "Two places in {file} write this element - {who}. One file, so the gate for "

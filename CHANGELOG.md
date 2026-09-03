@@ -122,6 +122,30 @@ reference project - the first time a release was tested the way a user meets it.
   20 s map render on a 12,000-file project, and nothing to a scan: no symbol, status or
   finding depends on it.
 
+- **Fixed** — **an attribute JavaScript creates and JavaScript reads was a finding on
+  both sides.** `setAttribute('data-incremented-today', 'true')` was read as a *read* of
+  that attribute rather than as the line that brings it into existence, so nothing in the
+  graph ever declared it: the writer in one file and the reader in another were both
+  reported as reaching for an element nothing renders. Attribute writes -
+  `setAttribute('data-x', …)` and `el.dataset.x = …` - are definitions now, the same
+  reasoning the tool already applied to `el.id = 'x'`.
+- **Fixed** — **a class JavaScript applies is now evidence for the code that reads it.**
+  `el.classList.add('goal-celebrated')` on one line and
+  `querySelector('.goal-celebrated')` on another is a file that is its own proof, and the
+  reader was reported as reaching for nothing because the matcher only ever consulted
+  markup. No template will ever mention a class applied at runtime.
+- **Fixed** — **a string inside `<script>` is not markup.** The template scanner read
+  `data-…` names out of script bodies, so
+  `[['daily_hours_active', 'data-modal-daily-hours']]` - a mapping table - invented an
+  attribute at that line and then reported it unused, one screen from the real one.
+  Script and style bodies are blanked before the attribute scan (blanked, not removed, so
+  every line number after them still lands where it did), and a string that spells an
+  attribute name is read as a *reference* to it instead - which is what it is.
+
+  Measured on the reference project: claims 3,960 → 3,756, `connected` +431. Replayed
+  against the graded push_arena table, 29 of the false claims whose code still exists are
+  no longer claims, and **every real finding that still exists is still reported**.
+
 Known open, recorded rather than hidden:
 
 - **The call graph is Python only, and name-keyed.** JavaScript functions carry their

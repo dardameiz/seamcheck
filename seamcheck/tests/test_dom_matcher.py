@@ -222,3 +222,46 @@ class MultiWriterFamilyTests(SimpleTestCase):
 
         self.assertEqual(len(found), 1)
         self.assertIs(found[0].status, Status.UNRESOLVED)
+
+
+class AppliedClassIsEvidenceTests(SimpleTestCase):
+    """A class JavaScript puts on an element is proof the class exists.
+
+    `el.classList.add('goal-celebrated')` on one line and
+    `querySelector('.goal-celebrated')` on another: the file is its own proof, and the
+    reader was reported as reaching for nothing because the matcher only ever looked at
+    markup. No template will ever mention a class applied at runtime.
+    """
+
+    def _selector(self, label, sub, file="app.js"):
+        return Symbol(id=f"dom_selector:{sub}:{label}:{file}", kind="dom_selector",
+                      label=label, sub=sub, file=file, line=1, status=Status.UNCERTAIN,
+                      snippet=f"{sub} {label}", chain=[label], note="")
+
+    def test_a_reader_of_an_applied_class_is_connected_to_the_apply_site(self):
+        reader = self._selector("goal-celebrated", "class:read")
+        applier = self._selector("goal-celebrated", "class:apply")
+        edges = match_dom_selectors([], [reader, applier])
+        by_from = {e.from_id: e for e in edges}
+        self.assertEqual(by_from[reader.id].status, Status.CONNECTED)
+        self.assertEqual(by_from[reader.id].to_id, applier.id)
+        self.assertIn("JavaScript puts it on an element", by_from[reader.id].note)
+
+    def test_a_class_nothing_applies_stays_unresolved(self):
+        reader = self._selector("never-set", "class:read")
+        edges = match_dom_selectors([], [reader])
+        self.assertEqual([e.status for e in edges], [Status.UNRESOLVED])
+
+    def test_an_id_is_not_satisfied_by_a_class_of_the_same_name(self):
+        reader = self._selector("thing", "id:read")
+        applier = self._selector("thing", "class:apply")
+        edges = match_dom_selectors([], [reader, applier])
+        by_from = {e.from_id: e for e in edges}
+        self.assertEqual(by_from[reader.id].status, Status.UNRESOLVED)
+
+    def test_an_apply_site_cannot_satisfy_itself(self):
+        # An apply is evidence, never a claim, so it must not appear as a connected
+        # reader of its own class - which would report one line as two facts.
+        applier = self._selector("only-applied", "class:apply")
+        edges = match_dom_selectors([], [applier])
+        self.assertEqual(edges, [])

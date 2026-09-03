@@ -11,6 +11,9 @@ from seamcheck.graph import Status, Symbol
 from seamcheck.nodetools import node_line
 
 _SELECTOR_CALLEES = frozenset({"getElementById", "querySelector", "querySelectorAll", "closest"})
+# A string that is nothing but an attribute name. Two segments minimum, so `data-` alone
+# and `data-x` from a truncated interpolation are not read as names.
+_DATA_NAME_RE = re.compile(r"^data-[a-z][a-z0-9]*(?:-[a-z0-9]+)+$", re.IGNORECASE)
 # The other two ways JavaScript reaches a data attribute. Only `[data-x]` selector syntax
 # was read, so a template's `data-can-change` looked like an attribute nothing touches while
 # the code read it as `dataset.canChange` or `getAttribute("data-can-change")` - 584 of them
@@ -184,6 +187,13 @@ def _dom_selectors_in_uncached(path: str, ast_root: dict, line_offset: int = 0) 
     basename = os.path.basename(path)
 
     def _data_access(name: str, line, enclosing: str, snippet: str) -> None:
+        # One per (name, line): `getAttribute('data-x')` is now read twice - once as an
+        # attribute call, once as a plain string - and two symbols under one id is two
+        # rows in every list for one line of source.
+        key = f"{name}:{line}"
+        if key in _data_seen:
+            return
+        _data_seen.add(key)
         symbols.append(
             Symbol(
                 id=f"dom_selector:data:{name}:{path}:{line}", kind="dom_selector",
@@ -202,6 +212,7 @@ def _dom_selectors_in_uncached(path: str, ast_root: dict, line_offset: int = 0) 
     # one project's remaining false claims were exactly this, each pointing at its own
     # definition. The definitions extractor already reads these; only the read side was
     # double-counting them.
+    _data_seen: set[str] = set()
     assigned = set()
     for node, _enclosing in _walk(ast_root):
         node_type = node.get("type")
@@ -213,6 +224,18 @@ def _dom_selectors_in_uncached(path: str, ast_root: dict, line_offset: int = 0) 
     for node, enclosing in _walk(ast_root):
         raw = node_line(node)
         at = (raw + line_offset) if raw else raw
+
+        # A bare string that spells an attribute name IS a reference to it. Mapping
+        # tables are written this way all the time -
+        # `[['daily_hours_active', 'data-modal-daily-hours'], ...]`, then a loop that
+        # reads each pair - and the attribute is never named by `dataset.x` or
+        # `getAttribute` anywhere. Read only as EVIDENCE: it connects an attribute the
+        # markup already declares, and can never make a claim of its own, so a string
+        # that happens to look like one costs nothing.
+        if node.get("type") == "Literal" and isinstance(node.get("value"), str):
+            text = node["value"]
+            if _DATA_NAME_RE.match(text):
+                _data_access(text[5:], at, enclosing, f"'{text}'")
 
         # el.dataset.buttonType -> the data-button-type attribute
         if node.get("type") == "MemberExpression" and id(node) not in assigned:
@@ -678,6 +701,16 @@ def _definitions_in(path: str, ast_root: dict, line_offset: int = 0) -> list[Sym
         line = (raw + line_offset) if raw else raw
         node_type = node.get("type")
 
+        # el.dataset.buttonType = "x" - the same assertion in the other spelling. Read
+        # as neither a definition nor a read before this: dropped entirely.
+        if node_type == "AssignmentExpression":
+            target = node.get("left") or {}
+            if ((target.get("object") or {}).get("property") or {}).get("name") == "dataset":
+                accessed = (target.get("property") or {}).get("name")
+                if accessed:
+                    _emit("data", _dataset_name(accessed), line, enclosing,
+                          f"dataset.{accessed} = ...")
+
         # el.id = "x"  /  el.className = "a b"
         if node_type == "AssignmentExpression":
             name = ((node.get("left") or {}).get("property") or {}).get("name")
@@ -716,6 +749,20 @@ def _definitions_in(path: str, ast_root: dict, line_offset: int = 0) -> list[Sym
                         for token in _class_tokens(text):
                             _emit("class", token, line, enclosing,
                                   f"setAttribute('class', '{text}')")
+            # setAttribute('data-x', v) - the attribute now EXISTS, and this was read as
+            # a read of it. So an attribute JavaScript creates and JavaScript reads had
+            # no definition anywhere and every reader was reported as reaching for
+            # nothing: `data-incremented-today` is set in stats_manager.js line 1225 and
+            # read in push_arena.js line 929, and both files were findings. Same
+            # reasoning the tool already applies to `el.id = 'x'`: code that WRITES an
+            # attribute asserts the element has it.
+            elif ((callee.get("property") or {}).get("name") == "setAttribute"
+                    and arguments
+                    and arguments[0].get("type") == "Literal"
+                    and isinstance(arguments[0].get("value"), str)
+                    and _DATA_NAME_RE.match(arguments[0]["value"])):
+                name = arguments[0]["value"]
+                _emit("data", name[5:], line, enclosing, f"setAttribute('{name}', ...)")
 
         # Markup built as a string. This is how most of them arrive: 136 of 164 on the
         # project measured came from an id= or class= inside an innerHTML template literal.

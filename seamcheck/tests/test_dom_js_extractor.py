@@ -73,3 +73,75 @@ class BoundElementWriteTests(SimpleTestCase):
         ]
 
         self.assertGreaterEqual(len(writes), 2)
+
+
+class AttributeWritesAreDefinitionsTests(SimpleTestCase):
+    """Code that WRITES an attribute asserts the element has it.
+
+    `setAttribute('data-x', v)` was read as a read of `data-x`, so an attribute
+    JavaScript creates and JavaScript reads had no definition anywhere and both sides
+    were findings: `data-incremented-today` is set in `stats_manager.js` and read in
+    `push_arena.js`, and the scan reported the reader as reaching for nothing.
+    """
+
+    def _write(self, text: str) -> str:
+        import tempfile
+        import textwrap
+
+        path = Path(tempfile.mkdtemp()) / "writer.js"
+        path.write_text(textwrap.dedent(text), encoding="utf-8")
+        return str(path)
+
+    def _definitions(self, text: str):
+        from seamcheck.extractors.dom_js_extractor import extract_js_dom_definitions
+
+        return [(s.sub, s.label) for s in extract_js_dom_definitions([self._write(text)])]
+
+    def test_set_attribute_of_a_data_name_defines_it(self):
+        self.assertIn(("data", "incremented-today"), self._definitions("""
+            export function mark(el) {
+              el.setAttribute('data-incremented-today', 'true');
+            }
+        """))
+
+    def test_assigning_dataset_defines_it(self):
+        self.assertIn(("data", "button-type"), self._definitions("""
+            export function mark(el) {
+              el.dataset.buttonType = 'quantum';
+            }
+        """))
+
+    def test_a_read_is_not_a_definition(self):
+        self.assertEqual(self._definitions("""
+            export function read(el) {
+              return el.getAttribute('data-incremented-today');
+            }
+        """), [])
+
+    def test_a_string_that_names_an_attribute_is_read_as_a_reference(self):
+        # The mapping-table shape: the name never appears as `dataset.x` or in a
+        # getAttribute call anywhere, only as a string a loop later applies.
+        found = extract_dom_selectors([self._write("""
+            const MAP = [['daily_hours_active', 'data-modal-daily-hours']];
+            MAP.forEach(([key, attr]) => document.querySelector('[' + attr + ']'));
+        """)], [])
+        rows = [(s.sub, s.label) for s in found if s.label == "modal-daily-hours"]
+        self.assertEqual(rows, [("data:read", "modal-daily-hours")])
+
+    def test_a_data_prefix_alone_is_not_a_name(self):
+        found = extract_dom_selectors([self._write("""
+            const partial = 'data-';
+            const bare = 'data-x';
+        """)], [])
+        self.assertEqual([s.label for s in found if s.sub.startswith("data")], [])
+
+    def test_one_symbol_per_name_and_line_however_many_ways_it_is_written(self):
+        # `getAttribute('data-x')` is now seen twice - as an attribute call and as a
+        # plain string - and two symbols under one id is two rows for one line.
+        found = extract_dom_selectors([self._write("""
+            export function read(el) {
+              return el.getAttribute('data-incremented-today');
+            }
+        """)], [])
+        rows = [s for s in found if s.label == "incremented-today"]
+        self.assertEqual(len(rows), 1, [(s.sub, s.line) for s in rows])

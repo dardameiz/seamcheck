@@ -143,10 +143,34 @@ def _line_of(text: str, offset: int) -> int:
     return text.count("\n", 0, offset) + 1
 
 
+# A `<script>` block is not markup. Its string literals routinely NAME attributes -
+# `['daily_hours_active', 'data-modal-daily-hours']` is a mapping table, not an element -
+# and reading them here invented an attribute at that line and then reported it unused.
+# Measured on the reference project: a phantom `dom_attr` for every such string, each one
+# an `unused` finding about an element that does not exist, sitting next to the real
+# attribute in the same file. The script's own contents are read by the JavaScript
+# extractors, which know a string from an element; blanked here rather than skipped, so
+# every line number after a script block still lands where it did.
+_SCRIPT_OR_STYLE_RE = re.compile(
+    r"(<(script|style)\b[^>]*>)(.*?)(</\2\s*>)", re.IGNORECASE | re.DOTALL
+)
+
+
+def _without_code_blocks(text: str) -> str:
+    def blank(match: re.Match) -> str:
+        body = match.group(3)
+        # Newlines kept, everything else spaced out: the regex below is line-accurate and
+        # a shorter replacement would move every attribute after the first script.
+        return match.group(1) + re.sub(r"[^\n]", " ", body) + match.group(4)
+
+    return _SCRIPT_OR_STYLE_RE.sub(blank, text)
+
+
 def scan_templates(template_files: list[str]) -> list[Symbol]:
     symbols: list[Symbol] = []
     for file_path in template_files:
-        text = pathlib.Path(file_path).read_text(encoding="utf-8", errors="replace")
+        raw = pathlib.Path(file_path).read_text(encoding="utf-8", errors="replace")
+        text = _without_code_blocks(raw)
         for match in _ATTRIBUTE_RE.finditer(text):
             attribute = match.group(1)
             value = match.group(2) if match.group(2) is not None else match.group(3)
