@@ -10,9 +10,9 @@ from seamcheck.observe import PROBE, Observation, load, merge, save
 from seamcheck.provenance import apply_observations
 
 
-def _obs(page="/", selectors=None, fetches=None, classes=None, boxes=None):
+def _obs(page="/", selectors=None, fetches=None, classes=None):
     return Observation(page=page, selectors=selectors or {}, fetches=fetches or {},
-                       classes=classes or {}, boxes=boxes or [])
+                       classes=classes or {})
 
 
 def _sym(id_, kind, label, sub, status=Status.UNCERTAIN):

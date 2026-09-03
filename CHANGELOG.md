@@ -33,6 +33,15 @@ reference project - the first time a release was tested the way a user meets it.
   traceback** (`ModuleNotFoundError: No module named 'django'`). The explanation for
   exactly that situation was five lines below, guarding `django.setup()` but not
   `import django`. Same message, exit 2, either way now.
+- **Removed** — the map's "Page" view, the one that drew boxes over a screenshot of a page
+  a browser had seen. It was 843 KB of geometry on the reference project's index, for a
+  picture that said less than the map beside it. `seamcheck observe` no longer records
+  box positions; it still promotes the elements the browser proved exist, which is the
+  half that was evidence. Older observation files that carry `boxes` are read past.
+- **Fixed** — `seamcheck map` printed its addresses into a buffer when stdout was a file,
+  and the server never let the buffer fill: a run served for hours with its link unseen.
+  The address block is flushed now.
+- **Changed** — the map's footer credits its author, not the tool.
 
 Known open, recorded rather than hidden:
 

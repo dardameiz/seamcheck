@@ -20,6 +20,6 @@ Useful flags: `--format terminal|markdown|html|map|json` · `--out FILE` · `--s
 
 A map is one HTML file by default. `seamcheck map --out map/` (a folder, or `--bundle`)
 writes a small `index.html` plus `data/*.js`, and each page's rows - and each review
-list, observed page and the file tree - are fetched only when looked at; the form a very
-large repository needs. A map that would pass 50 MB as one
+list and the file tree - are fetched only when looked at; the form a very large
+repository needs. A map that would pass 50 MB as one
 file is written this way on its own, and the command says so.

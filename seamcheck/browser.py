@@ -71,22 +71,18 @@ def observe_pages(
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=30_000)
                 page.wait_for_timeout(settle_ms)
-                recorded = page.evaluate(
-                    "() => ({o: (window.__seamcheck||{}).observed || {},"
-                    " b: (window.__seamcheck||{}).boxes ? window.__seamcheck.boxes() : []})"
-                )
+                recorded = page.evaluate("() => (window.__seamcheck||{}).observed || {}")
                 shot = ""
                 if directory:
                     name = _filename(url)
                     page.screenshot(path=str(directory / name), full_page=True)
                     shot = name
-                observed = recorded.get("o") or {}
+                observed = recorded or {}
                 results.append(Observation(
                     page=url,
                     selectors=observed.get("selectors", {}),
                     fetches=observed.get("fetches", {}),
                     classes=observed.get("classes", {}),
-                    boxes=recorded.get("b") or [],
                     screenshot=shot,
                 ))
             except Exception as error:  # noqa: BLE001
@@ -95,7 +91,7 @@ def observe_pages(
                 # reader can tell "nothing happened here" from "never visited".
                 results.append(Observation(
                     page=url, selectors={}, fetches={}, classes={},
-                    boxes=[], screenshot=f"error: {error}"[:200],
+                    screenshot=f"error: {error}"[:200],
                 ))
             finally:
                 page.close()

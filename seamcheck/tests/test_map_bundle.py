@@ -212,19 +212,11 @@ def _console(rows_in_findings: int, rows_in_changes: int = 2):
     )
 
 
-def _observed(boxes: int):
-    box = {"x": 1, "y": 2, "w": 30, "h": 40, "tag": "div", "id": "", "cls": "card"}
-    return {"at": "2026-08-30T00:00:00", "current": True,
-            "pages": [{"page": "index", "screenshot": None, "boxes": [dict(box) for _ in range(boxes)]},
-                      {"page": "tiny", "screenshot": None, "boxes": [dict(box)]}]}
-
-
 class LazySections(SimpleTestCase):
-    """Rows and boxes are read when a section or a page is opened, not with the map.
+    """Rows are read when a section is opened, not with the map.
 
-    On the game the section rows were 800 KB and the observed boxes 843 KB of a 2.2 MB
-    index - three quarters of what the browser had to parse before drawing anything,
-    for lists most readers never open.
+    On the game the section rows were 800 KB of a 2.2 MB index - a third of what the
+    browser had to parse before drawing anything, for lists most readers never open.
     """
 
     def test_a_long_section_leaves_only_its_counts_in_the_page(self):
@@ -252,22 +244,6 @@ class LazySections(SimpleTestCase):
         payload = map_html._console_payload(_console(60))
         self.assertIn("f-label-59", payload)
         self.assertNotIn('"chunk"', payload)
-
-    def test_an_observed_page_keeps_its_name_and_count_and_moves_its_boxes(self):
-        observed = _observed(300)
-        self.assertEqual(map_html.render_document(_map(), observed=[]).bundle()[0].count("data/o"), 0)
-        document = map_html.render_document(_map(), observed=observed)
-        index, assets = document.bundle()
-
-        self.assertIn('"page":"index"', index.replace(" ", ""))
-        self.assertIn('"count":300', index.replace(" ", ""))
-        self.assertIn('"chunk":"o0"', index.replace(" ", ""))
-        self.assertIn("data/o0.js", assets)
-        # Every page's boxes go, even one: 107 short pages were still 100 KB together.
-        self.assertIn("data/o1.js", assets)
-        self.assertIn('"count":1', index.replace(" ", ""))
-        # The caller's record is untouched: it is written to disk after the map.
-        self.assertEqual(len(observed["pages"][0]["boxes"]), 300)
 
     def test_a_long_file_list_is_a_count_in_the_page_and_a_chunk_beside_it(self):
         files = [{"path": f"app/module_{i}/views.py", "counts": {"connected": i},

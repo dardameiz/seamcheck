@@ -634,7 +634,10 @@ def _serve_plain(rendered: str, root: str, options: dict, assets=None) -> int:
             path = addresses["local"][addresses["local"].index("/", 8):]
             print(f"  public {public}{path}")
     print("")
-    print("  Ctrl-C to stop.")
+    # The link must reach the terminal now, not when the buffer fills: stdout is block-
+    # buffered when it goes to a file, and serve_forever never lets it fill. A run whose
+    # output was redirected served for hours with its address unseen.
+    print("  Ctrl-C to stop.", flush=True)
     if options["open"]:
         import webbrowser
 

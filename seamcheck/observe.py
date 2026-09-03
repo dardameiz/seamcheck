@@ -92,23 +92,7 @@ PROBE = r"""
     });
   }
 
-  // --- where everything identifiable is on screen, for the clickable page -------------
-  window.__seamcheck = {
-    observed: seen,
-    boxes() {
-      const out = [];
-      for (const el of document.querySelectorAll("[id],[class],[data-page],[data-stat]")) {
-        const r = el.getBoundingClientRect();
-        if (r.width < 2 || r.height < 2) continue;
-        out.push({
-          x: Math.round(r.x + scrollX), y: Math.round(r.y + scrollY),
-          w: Math.round(r.width), h: Math.round(r.height),
-          id: el.id || "", cls: (el.getAttribute("class") || "").split(/\s+/).filter(Boolean),
-        });
-      }
-      return out;
-    },
-  };
+  window.__seamcheck = { observed: seen };
 })();
 """
 
@@ -122,8 +106,6 @@ class Observation:
     selectors: dict[str, dict]
     fetches: dict[str, dict]
     classes: dict[str, dict]
-    # {x, y, w, h, id, cls} for every element big enough to point at
-    boxes: list[dict] = dataclasses.field(default_factory=list)
     screenshot: str = ""
 
 
@@ -159,7 +141,8 @@ def load(repo_root: str, sha: str) -> list[Observation]:
             selectors=row.get("selectors", {}),
             fetches=row.get("fetches", {}),
             classes=row.get("classes", {}),
-            boxes=row.get("boxes", []),
+            # Older files carry `boxes` - the geometry a view that no longer exists drew.
+            # Read past it.
             screenshot=row.get("screenshot", ""),
         )
         for row in rows

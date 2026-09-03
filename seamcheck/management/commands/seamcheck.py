@@ -550,6 +550,9 @@ class Command(BaseCommand):
             "\n  binds loopback instead."
         )
         self.stdout.write("  Ctrl-C to stop.")
+        # Block-buffered when redirected, and serve_forever never lets the buffer fill;
+        # a run served for hours once with its address unseen in the log.
+        self.stdout.flush()
         if open_it:
             self._open(addresses["local"])
         try:
