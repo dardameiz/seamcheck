@@ -161,6 +161,13 @@ class ConnectivityMap:
     commits: list[dict] = field(default_factory=list)
     # node id -> "added" | "removed" | "status", populated only in diff mode.
     changed: dict[str, str] = field(default_factory=dict)
+    # Which function calls which, by owner name. Not part of the graph: no symbol, no
+    # status, no finding depends on it - it exists so the map can follow a delegating
+    # handler into the helpers that do its work.
+    calls: dict[str, list[str]] = field(default_factory=dict)
+    # Every function the scan saw defined, and the file it is written in - including the
+    # ones that own no symbol at all, which are precisely the helpers a reader looks up.
+    defined: dict[str, str] = field(default_factory=dict)
 
 
 # Extension -> the name a person would use for it. Deliberately the language, not the
@@ -382,6 +389,8 @@ def build_map(
     names: dict[str, PageName] | None = None,
     commits: list[dict] | None = None,
     services=None,
+    calls: dict[str, list[str]] | None = None,
+    defined: dict[str, str] | None = None,
 ) -> ConnectivityMap:
     adjacency = build_adjacency(graph)
     page_maps = []
@@ -419,4 +428,6 @@ def build_map(
         baseline_sha=baseline_sha,
         commits=commits or [],
         changed=changed,
+        calls=calls or {},
+        defined=defined or {},
     )

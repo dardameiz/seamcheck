@@ -102,12 +102,32 @@ reference project - the first time a release was tested the way a user meets it.
   `submit_push() - 5 symbols · Redis 2 · Postgres 1 · Celery 1` is a handler that should
   be Redis-only, and the Postgres write is the whole diagnosis.
 
+- **Added** — **the map follows calls.** A handler that delegates owns almost nothing
+  itself: the reference project's `submit_push` is a view whose Redis writes live two
+  calls away in a service class, and a function view that stopped at its own body showed
+  the route it answers and nothing else. It now reads the Python call graph, so the
+  function's world is the function *and what it calls*, three levels deep -
+  `submit_push() - 11 symbols (1 its own, 10 through helpers) · Redis 10`, which is the
+  number a reader wants when the handler is slow at thirty thousand players. Under the
+  canvas, **Called by** names everything that calls it, each one a click to that
+  function. The picker offers every function the scan saw defined - 9,664 on the
+  reference project, not just the 1,474 that own a symbol - because a helper that only
+  computes a key owns nothing and is exactly the name people type.
+
+  Resolution is deliberately literal: a def in the same file, a `from x import y` of a
+  project module, `self.method` inside its own class, and a method whose simple name is
+  defined **exactly once** in the whole project. Anything else - `order.save()` where
+  `save` is defined in four places, or any call on an imported library - is left out
+  rather than guessed, which is the same contract `uncertain` keeps. Adds 4 s to a
+  20 s map render on a 12,000-file project, and nothing to a scan: no symbol, status or
+  finding depends on it.
+
 Known open, recorded rather than hidden:
 
-- **A function's world stops at its own body.** The neighbourhood is built from the lines
-  a function contains, so a handler that delegates - `submit_push` calls a service module
-  that writes the keys - shows the route it answers and little else. Following calls into
-  helpers needs a call graph, which the scan does not build yet.
+- **The call graph is Python only, and name-keyed.** JavaScript functions carry their
+  owner but nothing reads their calls yet, so a JS module's world still stops at its own
+  body. And two files that both define `reset` share one entry, because the map's
+  function index is keyed by the name a person types.
 - **The map index is 413 KB on the reference project**, over the 400 KB the plans set as
   the gate, before this release's 15 KB of new picker. The chunked data is not the
   problem; the script itself is.

@@ -770,6 +770,15 @@ def _map_document(repo_root: str, ref: str, progress: Progress | None = None):
         series = summarise_trend(load_trend(repo_root))
     except OSError:  # a read-only checkout still gets a map
         series = summarise_trend([])
+    progress.step("who calls what")
+    # Read here rather than in the scan: no symbol, status or finding depends on it, and
+    # a snapshot that carried it would grow every stored commit for a map-only feature.
+    from seamcheck.callgraph import python_functions
+    try:
+        calls, defined = python_functions(repo_root)
+    except OSError:
+        calls, defined = {}, {}
+
     progress.step("rendering")
     from seamcheck.pipeline import LAST_ADAPTERS
 
@@ -779,6 +788,7 @@ def _map_document(repo_root: str, ref: str, progress: Progress | None = None):
     )
     return map_html.render_document(
         build_map(graph, page_files, git_sha=sha, services=_service_map(repo_root),
+                  calls=calls, defined=defined,
                   baseline=baseline, baseline_sha=baseline_sha if baseline else None,
                   names=page_names(repo_root, _config(), graph),
                   commits=[

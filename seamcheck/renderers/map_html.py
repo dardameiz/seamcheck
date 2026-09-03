@@ -607,6 +607,11 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
 .note:empty { display:none; }
 /* Not a warning - a statement of what is on screen versus what exists. */
 .capnote { color:var(--warn); }
+.callers { margin-top:6px; }
+.callers b { color:var(--muted); font-weight:600; margin-right:5px; }
+.callers button { cursor:pointer; border:0; background:none; padding:0 4px 0 0;
+  color:var(--sig); font-family:var(--mono); font-size:11.5px; }
+.callers button:hover { text-decoration:none; color:var(--ink); }
 /* A deleted symbol is in no current page, so no canvas can show it. Naming it here is
    the difference between "this commit removed one selector" and an empty screen. */
 .gone { padding:0 12px 9px; font-size:11.5px; }
@@ -2160,7 +2165,9 @@ function visible(p) {
   if (funcFilter) {
     const on = lensed(p);
     const here = new Set(on.map(n => n.id));
-    const keep = new Set(on.filter(n => n.owner === funcFilter).map(n => n.id));
+    const family = (p.family && p.family.has(funcFilter)) ? p.family : null;
+    const mine = n => n.owner && (family ? family.has(n.owner) : n.owner === funcFilter);
+    const keep = new Set(on.filter(mine).map(n => n.id));
     if (!keep.size) return keep;
     const adj = new Map();
     p.edges.forEach(e => {
@@ -2679,10 +2686,12 @@ function funcIndex(then) {
       const n = cols.n | 0, names = cols.names;
       const at = rowStarts(names, n), FI = MAPDATA.files;
       dropChunk("functions");
+      const where = new Map();
+      for (let i = 0; i < n; i++) where.set(names.slice(at[i], at[i + 1] - 1), i);
       _funcIndex = {
-        n, lower: names.toLowerCase(), at,
+        n, lower: names.toLowerCase(), at, where,
         count: Int32Array.from(cols.count), page: Int32Array.from(cols.page),
-        file: Int32Array.from(cols.file), on: cols.on || [],
+        file: Int32Array.from(cols.file), on: cols.on || [], calls: cols.calls || [],
         name: i => names.slice(at[i], at[i + 1] - 1),
         row: i => ({name: names.slice(at[i], at[i + 1] - 1), file: FI[cols.file[i]] || "",
                     count: cols.count[i], page: cols.page[i],
@@ -2719,9 +2728,48 @@ function functionsMatching(term, limit = 40) {
 
 function functionRow(name) {
   const ix = funcIndex();
-  if (!ix) return null;
-  for (let i = 0; i < ix.n; i++) if (ix.name(i) === name) return ix.row(i);
-  return null;
+  if (!ix || !ix.where.has(name)) return null;
+  return ix.row(ix.where.get(name));
+}
+
+// A handler that delegates - and most do - owns almost nothing itself: the reference
+// project's `submit_push` is a view whose Redis writes live in a service module two
+// calls away. Asked about the function, a map that stops at its own body shows the route
+// it answers and nothing else: true, and useless. So the world of a function is the
+// function AND what it calls, to a depth, with the callees named on screen so a reader
+// can see whose work they are looking at.
+const CALL_DEPTH = 3;
+
+function functionFamily(name, depth) {
+  const ix = funcIndex();
+  const seen = new Map([[name, 0]]);
+  if (!ix || !ix.where.has(name)) return seen;
+  let front = [ix.where.get(name)];
+  for (let level = 1; level <= depth && front.length; level++) {
+    const next = [];
+    front.forEach(i => (ix.calls[i] || []).forEach(j => {
+      const callee = ix.name(j);
+      if (seen.has(callee)) return;
+      seen.set(callee, level);
+      next.push(j);
+    }));
+    front = next;
+  }
+  return seen;
+}
+
+// ...and the other direction: everything that calls it. One level, because the callers of
+// a caller is the whole application again, and named rather than drawn - a reader asking
+// "what touches submit_push" wants the list, not another canvas.
+function functionCallers(name) {
+  const ix = funcIndex();
+  if (!ix || !ix.where.has(name)) return [];
+  const target = ix.where.get(name);
+  const out = [];
+  for (let i = 0; i < ix.n && out.length < 40; i++) {
+    if ((ix.calls[i] || []).indexOf(target) !== -1) out.push(ix.name(i));
+  }
+  return out;
 }
 
 // ── the function's own page ──────────────────────────────────────────────────
@@ -2735,7 +2783,19 @@ const FN_PAGE = PAGES.push({page: "fn:", title: "", where: "", layer: "", n: 0, 
                             ks: [], nodes: null, edges: null, detailed: true}) - 1;
 
 function buildFunctionPage(name, on, hops) {
-  const pages = (on && on.length ? on : [current]).filter(i => PAGES[i]);
+  const family = functionFamily(name, CALL_DEPTH);
+  const ix = funcIndex();
+  // Every page any member of the family is drawn on: the helper's keys are on the store
+  // layer whether or not the caller's route is.
+  const wanted = new Set(on || []);
+  if (ix) {
+    family.forEach((level, member) => {
+      if (!ix.where.has(member)) return;
+      (ix.row(ix.where.get(member)).on || []).forEach(i => wanted.add(i));
+    });
+  }
+  const pages = [...wanted].filter(i => PAGES[i]);
+  if (!pages.length && PAGES[current]) pages.push(current);
   // Details up front: the synthetic page has no detail chunk of its own, and a card with
   // no snippet is a card that cannot be acted on.
   return Promise.all(pages.map(i => ensureDetail(i))).then(() => {
@@ -2743,7 +2803,7 @@ function buildFunctionPage(name, on, hops) {
     pages.forEach(i => {
       (PAGES[i].nodes || []).forEach(node => {
         known.set(node.id, node);
-        if (node.owner === name) seeds.add(node.id);
+        if (node.owner && family.has(node.owner)) seeds.add(node.id);
       });
       (PAGES[i].edges || []).forEach(e => {
         const key = e.source + "\u0000" + e.target;
@@ -2772,9 +2832,13 @@ function buildFunctionPage(name, on, hops) {
     const st = {};
     nodes.forEach(node => { st[node.status] = (st[node.status] || 0) + 1; });
     const p = PAGES[FN_PAGE];
+    const helpers = family.size - 1;
     p.page = "fn:" + name;
     p.title = name + "()";
-    p.where = "everywhere this function reaches";
+    p.where = helpers
+      ? `and the ${helpers} function${helpers === 1 ? "" : "s"} it calls`
+      : "everywhere this function reaches";
+    p.family = family;
     p.n = nodes.length;
     p.st = st;
     p.ks = [];
@@ -2905,6 +2969,18 @@ function reportEmpty(count) {
       : "<b>Nothing changed here.</b><span>Go back to everything in this scan.</span>";
     return;
   }
+  // A function that touches nothing IS the answer, not a failure to find one: plenty of
+  // functions only compute, and their callers do the touching. Saying so - and offering
+  // the callers, which are on screen already - beats a blank canvas that reads as a bug.
+  if (funcFilter) {
+    const family = PAGES[FN_PAGE] && PAGES[FN_PAGE].family;
+    const helpers = family ? family.size - 1 : 0;
+    box.innerHTML = `<b>${esc(funcFilter)}() touches nothing the scan can see.</b>
+      <span>It${helpers ? ` and the ${helpers} function${helpers === 1 ? "" : "s"} it calls`
+        : ""} make no request, write no key and fill no element, so there is nothing to
+      draw. Whatever it computes is used by its callers, listed under the canvas.</span>`;
+    return;
+  }
   const bits = [];
   if (layer) bits.push((LAYERS.find(([k]) => k === layer) || [, layer])[1]);
   if (statusFilter.size) bits.push([...statusFilter].join(" or "));
@@ -2960,12 +3036,19 @@ const COST_LANES = [
 ];
 
 function functionCost(p) {
-  const mine = p.nodes.filter(n => n.owner === funcFilter);
+  const family = (p.family && p.family.has(funcFilter)) ? p.family : null;
+  const mine = p.nodes.filter(n => n.owner &&
+    (family ? family.has(n.owner) : n.owner === funcFilter));
+  const own = mine.filter(n => n.owner === funcFilter).length;
   const counts = COST_LANES.map(([name, kinds]) =>
     [name, mine.filter(n => kinds.has(n.kind)).length]);
   const said = counts.filter(([, n]) => n).map(([name, n]) => `${name} ${n}`);
+  // "Through helpers" is not a footnote: a handler whose own body does nothing and whose
+  // callee writes Postgres is still the handler that writes Postgres, and a reader has
+  // to be told which of the two they are looking at.
+  const via = mine.length > own ? ` (${own} its own, ${mine.length - own} through helpers)` : "";
   const hops = funcHops > 1 ? `; ${funcHops} hops out` : "";
-  return `${mine.length} symbol${mine.length === 1 ? "" : "s"}`
+  return `${mine.length} symbol${mine.length === 1 ? "" : "s"}${via}`
     + (said.length ? " · " + said.join(" · ") : "") + hops;
 }
 
@@ -3026,6 +3109,20 @@ function draw() {
   // draw() is what WRITES the breadcrumb, so the readout has to be told after it, not
   // before - switchTo asked the question while the answer was still the previous view's.
   if (window.syncReadout) syncReadout();
+  // Who calls this function. Named, and each one picks that function in turn, so
+  // walking up a call chain is a click per level.
+  const callers = document.getElementById("callers");
+  if (callers) {
+    const who = funcFilter ? functionCallers(funcFilter) : [];
+    callers.hidden = !who.length;
+    callers.innerHTML = who.length
+      ? `<b>Called by</b>` + who.map(name =>
+          `<button type="button" data-fn="${esc(name)}">${esc(name)}</button>`).join("")
+      : "";
+    callers.querySelectorAll("button").forEach(el => {
+      el.onclick = () => pickFunction(el.dataset.fn);
+    });
+  }
   const cap = document.getElementById("capnote");
   if (cap) {
     cap.textContent = capped
@@ -5527,17 +5624,26 @@ def _payload(connectivity_map: ConnectivityMap) -> tuple[str, list[Chunk], dict[
     # for anything. Names are a fraction of the symbols - a hot handler owns dozens - so
     # this is small where the search index is large, and it is built the same way: one
     # string, scanned with indexOf, plus columns that become typed arrays on load.
-    func_names = sorted(func_total)
+    # Every function: the ones that own a symbol, and the ones the call graph saw
+    # defined. A helper that only computes a key owns nothing the scan can see, and it is
+    # exactly the name a reader types - what it reaches is one call further down.
+    defined = connectivity_map.defined or {}
+    func_names = sorted(set(func_total) | set(defined))
+    _at = {name_: i for i, name_ in enumerate(func_names)}
     chunks.append(_chunk("functions", {
         "n": len(func_names),
         "names": _column(func_names),
-        "file": [files(func_file.get(name_, "")) for name_ in func_names],
-        "count": [func_total[name_] for name_ in func_names],
+        "file": [files(func_file.get(name_) or defined.get(name_, "")) for name_ in func_names],
+        "count": [func_total.get(name_, 0) for name_ in func_names],
         "page": [func_best.get(name_, (0, 0))[0] for name_ in func_names],
         # Every page any of its symbols is drawn on. A function's world is not on one
         # page - the route is on the page, the keys are on the store layer, and what
         # nothing reaches is in a bucket - so the view unions them.
         "on": [sorted(func_pages.get(name_, ())) for name_ in func_names],
+        # Who it calls, as indices into this same list. Only functions the index knows,
+        # because a callee the map cannot draw is a row the reader cannot open.
+        "calls": [sorted(_at[c] for c in (connectivity_map.calls or {}).get(name_, ())
+                         if c in _at) for name_ in func_names],
     }))
     chunks.append(_chunk("commits", [
         {"changed": c.get("changed") or {}, "changes": c.get("changes") or []}
@@ -5826,6 +5932,10 @@ def render_document(connectivity_map: ConnectivityMap, console=None, files=None,
         '<div class="crumbrow"></div>'
         '<div class="note" id="cmnote"></div>'
         '<div class="note capnote" id="capnote"></div>'
+        # "Everything touching submit_push" is a list, not a second canvas: the callers of
+        # a caller is the whole application again, and a reader asking the question wants
+        # names they can click.
+        '<div class="note callers" id="callers" hidden></div>'
         '<div class="gone" id="gone"></div>'
         "</div>",
         '<div class="zoom"><button id="zo" type="button" aria-label="Zoom out">\u2212</button>'

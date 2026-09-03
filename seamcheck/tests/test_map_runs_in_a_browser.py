@@ -1458,6 +1458,10 @@ class TheFunctionFilter(SimpleTestCase):
             # The accident: one Postgres write in a handler that should be Redis-only.
             symbol("db_table_use", "pointless_push", owner="submit_push"),
             symbol("celery_task", "tasks.settle", owner="submit_push"),
+            # Owned by a helper, two calls down: invisible to a view that stops at the
+            # handler's own body, and the reason the call graph exists.
+            symbol("redis_key_use", "user:{id}:streak", file="app/services.py",
+                   owner="touch"),
             # Another function entirely, so the filter has something to exclude.
             symbol("redis_key_use", "leaderboard:global", owner="get_user_stats"),
         ]
@@ -1471,7 +1475,13 @@ class TheFunctionFilter(SimpleTestCase):
         graph = Graph(symbols=symbols, edges=edges)
         report = build_report(graph=graph, diff=None, entries=[], git_sha="0" * 12)
         connectivity = build_map(graph, {"orders-main": {js, "app/views.py", "app/urls.py"}},
-                                 git_sha="0" * 12)
+                                 git_sha="0" * 12,
+                                 # The shape the feature exists for: the handler delegates,
+                                 # and a helper two calls down writes the third key.
+                                 calls={"submit_push": ["record"], "record": ["touch"]},
+                                 defined={"submit_push": "app/views.py",
+                                          "record": "app/services.py",
+                                          "touch": "app/services.py"})
         document = render_document(connectivity, console=build_console(graph, report))
         path = pathlib.Path(tempfile.mkdtemp()) / "map.html"
         path.write_text(document.single_file(), encoding="utf-8")
@@ -1509,9 +1519,15 @@ class TheFunctionFilter(SimpleTestCase):
             page.wait_for_timeout(300)
             wider = page.evaluate(
                 "() => [...document.querySelectorAll('#cv g[data-id]')].map(g => g.dataset.id)")
+            page.evaluate("() => pickFunction('record')")
+            page.wait_for_function("() => funcFilter === 'record'")
+            page.wait_for_timeout(300)
+            called_by = page.evaluate("() => document.getElementById('callers').textContent")
             page.click("#fnoff")
             page.wait_for_timeout(300)
             cleared = page.evaluate("() => funcFilter")
+            self.assertNotEqual(page.evaluate("() => current"),
+                                page.evaluate("() => FN_PAGE"))
             after = page.evaluate(
                 "() => [...document.querySelectorAll('#cv g[data-id]')].map(g => g.dataset.id)")
             browser.close()
@@ -1526,7 +1542,9 @@ class TheFunctionFilter(SimpleTestCase):
         self.assertNotIn("redis_key_use:leaderboard:global", drawn)
         # The cost line is the point: one Postgres write where there should be none.
         self.assertIn("submit_push()", crumb)
-        self.assertIn("Redis 2", crumb)
+        self.assertIn("Redis 3", crumb)
+        self.assertIn("through helpers", crumb)
+        self.assertIn("redis_key_use:user:{id}:streak", drawn)
         self.assertIn("Postgres 1", crumb)
         self.assertIn("Celery 1", crumb)
         # Widening reaches the browser call one hop further out.
@@ -1535,4 +1553,7 @@ class TheFunctionFilter(SimpleTestCase):
         self.assertIsNone(cleared)
         # Cleared means cleared: another function's key is drawable again, and the reader
         # is off the synthetic page.
-        self.assertIn("redis_key_use:leaderboard:global", after)
+        # ...and the canvas is a real page again, drawing what the function view hid.
+        self.assertIn("module:static/js/orders.js", after)
+        # Who calls it: the reverse of the same map, named under the canvas.
+        self.assertIn("submit_push", called_by)
