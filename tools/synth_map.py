@@ -47,20 +47,25 @@ def build(total: int, seed: int = 1) -> ConnectivityMap:
     rnd = random.Random(seed)
     # Page sizes: three buckets share 45%, twelve bundles share 20%, the rest is spread
     # over ordinary pages of 40-400 until the total is reached.
+    # Buckets last, as the real map orders them: the page a reader opens on is an
+    # ordinary one, and the 45% that is unreached is decoded only if they go there.
     sizes = []
     bucket = int(total * 0.45)
-    sizes += [bucket // 2, bucket // 3, bucket - bucket // 2 - bucket // 3]
+    buckets = [bucket // 2, bucket // 3, bucket - bucket // 2 - bucket // 3]
     heavy = int(total * 0.20)
     sizes += [heavy // 12] * 12
-    left = total - sum(sizes)
+    left = total - sum(sizes) - bucket
     while left > 0:
         n = min(left, rnd.randint(40, 400))
         sizes.append(n)
         left -= n
+    sizes += buckets
     pages, sym = [], 0
     for index, n in enumerate(sizes):
-        name = (["unreached:template", "unreached:js", "unreached:css"][index] if index < 3
-                else f"bundle-{index}" if index < 15 else f"page-{index}")
+        which = index - (len(sizes) - 3)
+        name = (["unreached:template", "unreached:js", "unreached:css"][which] if which >= 0
+                else f"bundle-{index}" if index < 12 else f"page-{index}")
+        index = which if which >= 0 else 3 + index  # bucket kind for the folder/ext below
         nodes, edges = [], []
         page_node = MapNode(id=f"page:{name}", label=name, kind="page", status="connected")
         nodes.append(page_node)
@@ -153,6 +158,8 @@ def main() -> int:
         cdp.send("Performance.enable")
 
         def heap():
+            # After a collection: what the page HOLDS, not what parsing left behind.
+            cdp.send("HeapProfiler.collectGarbage")
             m = {x["name"]: x["value"] for x in cdp.send("Performance.getMetrics")["metrics"]}
             return f"{m['JSHeapUsedSize'] / 1048576:.0f} MB"
 
@@ -175,7 +182,7 @@ def main() -> int:
         t0 = time.time()
         page.evaluate("searchIndex(() => window._idxDone = true)")
         page.wait_for_function("window._idxDone", timeout=120000)
-        n = page.evaluate("_index.length")
+        n = page.evaluate("_index.n")
         t1 = time.time()
         hits = page.evaluate("searchEverywhere('user').length")
         print(f"  search index {n:,} rows in {t1 - t0:.2f}s, 'user' {hits} hits in "

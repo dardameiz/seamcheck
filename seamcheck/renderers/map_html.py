@@ -1301,6 +1301,10 @@ function readChunk(name) {
   CHUNKS.set(name, promise);
   return promise;
 }
+// Once a chunk's rows live in PAGES (or the index), the parsed JSON is a second copy -
+// 33 MB for a 450k-symbol page. The cache keeps a resolved null so the text, gone from
+// the DOM, is never looked for again; every reader checks its own state first.
+function dropChunk(name) { CHUNKS.set(name, Promise.resolve(null)); }
 
 function ensurePage(index) {
   const p = PAGES[index];
@@ -1320,6 +1324,7 @@ function ensurePage(index) {
       byId.set(n.id, n);
       return n;
     });
+    dropChunk("p" + index);
     return p;
   });
 }
@@ -1339,6 +1344,7 @@ function ensureDetail(index) {
       });
     }
     p.detailed = true;
+    dropChunk("d" + index);
     return p;
   });
 }
@@ -2204,46 +2210,94 @@ const hit = n => !query || (n.label + " " + n.file).toLowerCase().includes(query
 //
 // Built once, lazily: 37,000 nodes is a list worth keeping, and worth not building for a
 // reader who never types anything.
+//
+// Columnar, not a row per symbol. Turning every row into an object with its own search
+// string cost ~300 bytes of heap each - 633 MB at two million symbols, measured. The
+// ids and labels arrive as one newline-joined string apiece, the numeric columns become
+// typed arrays, and a row is materialised only when it is a result.
 let _index = null, _indexLoading = null;
-// Synchronous once loaded; before that it returns an empty list and starts the load,
-// and `then` runs the caller again when the rows are in. The box shows "Opening the
-// index…" for the one pause a reader will ever see from it.
+// Where each row starts in a joined string, plus one past the end, so row i is
+// text.slice(at[i], at[i + 1] - 1). One pass, once.
+function rowStarts(text, count) {
+  const at = new Uint32Array(count + 1);
+  let pos = 0;
+  for (let i = 0; i < count; i++) { at[i] = pos; pos = text.indexOf("\n", pos) + 1; }
+  at[count] = text.length + 1;
+  return at;
+}
+// Synchronous once loaded; before that it returns null and starts the load, and `then`
+// runs the caller again when the columns are in. The box shows "Opening the index…"
+// for the one pause a reader will ever see from it.
 function searchIndex(then) {
   if (_index) return _index;
   if (!_indexLoading) {
-    _indexLoading = readChunk("search").then(rows => {
+    _indexLoading = readChunk("search").then(cols => {
+      cols = cols || {n: 0, ids: "", labels: "", kind: [], status: [], file: [], line: [], page: []};
+      const n = cols.n | 0;
+      const ids = cols.ids, labels = cols.labels;
+      const idAt = rowStarts(ids, n), labelAt = rowStarts(labels, n);
       const K = MAPDATA.kinds, S_ = MAPDATA.statuses, FI = MAPDATA.files;
-      _index = (rows || []).map(r => {
-        const file = FI[r[4]] || "", kind = K[r[2]];
-        return {id: r[0], label: r[1], kind: kind, status: S_[r[3]], file: file,
-                line: r[5], page: r[6],
-                hay: (r[1] + " " + file + " " + kind).toLowerCase()};
-      });
+      const kind = Int32Array.from(cols.kind), status = Int32Array.from(cols.status);
+      const file = Int32Array.from(cols.file), line = Int32Array.from(cols.line);
+      const page = Int32Array.from(cols.page);
+      dropChunk("search");
+      _index = {
+        n, lower: labels.toLowerCase(), labelAt, kind, status, file, line, page,
+        label: i => labels.slice(labelAt[i], labelAt[i + 1] - 1),
+        row: i => ({id: ids.slice(idAt[i], idAt[i + 1] - 1),
+                    label: labels.slice(labelAt[i], labelAt[i + 1] - 1),
+                    kind: K[kind[i]], status: S_[status[i]], file: FI[file[i]] || "",
+                    line: line[i] || null, page: page[i]}),
+      };
       return _index;
     });
   }
   if (then) _indexLoading.then(then, () => {});
-  return [];
+  return null;
+}
+
+// The row a character offset falls in: the last start at or before it.
+function rowOf(at, offset) {
+  let lo = 0, hi = at.length - 2;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (at[mid] <= offset) lo = mid; else hi = mid - 1;
+  }
+  return lo;
 }
 
 // Ranked, because a substring match puts "cart" behind "shopping-cart-badge-count" and a
 // reader typing four letters means the four-letter thing.
 function searchEverywhere(term, limit = 60) {
   const needle = term.trim().toLowerCase();
-  if (needle.length < 2) return [];
-  const out = [];
-  for (const row of searchIndex()) {
-    const at = row.hay.indexOf(needle);
-    if (at === -1) continue;
-    const label = row.label.toLowerCase();
-    const score = label === needle ? 0
-      : label.startsWith(needle) ? 1
-      : label.includes(needle) ? 2 : 3;
-    out.push({row, score, at});
-    if (out.length > 4000) break;
+  const ix = searchIndex();
+  if (needle.length < 2 || !ix) return [];
+  const found = new Map();  // row -> score
+  // Labels: one scan of one string, at memchr speed, one hit per row.
+  const lower = ix.lower, at = ix.labelAt;
+  let pos = 0;
+  while (found.size <= 4000) {
+    const hit = lower.indexOf(needle, pos);
+    if (hit === -1) break;
+    const i = rowOf(at, hit);
+    const label = lower.slice(at[i], at[i + 1] - 1);
+    found.set(i, label === needle ? 0 : label.startsWith(needle) ? 1 : 2);
+    pos = at[i + 1];
   }
-  out.sort((a, b) => a.score - b.score || a.row.label.length - b.row.label.length);
-  return out.slice(0, limit).map(x => x.row);
+  // Files and kinds are interned tables of a few thousand at most: match those, then
+  // the rows are a typed-array compare each.
+  const fileHit = new Set(), kindHit = new Set();
+  MAPDATA.files.forEach((f, k) => { if (f.toLowerCase().includes(needle)) fileHit.add(k); });
+  MAPDATA.kinds.forEach((f, k) => { if (f.toLowerCase().includes(needle)) kindHit.add(k); });
+  if (fileHit.size || kindHit.size) {
+    const file = ix.file, kind = ix.kind;
+    for (let i = 0; i < ix.n && found.size <= 4000; i++) {
+      if (!found.has(i) && (fileHit.has(file[i]) || kindHit.has(kind[i]))) found.set(i, 3);
+    }
+  }
+  const out = [...found].sort((a, b) => a[1] - b[1]
+    || (at[a[0] + 1] - at[a[0]]) - (at[b[0] + 1] - at[b[0]]));
+  return out.slice(0, limit).map(([i]) => ix.row(i));
 }
 
 // Open a result where it lives: the page that holds it, the node selected, its chain lit.
@@ -2848,8 +2902,17 @@ function findingsIn(file) {
   };
   // The search index is one row per symbol in the whole scan; until a reader has typed
   // something it is not loaded, and the loaded pages are what there is.
-  if (_index) _index.forEach(mark);
-  else PAGES.forEach(p => (p.nodes || []).forEach(mark));
+  if (_index) {
+    const fi = MAPDATA.files.indexOf(file);
+    const S_ = MAPDATA.statuses, connected = S_.indexOf("connected");
+    if (fi >= 0) {
+      for (let i = 0; i < _index.n; i++) {
+        if (_index.file[i] === fi && _index.line[i] && _index.status[i] !== connected) {
+          marks.set(_index.line[i], S_[_index.status[i]]);
+        }
+      }
+    }
+  } else PAGES.forEach(p => (p.nodes || []).forEach(mark));
   return marks;
 }
 
@@ -3936,16 +3999,22 @@ let _obsIndex = null;
 const OBS_INDEX = {
   get: key => {
     if (!_obsIndex) {
+      // The index is a chunk, loaded on first use; until it is in, nothing matches and
+      // the observed view is drawn again when it lands.
+      const ix = searchIndex(() => { if (mode === "page") renderPanel(); });
+      if (!ix) return undefined;
       _obsIndex = new Map();
       // An id matches an id and a class matches a class. Keying both against the same
       // label made every Tailwind utility on the page "match" a template element with the
       // same name, which is how the view reported 415 of 415 - a number that is a tell,
       // not a result. The symbol id already carries which one it is:
       //   dom_attr:class:main-push-area:template.html:1280
-      searchIndex().forEach(row => {
-        if (row.kind !== "dom_attr") return;
+      const attr = MAPDATA.kinds.indexOf("dom_attr");
+      for (let i = 0; i < ix.n; i++) {
+        if (ix.kind[i] !== attr) continue;
+        const row = ix.row(i);
         const sub = String(row.id).split(":")[1];
-        if (sub !== "id" && sub !== "class") return;
+        if (sub !== "id" && sub !== "class") continue;
         const k = sub + ":" + row.label;
         // First wins, and a finding beats a clean one: if a name is declared in twelve
         // templates the interesting copy is the one with something wrong with it.
@@ -3953,7 +4022,7 @@ const OBS_INDEX = {
         if (!had || (had.status === "connected" && row.status !== "connected")) {
           _obsIndex.set(k, row);
         }
-      });
+      }
     }
     return _obsIndex.get(key);
   },
@@ -4675,7 +4744,25 @@ def _payload(connectivity_map: ConnectivityMap) -> tuple[str, str]:
         chunks.append(_chunk(f"d{index}", {
             field: [getattr(node, field) or "" for node in nodes] for field in _DETAIL_FIELDS
         }))
-    chunks.append(_chunk("search", search_rows))
+    # Columnar, with the two text columns as ONE newline-joined string each. A row per
+    # symbol as a small array cost ~300 bytes of heap once the page had turned each into
+    # an object with a search string: 633 MB at two million symbols. One string of
+    # labels is a memchr-speed scan and a fortieth of the heap; the numeric columns
+    # become typed arrays on load. A label never holds a newline, so it is the safe
+    # separator; an id is made safe the same way.
+    def _column(values):
+        return "\n".join(v.replace("\n", " ") for v in values)
+
+    chunks.append(_chunk("search", {
+        "n": len(search_rows),
+        "ids": _column(r[0] for r in search_rows),
+        "labels": _column(r[1] for r in search_rows),
+        "kind": [r[2] for r in search_rows],
+        "status": [r[3] for r in search_rows],
+        "file": [r[4] for r in search_rows],
+        "line": [r[5] or 0 for r in search_rows],
+        "page": [r[6] for r in search_rows],
+    }))
     chunks.append(_chunk("commits", [
         {"changed": c.get("changed") or {}, "changes": c.get("changes") or []}
         for c in commits

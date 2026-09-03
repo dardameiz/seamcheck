@@ -36,8 +36,15 @@ backend that answered `uncertain` everywhere would score 100% precision and be u
   ordinary pages, fan-in wires, notes and context - and renders it through the same
   `render()`. At 730k symbols (≈10M lines at the measured 73 symbols per 1k lines): 43.7 MB
   file, opens in 0.66 s at 116 MB heap, biggest page (164k symbols) draws in 50 ms, no
-  errors. At 2M symbols (≈27M lines): 120 MB file, 1.5 s, 218 MB. The search index is
-  the part that grows without bound (633 MB heap at 2M) and is the next thing to shard.
+  errors. At 2M symbols (≈27M lines): 112 MB file, 0.8 s, 18 MB.
+- **Search holds columns, not rows.** The index used to be one JSON array of 7-field
+  objects, inflated on the first keystroke - ~330 bytes of heap per symbol, 633 MB at 2M.
+  It is now seven columns: ids and labels as two newline-joined strings, kind / status /
+  file / line / page as `Int32Array`s over the interned tables. A query is one
+  `indexOf` walk over the lowercased label string plus a typed-array compare, and only the
+  rows it returns become objects. 2M symbols: index in 0.63 s, a query in 4 ms, **633 →
+  225 MB**; 730k: 243 → 83 MB. Parsed chunks are also released once their rows are in
+  place (the 450k-symbol bucket was being held twice: 2M heap at open **132 → 18 MB**).
 - **The Stripe, Celery and GraphQL layers are pages the renderer builds**, not a union the
   browser assembled from every page on open (which forced every page to be decoded).
   Hidden from the page picker; empty when the scan found nothing for that service.
