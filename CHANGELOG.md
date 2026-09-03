@@ -17,7 +17,20 @@ Coverage and precision have **different denominators** and neither is meaningful
 backend that answered `uncertain` everywhere would score 100% precision and be useless.
 `uncertain` is not counted as a claim in precision, because it is not a claim.
 
-## Unreleased
+## 0.9.0 — 3 Sep 2026
+
+**Measured:** coverage **79%** across 47 projects and 137,054 symbols (Flask 91%, Django
+83%, FastAPI 56%, Express 46%, Next.js 38%, NestJS 32%) · precision **46%** (158
+hand-labelled claims) · recall **6/6** · render **46/46**.
+
+A release about size. The map used to be one file that grew with the repository and was
+parsed in full before the first paint - on a 500k-line game that was 22.6 MB, and opening it
+at Retina scale with a trace running took a MacBook down. The file a reader opens is now
+386 KB for that same game, and it stays small at any size because everything that grows
+with the code - the graph, the notes, the search index, the review lists, the observed
+pages, the file tree - is read the moment it is looked at and not before. The scan side got
+the same treatment: memory is bounded, every file is parsed once, and a 21,000-file
+monorepo that used to lose its entire JavaScript layer keeps it.
 
 - **The map can be written as a folder, so the file a reader opens stays small however
   big the repository is.** `seamcheck map --out map/` (or `--bundle`) writes `index.html`
@@ -149,9 +162,6 @@ Known open, recorded rather than hidden:
 - Dead CSS from earlier layouts is still in the map stylesheet (`.pill`, `.top`,
   `.legendbar`, `.filters`): harmless, ~2 KB, to go in a cleanup pass once the stale
   renderer tests that still assert some of it are rewritten.
-- One corpus repo's JavaScript parser exits 1 under Node 23 (`parse_js.bundle.mjs
-  exited 1`); the other extractors still run, so it is not a CRASH row, but that repo's
-  JS symbols are missing from its scan.
 
 ## 0.8.2 — 3 Sep 2026
 
