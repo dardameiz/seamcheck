@@ -67,8 +67,14 @@ def _literal(node: dict | None) -> str | None:
 def _resolve(importer: str, target: str) -> str:
     """`require('./routes/users')` -> the file it actually names."""
     base = os.path.normpath(os.path.join(os.path.dirname(importer), target))
+    # TypeScript too. `require('../shared/url-utils')` in a TS codebase names
+    # `url-utils.ts`, and resolving it to a `.js` that does not exist quietly broke every
+    # chain that crossed a TypeScript module - on Ghost, the mount that carries
+    # `/ghost/api` in front of the entire admin API.
     for candidate in (base, f"{base}.js", f"{base}.mjs", f"{base}.cjs",
-                      os.path.join(base, "index.js")):
+                      f"{base}.ts", f"{base}.tsx", f"{base}.mts", f"{base}.cts",
+                      os.path.join(base, "index.js"), os.path.join(base, "index.ts"),
+                      os.path.join(base, "index.tsx")):
         if os.path.isfile(candidate):
             return candidate
     return f"{base}.js"
@@ -116,7 +122,14 @@ class _File:
         # the dominant Express idiom for a route module, and the export is a FACTORY rather
         # than the router itself. Ghost writes every one of its route files this way.
         self.exports_factory = False
-        self.reexports: str | None = None    # `module.exports = require('./routes')` 
+        self.reexports: str | None = None    # `module.exports = require('./routes')`
+        # `const BASE_API_PATH = '/ghost/api'` - a mount prefix is as likely to be a
+        # constant as a literal in any codebase with more than one entry point, and a
+        # dropped prefix does not lose one route: it moves every route beneath it.
+        self.constants: dict[str, str] = {}
+        # `const { BASE_API_PATH } = require('../shared/url-utils')` - the same constant,
+        # one file away, which is where a shared prefix always lives.
+        self.imported: dict[str, tuple[str, str]] = {}   # local -> (file, exported name)
 
     def read(self, ast: dict) -> None:
         # The tree is read once and not kept: on a large repository the trees do not all
@@ -134,6 +147,9 @@ class _File:
     def _read_declaration(self, node: dict) -> None:
         name = (node.get("id") or {}).get("name")
         init = node.get("init") or {}
+        if name and init.get("type") == "Literal" and isinstance(init.get("value"), str):
+            self.constants[name] = init["value"]
+            return
         if not name or init.get("type") != "CallExpression":
             return
         callee = init.get("callee") or {}
@@ -146,15 +162,28 @@ class _File:
             self.routers.add(name)
 
     def _read_require(self, node: dict) -> None:
-        name = (node.get("id") or {}).get("name")
+        identifier = node.get("id") or {}
+        name = identifier.get("name")
         init = node.get("init") or {}
-        if not name or init.get("type") != "CallExpression":
+        if init.get("type") != "CallExpression":
             return
         if (init.get("callee") or {}).get("name") != "require":
             return
         target = _literal((init.get("arguments") or [None])[0])
-        if target and target.startswith("."):
-            self.requires[name] = _resolve(self.path, target)
+        if not target or not target.startswith("."):
+            return
+        resolved = _resolve(self.path, target)
+        if name:
+            self.requires[name] = resolved
+            return
+        # `const { BASE_API_PATH } = require('./url-utils')` - destructured, so there is
+        # no single name to bind. Each property is its own import.
+        if identifier.get("type") == "ObjectPattern":
+            for prop in identifier.get("properties") or []:
+                local = (prop.get("value") or {}).get("name")
+                exported = (prop.get("key") or {}).get("name")
+                if local and exported:
+                    self.imported[local] = (resolved, exported)
 
     def _read_export(self, node: dict) -> None:
         if node.get("type") == "ExportDefaultDeclaration":
@@ -236,8 +265,24 @@ class _File:
                 self.routes.append((owner, method.upper(), path, _line(node)))
             return
 
-        if method in ("use", "register"):
-            prefix = _literal(arguments[0] if arguments else None)
+        # `use`, `register`, and anything ENDING in "use" - Ghost mounts every one of its
+        # API routers with `lazyUse`, a wrapper it added to its own express app so the
+        # module behind the mount is required lazily. The path and the module argument
+        # still have to look like a mount, so a method that merely ends in "use" cannot
+        # invent one on its own.
+        if method in ("use", "register") or (len(method) > 3 and method.endswith("Use")):
+            first = arguments[0] if arguments else None
+            prefix = _literal(first)
+            prefix_from = None
+            # An identifier in FIRST position is a path only when something follows it:
+            # `use(versionMatch)` is one middleware and no path at all, and reading it as
+            # a prefix mounts the app under a name.
+            if (prefix is None and len(arguments) >= 2
+                    and (first or {}).get("type") == "Identifier"):
+                # Resolved at scan time, when every file has been read: the constant is
+                # usually in another module, and this one has not been opened yet.
+                prefix = _CONSTANT_MARK + (first.get("name") or "")
+                prefix_from = id(first)
             if method == "register":
                 # `register(plugin, { prefix: '/api' })` - the path is not argument 0.
                 prefix = _options_prefix(arguments) or prefix
@@ -248,6 +293,11 @@ class _File:
             for argument in arguments:
                 if argument.get("type") in ("Literal", "TemplateLiteral", "ObjectExpression"):
                     continue
+                # ...and never the argument that just supplied the path. `lazyUse(
+                # BASE_API_PATH, require('../api'))` mounted the app under a router named
+                # `BASE_API_PATH`, which is the prefix wearing the child's hat.
+                if prefix_from is not None and id(argument) == prefix_from:
+                    continue
                 # `use('/x', router)` and `use('/x', routes())` are the same mount; the
                 # second is what a factory export forces every caller to write.
                 name = argument.get("name")
@@ -256,7 +306,7 @@ class _File:
                     # `use('/x', require('./y'))` mounts a module without ever naming it.
                     if callee.get("name") == "require":
                         target = _literal((argument.get("arguments") or [None])[0])
-                        if target and target.startswith(".") and prefix:
+                        if target and target.startswith(".") and prefix is not None:
                             self.mounts.append((
                                 (_resolve(self.path, target), "<default>"),
                                 (self.path, owner), prefix,
@@ -266,8 +316,19 @@ class _File:
                 if name:
                     child = name
                     break
-            if child and prefix and prefix.startswith("/"):
+            # `use(router)` with no path mounts at the parent's own root. It contributes
+            # nothing to the path and everything to the CHAIN: without it the parent's
+            # prefix never reaches the routes underneath.
+            if child and prefix is None:
+                prefix = ""
+            if child and (prefix == "" or prefix.startswith("/")
+                          or prefix.startswith(_CONSTANT_MARK)):
                 self.mounts.append((self.key(child), (self.path, owner), prefix))
+
+
+# A prefix that is a name, not a path yet. Resolved in scan() once every file is read;
+# a mount still holding one of these is dropped rather than mounted at a made-up path.
+_CONSTANT_MARK = "\x00const:"
 
 
 def _options_prefix(arguments: list[dict]) -> str | None:
@@ -339,10 +400,35 @@ class ExpressAdapter:
                 if source.exported == name or (source.exports_factory and len(source.routers) == 1):
                     alias[(source.path, name)] = (source.path, "<default>")
 
+        # Every constant every file declares, so a prefix written as a name can be looked
+        # up wherever it was defined.
+        constants = {(f.path, name): value
+                     for f in _all for name, value in f.constants.items()}
+
+        def resolve_prefix(source: _File, prefix: str) -> str | None:
+            if not prefix.startswith(_CONSTANT_MARK):
+                return prefix
+            name = prefix[len(_CONSTANT_MARK):]
+            if name in source.constants:
+                return source.constants[name]
+            where = source.imported.get(name)
+            if where:
+                path, exported = where
+                found = constants.get((path, exported))
+                if found is not None:
+                    return found
+            # Unknown. Dropping the mount loses a prefix; mounting at a made-up path
+            # moves every route under it to somewhere that does not exist, and reports
+            # each one as a route the frontend calls and the server does not serve.
+            return None
+
         parents: dict[tuple[str, str], tuple[tuple[str, str] | None, str]] = {}
         for source in files:
             for child, parent, prefix in source.mounts:
-                parents[follow(child)] = (parent, prefix)
+                resolved = resolve_prefix(source, prefix)
+                if resolved is None:
+                    continue
+                parents[follow(child)] = (parent, resolved)
 
         def full_prefix(keys: list[tuple[str, str]]) -> str:
             chain: list[str] = []

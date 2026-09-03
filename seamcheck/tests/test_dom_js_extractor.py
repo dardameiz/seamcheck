@@ -197,3 +197,70 @@ class NamedInAConstantTests(SimpleTestCase):
             const C = ['known-thing', 'known-thing'];
         """, {"known-thing": "id"})
         self.assertEqual(len(found), 1, [(s.sub, s.line) for s in found])
+
+
+class JsxIsMarkupTests(SimpleTestCase):
+    """In a React codebase the component file IS the markup, and it was never read.
+
+    saleor-dashboard's CSS modules query `[data-test-id="swatch-preview"]`,
+    `[data-state]` and `[data-highlighted]`; every one of those attributes is written in
+    a sibling `.tsx`, and the scan - which read only Django templates as markup - called
+    all twelve of them elements nothing renders.
+    """
+
+    def _definitions(self, source: str, name: str = "Widget.tsx"):
+        import tempfile
+        import textwrap
+
+        from seamcheck.extractors.dom_js_extractor import extract_js_dom_definitions
+
+        path = Path(tempfile.mkdtemp()) / name
+        path.write_text(textwrap.dedent(source), encoding="utf-8")
+        return sorted((s.sub, s.label) for s in extract_js_dom_definitions([str(path)]))
+
+    def test_an_id_written_in_jsx_declares_the_element(self):
+        self.assertIn(("id", "swatch-root"), self._definitions("""
+            export const Swatch = () => <div id="swatch-root" />;
+        """))
+
+    def test_a_data_attribute_written_in_jsx_declares_it(self):
+        found = self._definitions("""
+            export const Row = ({ hot }) => (
+              <div data-test-id="swatch-preview" data-highlighted={hot} />
+            );
+        """)
+        self.assertIn(("data", "test-id"), found)
+        # The NAME is the declaration even when the value is a variable: a selector for
+        # the attribute is not reaching for something nobody writes.
+        self.assertIn(("data", "highlighted"), found)
+
+    def test_a_class_written_in_jsx_declares_it(self):
+        self.assertIn(("class", "swatch"), self._definitions("""
+            export const Swatch = () => <div className="swatch tall" />;
+        """))
+
+    def test_a_selector_in_a_string_does_not_declare_an_element(self):
+        # `\b` matches between the `-` and the `id` of `data-test-id`, so this SELECTOR
+        # was read as markup declaring `id="swatch-preview"`. Inventing an element is
+        # worse than missing one: it silences a true finding about a missing element.
+        self.assertEqual(self._definitions("""
+            export function find() {
+              return document.querySelector('[data-test-id="swatch-preview"]');
+            }
+        """), [])
+
+    def test_a_data_class_attribute_does_not_declare_a_class(self):
+        self.assertEqual(self._definitions("""
+            export const html = '<div data-class="not-a-class"></div>';
+        """), [])
+
+    def test_real_generated_markup_still_declares(self):
+        # The rule that had to survive the boundary fix: markup built as a string is how
+        # most JS-created elements arrive.
+        found = self._definitions("""
+            export function render(el) {
+              el.innerHTML = '<div id="live-one" class="live-two"></div>';
+            }
+        """)
+        self.assertIn(("id", "live-one"), found)
+        self.assertIn(("class", "live-two"), found)

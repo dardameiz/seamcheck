@@ -499,11 +499,16 @@ def extract_js_css_tokens(
 _CLASS_LIST_METHODS = frozenset({"add", "remove", "toggle", "replace", "contains"})
 # The closing quote is optional: a template literal splits at every ${...}, so a
 # quasi routinely ends mid-attribute (`<div class="row ` before the hole).
-_CLASS_ATTR_RE = re.compile(r"""\bclass\s*=\s*["']([^"']*)(?:["']|$)""")
+# `\b` is not enough on the left: between the `-` of `data-test-id` and its `id` there IS
+# a word boundary, so `[data-test-id="swatch-preview"]` - a SELECTOR, sitting in a string -
+# was read as markup declaring `id="swatch-preview"`. Inventing an element is worse than
+# missing one: a real finding about a missing element goes quiet, because the scan now
+# believes something declares it.
+_CLASS_ATTR_RE = re.compile(r"""(?<![\w-])class\s*=\s*["']([^"']*)(?:["']|$)""")
 # The id half of the same idea. Only classes were ever read out of generated markup, so an
 # element JavaScript builds with an id was invisible - and then every querySelector looking
 # for it reported an element no template renders.
-_ID_ATTR_RE = re.compile(r"""\bid\s*=\s*["']([^"'\s]+)["']""")
+_ID_ATTR_RE = re.compile(r"""(?<![\w-])id\s*=\s*["']([^"'\s]+)["']""")
 _ID_PROPERTIES = frozenset({"id", "className"})
 # A class token is written by a human or a utility framework; anything carrying JS
 # punctuation is an interpolation fragment, not a name.
@@ -797,6 +802,29 @@ def _definitions_in(path: str, ast_root: dict, line_offset: int = 0) -> list[Sym
                     else:
                         for token in _class_tokens(text):
                             _emit("class", token, line, enclosing, f"{{ {key}: '{text}' }}")
+
+        # A JSX attribute IS markup. In a React, Preact or Solid codebase the component
+        # file is where every element is written, and this reader only ever read Django
+        # templates as markup - so on those projects the whole "does this element exist"
+        # side of the DOM lens was blind. saleor-dashboard's CSS modules query
+        # `[data-test-id="swatch-preview"]`, `[data-state]` and `[data-highlighted]`, and
+        # every one of those attributes is written in a sibling .tsx: twelve findings,
+        # not one of them true.
+        elif node_type == "JSXAttribute":
+            attribute = ((node.get("name") or {}).get("name") or "")
+            value = node.get("value") or {}
+            if attribute == "id":
+                for text in _literal_strings(value):
+                    _emit("id", text.strip(), line, enclosing, f'id="{text}"')
+            elif attribute.startswith("data-") and len(attribute) > 5:
+                # The NAME is the declaration; the value is often a variable, and
+                # `data-x={undefined}` renders nothing - but a selector for that
+                # attribute is still not reaching for something nobody writes.
+                _emit("data", attribute[5:], line, enclosing, f"{attribute}=… in JSX")
+            elif attribute in ("className", "class"):
+                for text in _literal_strings(value):
+                    for token in _class_tokens(text):
+                        _emit("class", token, line, enclosing, f'{attribute}="{text}"')
 
         elif node_type == "CallExpression":
             callee = node.get("callee") or {}

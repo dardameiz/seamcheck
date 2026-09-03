@@ -1,15 +1,16 @@
 {
-  "_why": "Hand-verified 2026-09-02. A Flask project that ships NO CSS and NO JavaScript of its own: Bootstrap arrives from cdn.jsdelivr.net as both a stylesheet and a bundle. Before the styles_are_local guard this repo produced 102 unresolved findings, every one of them a Bootstrap class that is styled perfectly well. The three below are what survived, and they are the same disease one level over - the CONSUMER is the CDN bundle rather than the stylesheet.",
-  "dom_attr:data:bs-toggle:app/templates/base.html:21": {
-    "verdict": "false",
-    "why": "data-bs-toggle is Bootstrap's own attribute, read by bootstrap.bundle.min.js which is loaded from jsdelivr and is not in the repo. Nothing local reads it and nothing local should."
-  },
-  "dom_attr:data:bs-target:app/templates/base.html:21": {
-    "verdict": "false",
-    "why": "Same as bs-toggle: consumed by the CDN bundle, so 'unused' is a claim about a file the scan was never shown."
-  },
-  "fetch_target:0": {
-    "verdict": "false",
-    "why": "A bare '0' cannot be a route. Whatever produced it, it is not an endpoint this project fails to serve."
-  }
+ "_why": "Hand-verified 2026-09-02. A Flask project that ships NO CSS and NO JavaScript of its own: Bootstrap arrives from cdn.jsdelivr.net as both a stylesheet and a bundle. Before the styles_are_local guard this repo produced 102 unresolved findings, every one of them a Bootstrap class that is styled perfectly well. The three below are what survived, and they are the same disease one level over - the CONSUMER is the CDN bundle rather than the stylesheet.",
+ "_stack": "flask",
+ "dom_attr:data:bs-toggle:app/templates/base.html:21": {
+  "verdict": "false",
+  "why": "data-bs-toggle is Bootstrap's own attribute, read by bootstrap.bundle.min.js which is loaded from jsdelivr and is not in the repo. Nothing local reads it and nothing local should."
+ },
+ "dom_attr:data:bs-target:app/templates/base.html:21": {
+  "verdict": "false",
+  "why": "Same as bs-toggle: consumed by the CDN bundle, so 'unused' is a claim about a file the scan was never shown."
+ },
+ "fetch_target:0": {
+  "verdict": "false",
+  "why": "A bare '0' cannot be a route. Whatever produced it, it is not an endpoint this project fails to serve."
+ }
 }

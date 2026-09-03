@@ -23,7 +23,13 @@ Labels live in tools/labels/<repo>.json, keyed by symbol id:
 
 Usage:
     python tools/precision.py                      # score every labelled repo
+    python tools/precision.py --quiet              # ...without listing each false claim
     python tools/precision.py --sample dub 25      # print 25 unlabelled claims to judge
+
+The report is three tables, and the second two are the ones that decide what to work on:
+per REPO, per STACK - Django is one adapter of six, and an average across them describes
+none of them - and per LENS, because "which repository is noisy" and "which extractor is
+noisy" are different questions.
 """
 
 from __future__ import annotations
@@ -90,8 +96,35 @@ def sample(repo: str, count: int) -> int:
     return 0
 
 
+def stack_of(repo: str) -> str:
+    """Which framework this repository is, from the corpus run that scanned it.
+
+    Per-repo precision answers "is this one good"; per-STACK precision answers the
+    question that actually decides what to work on next - Django is not the tool, it is
+    one adapter of six, and a number that averages them says nothing about either.
+    """
+    try:
+        rows = json.loads((CORPUS / "results.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    rows = rows if isinstance(rows, list) else list(rows.values())
+    for row in rows:
+        if row.get("name") == repo:
+            return row.get("expected") or row.get("detected") or ""
+    # A repository that is not in the corpus - a private one, or a checkout somewhere
+    # else - says so in its own label file, or it lands in a nameless row that quietly
+    # drags a stack's number around with it.
+    named = _labels(repo).get("_stack")
+    return named if isinstance(named, str) else ""
+
+
 def score(repo: str) -> tuple[int, int, list]:
-    """(true, false, the findings judged wrong) for one repository."""
+    """(true, false, the findings judged wrong) for one repository.
+
+    Each wrong entry is `(symbol_id, why, kind)` - the kind included because "which lens
+    is noisy" is a different question from "which repo is noisy", and it is the one that
+    says what to fix.
+    """
     labelled = _labels(repo)
     if not labelled:
         return 0, 0, []
@@ -113,10 +146,17 @@ def score(repo: str) -> tuple[int, int, list]:
             continue
         if verdict == "true":
             true += 1
+            _KIND_TALLY.setdefault(by_id[symbol_id].kind, [0, 0])[0] += 1
         else:
             false += 1
-            wrong.append((symbol_id, entry.get("why", "")))
+            _KIND_TALLY.setdefault(by_id[symbol_id].kind, [0, 0])[1] += 1
+            wrong.append((symbol_id, entry.get("why", ""), by_id[symbol_id].kind))
     return true, false, wrong
+
+
+# kind -> [true, false], filled as repositories are scored. Module level because the
+# per-kind view crosses repositories: `dom_selector` is the same lens on all of them.
+_KIND_TALLY: dict[str, list[int]] = {}
 
 
 def main() -> int:
@@ -133,28 +173,56 @@ def main() -> int:
         return 0
 
     total_true = total_false = 0
-    print(f"\n  {'repo':<28} {'true':>6} {'false':>6} {'precision':>10}")
-    print("  " + "-" * 54)
+    by_stack: dict[str, list[int]] = {}
+    verbose = "--quiet" not in sys.argv
+    print(f"\n  {'repo':<24} {'stack':<10} {'true':>6} {'false':>6} {'precision':>10}")
+    print("  " + "-" * 62)
     for path in files:
         repo = path.stem
+        stack = stack_of(repo) or "—"
         true, false, wrong = score(repo)
         judged = true + false
         if not judged:
-            print(f"  {repo:<28} {'—':>6} {'—':>6} {'unjudged':>10}")
+            print(f"  {repo:<24} {stack:<10} {'—':>6} {'—':>6} {'unjudged':>10}")
             continue
         total_true += true
         total_false += false
-        print(f"  {repo:<28} {true:>6} {false:>6} {true * 100 // judged:>9}%")
-        for symbol_id, why in wrong:
-            print(f"      FALSE  {symbol_id[:70]}")
-            if why:
-                print(f"             {why[:100]}")
+        tally = by_stack.setdefault(stack, [0, 0])
+        tally[0] += true
+        tally[1] += false
+        print(f"  {repo:<24} {stack:<10} {true:>6} {false:>6} {true * 100 // judged:>9}%")
+        if verbose:
+            for symbol_id, why, _kind in wrong:
+                print(f"      FALSE  {symbol_id[:70]}")
+                if why:
+                    print(f"             {why[:100]}")
 
     judged = total_true + total_false
     if judged:
-        print("  " + "-" * 54)
-        print(f"  {'ALL':<28} {total_true:>6} {total_false:>6} "
+        print("  " + "-" * 62)
+        print(f"  {'ALL':<24} {'':<10} {total_true:>6} {total_false:>6} "
               f"{total_true * 100 // judged:>9}%")
+
+    # Per stack, because that is what decides where the work goes. One number across six
+    # frameworks describes none of them: the adapter that has had the most attention
+    # carries the average, and every stack under it looks fine from behind it.
+    if by_stack:
+        print(f"\n  {'stack':<24} {'judged':>8} {'true':>6} {'precision':>10}")
+        print("  " + "-" * 52)
+        for stack, (true, false) in sorted(by_stack.items(),
+                                           key=lambda kv: -(kv[1][0] + kv[1][1])):
+            seen = true + false
+            print(f"  {stack:<24} {seen:>8} {true:>6} {true * 100 // seen:>9}%")
+
+    # And per KIND, because "which repository is noisy" and "which lens is noisy" are
+    # different questions, and only the second one says what to fix.
+    if _KIND_TALLY:
+        print(f"\n  {'lens':<24} {'judged':>8} {'true':>6} {'precision':>10}")
+        print("  " + "-" * 52)
+        for kind, (true, false) in sorted(_KIND_TALLY.items(),
+                                          key=lambda kv: -(kv[1][0] + kv[1][1])):
+            seen = true + false
+            print(f"  {kind:<24} {seen:>8} {true:>6} {true * 100 // seen:>9}%")
         print(f"\n  {judged} claims judged by hand. Precision is the share of `unresolved`")
         print("  and `unused` findings that were real. It does not move on its own -")
         print("  a change that stops reporting something drops it out of the count.")

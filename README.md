@@ -168,6 +168,8 @@ backends are real and improving; none are going away. Precision is **45%** on ha
 findings, up from 28%, and that number moves because people tell me what it got wrong.
 
 Detail: [coverage per backend](docs/coverage.md) · [what it has actually found](docs/field-notes.md)
+· **[how to check this yourself](docs/verifying.md)** — the same instrument, the protocol,
+and the four ways a careful person gets the answer wrong (all four made here)
 
 ## In CI
 
@@ -185,6 +187,7 @@ and nothing per repository.
 [Install, per OS](docs/install.md) · [Reading the map](docs/the-map.md) ·
 [The commands](docs/commands.md) · [The data layer](docs/data-layer.md) ·
 [Using it from an agent](docs/agents.md) · [Telling me it got something wrong](docs/reporting.md)
+· [Checking this tool](docs/verifying.md)
 
 **How it differs from Knip and depcheck:** they work inside one language's module graph —
 unused files, exports, dependencies — and do it well. This looks at the boundaries *between*

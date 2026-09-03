@@ -224,8 +224,52 @@ reference project - the first time a release was tested the way a user meets it.
   region and fewer than two live writers remain, the report says so instead of sending
   someone to reconcile a conflict that cannot happen.
 
+- **Added** — **precision is reported per stack and per lens, not just per repository.**
+  One number across six frameworks describes none of them: the adapter with the most
+  attention carries the mean, and every stack behind it looks fine from there. The report
+  now says which stack a repository is, aggregates by it, and adds a per-lens table -
+  because "which repository is noisy" and "which extractor is noisy" are different
+  questions, and only the second one says what to change. `docs/verifying.md` is the
+  protocol, including the four ways a careful person grades output wrongly, all four of
+  them made here.
+- **Fixed** — **a component file is markup.** In a React, Preact or Solid codebase every
+  element is written in JSX, and this read only Django templates as markup - so on those
+  projects the entire "does this element exist" side of the DOM lens was blind.
+  `id="x"`, `data-…` and `className="x"` written in JSX now declare elements.
+  saleor-dashboard's CSS modules query `[data-test-id]`, `[data-state]` and
+  `[data-highlighted]`, all written in sibling `.tsx` files: **twelve findings, none of
+  them true**.
+- **Fixed** — **`data-test-id="x"` was read as `id="x"`.** `\b` matches between the `-`
+  and the `id`, so a SELECTOR sitting in a string declared an element. Inventing an
+  element is worse than missing one: a real finding about a missing element goes quiet,
+  because the scan now believes something declares it.
+- **Fixed** — **four links of an Express mount chain, three of which were dropped.** Ghost
+  mounts its whole admin API as `backendApp.lazyUse(BASE_API_PATH, require('../api'))` →
+  `apiApp.lazyUse('/admin/', …)` → `apiApp.use(routes())` → `router.get('/site')`, and
+  every one of those forms was invisible: a mount helper by another name, a prefix held
+  in a constant in another module, a `require` of a **TypeScript** file resolving to a
+  `.js` that does not exist, and a mount with no path - which adds nothing to the URL and
+  everything to the chain. `/ghost/api/admin/site` came out as `/site`, and **all eleven
+  claims judged on Ghost were false, every one the same shape**: a real endpoint reported
+  as a route the server does not serve. An unresolvable prefix now drops its mount rather
+  than mounting at a made-up path, because a wrong prefix does not lose one route - it
+  moves every route beneath it.
+
+  Measured on the hand-labelled set: **48% → 55%** overall, `django` 62% → 73%,
+  `dom_selector` 31% → 40%, and Ghost's eleven false `fetch_target` claims are simply
+  gone. **No true finding was lost by either fix** - the true count is unchanged at 74.
+  Across the corpus: routes **2,716 → 2,782** and `uncertain` **246 → 72**.
+
 Known open, recorded rather than hidden:
 
+- **`fastapi` scores 3% and `nextjs` 25% on the labelled set**, against `django` 73%. The
+  recorded reasons are consistent: classes a library applies at runtime (highlight.js
+  emits `hljs-*`; TipTap sets `data-type`), Tailwind variant classes in Svelte markup, and
+  vendor design tokens defined in a package's own stylesheet rather than in the repository.
+  All three are the same shape as the CDN-class rule, one layer further out.
+- **`celery_schedule` scores 0% on six judged claims.** Sentry registers tasks with
+  `@instrumented_task(name=…)` rather than `@shared_task`, so the beat entry pointing at
+  one reads as a schedule with no task behind it.
 - **The call graph is Python only, and name-keyed.** JavaScript functions carry their
   owner but nothing reads their calls yet, so a JS module's world still stops at its own
   body. And two files that both define `reset` share one entry, because the map's

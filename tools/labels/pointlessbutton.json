@@ -1,416 +1,417 @@
 {
-  "_root": "/Users/balazssimon/dev/pointlessbutton",
-  "_why": "pointlessbutton is a ~511k-line Django 6 + vanilla-JS competitive clicking game (Redis-first, Celery, Stripe, Vite-bundled frontend, heavy custom Django admin). The scan ran in degraded mode (could not import myproject, routes read from source) and produced 3862 claims across 10 kinds; I judged 103 (seed-0 sample of up to 12 per kind) by opening each claimed file/line and grepping the repo for the counterpart end. Overall precision 33/103 (~32%). Dominant false-positive causes: admin templates styled by pb-admin_v3.css linked in an ancestor base template (covers ~3355 of 3362 dom_attr claims), runtime-built Django admin URL names claimed unresolved despite the tool knowing it could not see them, delete() calls misread as writes (all 8 redis_ttl claims), and Redis keys read through local variables/wrappers/Lua EVAL.",
-  "css_selector:class:hero-leaderboard": {
-    "verdict": "true",
-    "why": "defined in src/input.css only; no template/JS anywhere applies the class"
-  },
-  "css_selector:class:emoji-rocket": {
-    "verdict": "true",
-    "why": "defined in input.css + compiled output only; nothing applies it"
-  },
-  "css_selector:class:bk-table": {
-    "verdict": "false",
-    "why": "class applied at runtime in the same template via JS helper el('table','bk-table') at backups.html:150"
-  },
-  "css_selector:class:cosmic-ring": {
-    "verdict": "false",
-    "why": "applied in an HTML string in buttons/js/cosmic_pulse.js:165 (<div class=\"cosmic-ring cosmic-part\">)"
-  },
-  "css_selector:class:text-gradient-primary": {
-    "verdict": "true",
-    "why": "only other hits are translation-review markdown files; no template/JS applies it"
-  },
-  "css_selector:class:btn-glow-effect": {
-    "verdict": "true",
-    "why": "defined in input.css only; nothing applies it"
-  },
-  "css_selector:class:mobile-profile-section": {
-    "verdict": "false",
-    "why": "plain class= usage in pointless/templates/push_arena.html:896 that the tool failed to connect"
-  },
-  "css_selector:class:mobile-text-xs": {
-    "verdict": "true",
-    "why": "only a unit test mentions it; tests are not usage; no template/JS applies it"
-  },
-  "css_selector:class:btn-primary-gradient": {
-    "verdict": "true",
-    "why": "defined in input.css only; nothing applies it"
-  },
-  "css_selector:class:text-highlight-gold": {
-    "verdict": "true",
-    "why": "defined in input.css only; nothing applies it"
-  },
-  "css_selector:class:select-none-all": {
-    "verdict": "true",
-    "why": "defined in input.css only; nothing applies it"
-  },
-  "css_selector:class:page-title-section": {
-    "verdict": "false",
-    "why": "plain class= usage in pointless/templates/store.html:154, challenges.html, seasons.html etc. that the tool failed to connect"
-  },
-  "css_token_def:token:--color-error": {
-    "verdict": "true",
-    "why": "Tailwind4 @theme token; zero var() reads and zero generated-utility usage anywhere (compiled tailwind-output.css confirms 0 consumers)"
-  },
-  "css_token_def:token:--font-family-sans": {
-    "verdict": "true",
-    "why": "Tailwind4 @theme token; zero var() reads and zero generated-utility usage anywhere (compiled tailwind-output.css confirms 0 consumers)"
-  },
-  "css_token_def:token:--color-accent": {
-    "verdict": "true",
-    "why": "Tailwind4 @theme token; zero var() reads and zero generated-utility usage anywhere (compiled tailwind-output.css confirms 0 consumers)"
-  },
-  "css_token_def:token:--color-info": {
-    "verdict": "true",
-    "why": "Tailwind4 @theme token; zero var() reads and zero generated-utility usage anywhere (compiled tailwind-output.css confirms 0 consumers)"
-  },
-  "css_token_def:token:--color-warning": {
-    "verdict": "true",
-    "why": "Tailwind4 @theme token; zero var() reads and zero generated-utility usage anywhere (compiled tailwind-output.css confirms 0 consumers)"
-  },
-  "css_token_def:token:--color-primary": {
-    "verdict": "true",
-    "why": "Tailwind4 @theme token; zero var() reads and zero generated-utility usage anywhere (compiled tailwind-output.css confirms 0 consumers)"
-  },
-  "css_token_def:token:--shadow-glow-primary": {
-    "verdict": "true",
-    "why": "Tailwind4 @theme token; zero var() reads and zero generated-utility usage anywhere (compiled tailwind-output.css confirms 0 consumers)"
-  },
-  "css_token_def:token:--color-success": {
-    "verdict": "true",
-    "why": "Tailwind4 @theme token; zero var() reads and zero generated-utility usage anywhere (compiled tailwind-output.css confirms 0 consumers)"
-  },
-  "css_token_def:token:--gradient-primary": {
-    "verdict": "true",
-    "why": "Tailwind4 @theme token; zero var() reads and zero generated-utility usage anywhere (compiled tailwind-output.css confirms 0 consumers)"
-  },
-  "css_token_def:token:--shadow-glass": {
-    "verdict": "true",
-    "why": "Tailwind4 @theme token; zero var() reads and zero generated-utility usage anywhere (compiled tailwind-output.css confirms 0 consumers)"
-  },
-  "css_token_def:token:--icon-size": {
-    "verdict": "false",
-    "why": "input.css:34 only overrides it; quantum.css reads var(--icon-size) at lines 24/25/106 - cross-file custom-property cascade"
-  },
-  "css_token_def:token:--button-size": {
-    "verdict": "true",
-    "why": "set in input.css:58 and quantum.css:87 but var(--button-size) is read nowhere - genuinely dead"
-  },
-  "dom_attr:class:ru-search:templates/admin/buttonpusher_changelist.html:40": {
-    "verdict": "false",
-    "why": "styled by pb-admin_v3.css:3505; stylesheet linked in ancestor templates/admin/base.html via {% static %}"
-  },
-  "dom_attr:class:cs-stat-value:templates/admin/myapp/challengeschedule/change_list.html:61": {
-    "verdict": "false",
-    "why": "styled by pb-admin_v3.css:1500 (grouped selector); stylesheet linked in ancestor base.html"
-  },
-  "dom_attr:class:sd-btn-primary:templates/admin/sites_dashboard.html:30": {
-    "verdict": "false",
-    "why": "styled by pb-admin_v3.css:1996; stylesheet linked in ancestor base.html"
-  },
-  "dom_attr:class:fp-stat-sub:templates/admin/freepbitsconfig_change_form.html:74": {
-    "verdict": "false",
-    "why": "styled by pb-admin_v3.css:1511 (grouped selector); stylesheet linked in ancestor base.html"
-  },
-  "dom_attr:class:pb-form-group:templates/admin/season_edit.html:275": {
-    "verdict": "false",
-    "why": "styled by pb-admin_v3.css:323 and read by same-template JS closest('.pb-form-group')"
-  },
-  "dom_attr:id:panel-quarantine:templates/admin/bot_detection_dashboard.html:148": {
-    "verdict": "false",
-    "why": "reached by getElementById('panel-' + this.dataset.tab) at line 358 - id assembled by string concatenation"
-  },
-  "dom_attr:class:bd-stat-sub:templates/admin/bot_detection_dashboard.html:40": {
-    "verdict": "false",
-    "why": "styled by pb-admin_v3.css:1509 (grouped selector); stylesheet linked in ancestor base.html"
-  },
-  "dom_attr:class:ru-btn:templates/admin/buttonpusher_changelist.html:217": {
-    "verdict": "false",
-    "why": "styled by pb-admin_v3.css:1377 (grouped selector); stylesheet linked in ancestor base.html"
-  },
-  "dom_attr:class:su-btn-sm:templates/admin/myapp/superuserproxy/change_list.html:143": {
-    "verdict": "true",
-    "why": "no .su-btn* rule exists in any stylesheet incl. pb-admin_v3.css - class applied but genuinely unstyled"
-  },
-  "dom_attr:class:pb-form-label:templates/admin/season_edit.html:469": {
-    "verdict": "false",
-    "why": "styled by pb-admin_v3.css:330; stylesheet linked in ancestor base.html"
-  },
-  "dom_attr:class:info-item:templates/admin/bot_detection_user_detail.html:109": {
-    "verdict": "true",
-    "why": "no .info-item rule exists in any stylesheet - class applied but genuinely unstyled"
-  },
-  "dom_attr:class:hp-stats:templates/admin/honeypot_dashboard.html:33": {
-    "verdict": "false",
-    "why": "styled by pb-admin_v3.css:1825 (grouped selector); stylesheet linked in ancestor base.html"
-  },
-  "dom_selector:data:item-index:templates/admin/menu_order.html:195": {
-    "verdict": "false",
-    "why": "attribute written in same file via el.dataset.itemIndex = ii (line 118) - dataset property write missed"
-  },
-  "dom_selector:data:stat-label:src/input.css:215": {
-    "verdict": "false",
-    "why": "data-stat-label= set on 4 elements in pointless/templates/push_arena.html:835,1025 - template attr not connected"
-  },
-  "dom_selector:id:id_sites_to:templates/admin/socialaccount/socialapp/change_form.html:252": {
-    "verdict": "false",
-    "why": "element generated at runtime by Django admin's own SelectFilter widget JS (id_<field>_to) - framework-built DOM"
-  },
-  "dom_selector:data:si:templates/admin/menu_order.html:103": {
-    "verdict": "false",
-    "why": "written in same file via nameInput.dataset.si = si (line 72) and delBtn.dataset.si = si (line 84)"
-  },
-  "dom_selector:id:button-catalog-json-data:templates/admin/buttonpusher_changelist.html:231": {
-    "verdict": "false",
-    "why": "id created by Django json_script filter: {{ button_catalog_json|json_script:\"button-catalog-json-data\" }} at line 226"
-  },
-  "dom_selector:id:sidebar-data:templates/admin/menu_order.html:27": {
-    "verdict": "false",
-    "why": "id created by json_script filter at line 25: {{ sidebar_json|json_script:\"sidebar-data\" }}"
-  },
-  "dom_selector:data:item-index:templates/admin/menu_order.html:118": {
-    "verdict": "false",
-    "why": "line 118 IS the write (el.dataset.itemIndex = ii); tool called a write an unresolved read"
-  },
-  "dom_selector:data:section-index:templates/admin/menu_order.html:117": {
-    "verdict": "false",
-    "why": "line 117 IS the write (el.dataset.sectionIndex = si); also written at line 56"
-  },
-  "dom_selector:data:si:templates/admin/menu_order.html:84": {
-    "verdict": "false",
-    "why": "line 84 IS a write (delBtn.dataset.si = si)"
-  },
-  "dom_selector:data:section-index:templates/admin/menu_order.html:56": {
-    "verdict": "false",
-    "why": "line 56 IS the write (sec.dataset.sectionIndex = si)"
-  },
-  "dom_selector:data:stat-label:src/input.css:214": {
-    "verdict": "false",
-    "why": "data-stat-label= set in pointless/templates/push_arena.html and read by its inline JS at line 1100"
-  },
-  "dom_selector:data:si:templates/admin/menu_order.html:74": {
-    "verdict": "false",
-    "why": "attribute written in same file via dataset.si assignments (lines 72/84)"
-  },
-  "env_var:SECURE_HSTS_PRELOAD": {
-    "verdict": "true",
-    "why": "settings.py:149 hardcodes SECURE_HSTS_PRELOAD = True; the env var is never read - .env.example entry is dead"
-  },
-  "env_var:SECURE_SSL_REDIRECT": {
-    "verdict": "true",
-    "why": "settings.py derives it from IS_LOCAL/DEBUG, never reads the env var; compose passes it into the container unread"
-  },
-  "env_var:CSRF_COOKIE_SECURE": {
-    "verdict": "true",
-    "why": "settings.py:720 computes it from IS_LOCAL; env var never read"
-  },
-  "env_var:DJANGO_DEBUG": {
-    "verdict": "true",
-    "why": "settings.py:33 reads os.getenv('DEBUG'), not DJANGO_DEBUG - the .env.example var does nothing (real footgun)"
-  },
-  "env_var:MYSQL_ROOT_PASSWORD": {
-    "verdict": "false",
-    "why": "consumed by the mysql:8.0 image entrypoint declared in the same docker-compose.yml service - documented image interface"
-  },
-  "env_var:MYSQL_PASSWORD": {
-    "verdict": "false",
-    "why": "consumed by the mysql:8.0 image entrypoint declared in the same compose file"
-  },
-  "env_var:MYSQL_DATABASE": {
-    "verdict": "false",
-    "why": "consumed by the mysql:8.0 image entrypoint (creates the database) declared in the same compose file"
-  },
-  "env_var:SESSION_COOKIE_SECURE": {
-    "verdict": "true",
-    "why": "settings.py derives it from IS_LOCAL; env var never read"
-  },
-  "env_var:USE_PROXY_SSL_HEADER": {
-    "verdict": "true",
-    "why": "settings.py:568 hardcodes SECURE_PROXY_SSL_HEADER; env var never read"
-  },
-  "env_var:EMAIL_HOST_PASSWORD": {
-    "verdict": "true",
-    "why": "no python code reads it (not even settings.py); compose passes it into the container unread"
-  },
-  "env_var:DISCORD_CLIENT_SECRET": {
-    "verdict": "true",
-    "why": "only reference is an indirect read in OTHER/management_commands_archived/add_social_apps.py (archived one-off); no live reader"
-  },
-  "env_var:REPLICATE_API_TOKEN": {
-    "verdict": "true",
-    "why": "appears only in .env itself; nothing in the repo reads it"
-  },
-  "fetch:/api/purchase-button/": {
-    "verdict": "false",
-    "why": "claim sourced from stale hashed build artifact staticfiles/...1caca008ea73.js; live button_store.js has no such fetch and no route exists - dead-artifact noise, not a live seam"
-  },
-  "fetch:/api/hof/user-rewards/": {
-    "verdict": "false",
-    "why": "only in orphaned old-hash staticfiles copy; live pointless/static/pointless/js/arena_leaderboard.js no longer fetches it"
-  },
-  "fetch:/api/hof/claim-all-rewards/": {
-    "verdict": "false",
-    "why": "only in stale staticfiles build artifact; removed from the live source"
-  },
-  "fetch:/submit_push/": {
-    "verdict": "false",
-    "why": "handled by a raw ASGI handler in myproject/asgi.py:110 (deliberately outside URLconf for speed) - route exists"
-  },
-  "fetch:/static/pointless/dist/.vite/manifest.json": {
-    "verdict": "false",
-    "why": "the file exists at pointless/static/pointless/dist/.vite/manifest.json and is served by Django staticfiles - a file fetch, not a route"
-  },
-  "fetch:/hu/lobby/": {
-    "verdict": "false",
-    "why": "page_urls.py:102 path('lobby/') is included inside i18n_patterns (myproject/urls.py:139-167), so /hu/lobby/ resolves via the language prefix"
-  },
-  "fetch:/api/hof/claim-reward/": {
-    "verdict": "false",
-    "why": "only in stale staticfiles build artifact; removed from the live source"
-  },
-  "multi_writer_element:total_buttons_row": {
-    "verdict": "false",
-    "why": "the two 'writers' are alternative templates for separate pages; button_management.html is orphaned (no view renders it - only buttonpusher_buttons.html is, admin.py:2418) so they never co-render"
-  },
-  "multi_writer_element:button_type_row": {
-    "verdict": "false",
-    "why": "same-id elements in two templates that never render together (one is an orphaned duplicate)"
-  },
-  "multi_writer_element:button_index_row": {
-    "verdict": "false",
-    "why": "same-id elements in two templates that never render together (one is an orphaned duplicate)"
-  },
-  "multi_writer_element:toast": {
-    "verdict": "false",
-    "why": "buttonpusher_changelist.html and buttonpusher_stats.html are two different admin pages, each with its own #toast + showToast; never co-rendered"
-  },
-  "redis_key:season_ended_data:*:*": {
-    "verdict": "false",
-    "why": "flagged line 2440 is a cache.delete, and leaderboard_views.py:3393-3394 READS it via ck = f'season_ended_data:...'; data = cache.get(ck) - variable indirection"
-  },
-  "redis_key:warrior:positions:*": {
-    "verdict": "true",
-    "why": "only a leftover cache.delete + comment; real cache key is cache:arena_position:{uid} (arena_views.py:45) - nothing writes or reads warrior:positions"
-  },
-  "redis_key:store_rotation:prod:*:0": {
-    "verdict": "false",
-    "why": "flagged line is a cache.delete; key built in models.py:1911, returned, then cache.get at 1987 and cache.set at 2039 via the cache_key variable"
-  },
-  "redis_key:api:streak_opportunities:*": {
-    "verdict": "false",
-    "why": "read at api_views.py:1620-1624 via cache_key variable (aget) and deleted at 1095/1112 - reads exist through variable indirection"
-  },
-  "redis_key:lobby:100:members": {
-    "verdict": "false",
-    "why": "test literal instance of the live pattern lobby:{owner}:members, zcard-read in team_utils.py:99/133, arena_redis.py:268, gdpr_service.py - literal not unified with the f-string pattern"
-  },
-  "redis_key:user:*:country_checked": {
-    "verdict": "false",
-    "why": "written at navbar_views.py:142 via safe_set(r, f\"user:{id}:country_checked\", 1, ex=604800) - wrapper-function write missed"
-  },
-  "redis_key:user:*:challenges:cache": {
-    "verdict": "false",
-    "why": "read at challenges/core.py:836 via safe_get(self.r, cache_key) where cache_key = the f-string - wrapper + variable indirection"
-  },
-  "redis_key:store:current_rotation": {
-    "verdict": "true",
-    "why": "setex-written in store_notifications.py:46; only other touch is warm_redis_cache doing a warming GET from a key list - no real consumer, stale 'clients poll this' comment"
-  },
-  "redis_key:persistence:mirror:cursor": {
-    "verdict": "false",
-    "why": "production reads AND writes it via module constant _CURSOR_KEY in tasks/persistence_tasks.py:92/213 - constant indirection missed"
-  },
-  "redis_key:user:*:challenge_heartbeat": {
-    "verdict": "true",
-    "why": "SET with 120s TTL in two places and deleted in admin reset, but no code ever GETs/EXISTs it - presence key nothing consumes"
-  },
-  "redis_key:push_arena:page:*:*": {
-    "verdict": "false",
-    "why": "read at push_views.py:934-936 via page_cache_key variable (cache.aget) - variable indirection"
-  },
-  "redis_key:user:*:last_validated_streak": {
-    "verdict": "false",
-    "why": "written at api_views.py:998 (pipe.set ex=3600) and READ inside a Lua script via r.eval(streak_key,...) in push_utils.py:287 - EVAL-key read missed"
-  },
-  "redis_ttl:cache:sitemap:players:v1:pointless/tests/unit/test_public_profile.py:377": {
-    "verdict": "false",
-    "why": "line is cache.delete('cache:sitemap:players:v1') - a delete misread as a no-TTL write"
-  },
-  "redis_ttl:rate_limit:user_*:*:pointless/tests/integration/views/test_announcement_should_show_async.py:116": {
-    "verdict": "false",
-    "why": "line is mon_r.delete(f\"rate_limit:...\") - a delete misread as a no-TTL write"
-  },
-  "redis_ttl:cache:health:system:pointless/tests/unit/test_system_health.py:14": {
-    "verdict": "false",
-    "why": "line is cache.delete('cache:health:system') in a test fixture - delete, not a write"
-  },
-  "redis_ttl:cache:avatar_item:*:pointless/signals.py:264": {
-    "verdict": "false",
-    "why": "line is _dj_cache.delete(f\"cache:avatar_item:...\") - cache invalidation, not a write"
-  },
-  "redis_ttl:cache:health:system:pointless/tests/unit/test_system_health.py:12": {
-    "verdict": "false",
-    "why": "line is cache.delete('cache:health:system') - delete, not a write"
-  },
-  "redis_ttl:cache:sitemap:players:v1:pointless/tests/unit/test_crawl_budget.py:60": {
-    "verdict": "false",
-    "why": "line is cache.delete('cache:sitemap:players:v1') - delete, not a write"
-  },
-  "redis_ttl:cache:cps:stats:pointless/services/pps_service.py:589": {
-    "verdict": "false",
-    "why": "line is cache.delete(\"cache:cps:stats\") (PB-CPS-STALE-STATS bust) - delete, not a write"
-  },
-  "redis_ttl:cache:sitemap:players:v1:pointless/tests/unit/test_sitemap_index.py:83": {
-    "verdict": "false",
-    "why": "line is cache.delete('cache:sitemap:players:v1') - delete, not a write"
-  },
-  "url_reference:url_tag:admin:pointless_referralcode_history:templates/admin/myapp/referralcode/change_form.html:35": {
-    "verdict": "false",
-    "why": "reverses to /asd/pointless/referralcode/<id>/history/ - auto-generated ModelAdmin history URL, invisible to source-only route reading"
-  },
-  "url_reference:url_tag:admin:buttonpusher_game_analytics:templates/admin/api_analytics.html:25": {
-    "verdict": "false",
-    "why": "reverses OK - custom ModelAdmin.get_urls() route (admin.py), runtime-built"
-  },
-  "url_reference:url_tag:admin:socialaccount_socialapp_delete:templates/admin/socialauth/change_list.html:254": {
-    "verdict": "false",
-    "why": "reverses OK - auto-generated admin URL for allauth's registered SocialApp model"
-  },
-  "url_reference:url_tag:admin:pointless_challengeschedule_add:templates/admin/myapp/challengeschedule/change_list.html:31": {
-    "verdict": "false",
-    "why": "reverses to /asd/pointless/challengeschedule/add/ - auto-generated ModelAdmin add URL"
-  },
-  "url_reference:url_tag:admin:buttonpusher_live_api_analytics_aggregate:templates/admin/api_analytics.html:886": {
-    "verdict": "false",
-    "why": "reverses OK - custom get_urls() route"
-  },
-  "url_reference:url_tag:admin:buttonpusher_buttons:templates/admin/buttonpusher_change_form.html:68": {
-    "verdict": "false",
-    "why": "reverses OK with object_id arg - named route in ButtonPusherAdmin.get_urls() (admin.py:196)"
-  },
-  "url_reference:url_tag:admin:buttonpusher_live_api_analytics_celery:templates/admin/celery_health.html:107": {
-    "verdict": "false",
-    "why": "reverses OK - custom get_urls() route"
-  },
-  "url_reference:url_tag:admin:pointless_superuserproxy_add:templates/admin/myapp/superuserproxy/change_list.html:176": {
-    "verdict": "false",
-    "why": "reverses OK - auto-generated admin URL for the registered SuperUserProxy model"
-  },
-  "url_reference:url_tag:admin:pointless_buttonpusher_changelist:templates/admin/buttonpusher_changelist.html:67": {
-    "verdict": "false",
-    "why": "reverses to /asd/pointless/buttonpusher/ - auto-generated changelist URL"
-  },
-  "url_reference:url_tag:admin:pointless_buttonpusher_changelist:templates/admin/buttonpusher_changelist.html:44": {
-    "verdict": "false",
-    "why": "same auto-generated changelist URL, reverses OK"
-  },
-  "url_reference:url_tag:admin:buttonpusher_live_api_analytics_history:templates/admin/api_analytics.html:386": {
-    "verdict": "false",
-    "why": "reverses OK - custom get_urls() route"
-  },
-  "url_reference:url_tag:admin:pointless_challengeschedule_add:templates/admin/myapp/challengeschedule/change_list.html:205": {
-    "verdict": "false",
-    "why": "same auto-generated add URL, reverses OK"
-  }
+ "_root": "/Users/balazssimon/dev/pointlessbutton",
+ "_why": "pointlessbutton is a ~511k-line Django 6 + vanilla-JS competitive clicking game (Redis-first, Celery, Stripe, Vite-bundled frontend, heavy custom Django admin). The scan ran in degraded mode (could not import myproject, routes read from source) and produced 3862 claims across 10 kinds; I judged 103 (seed-0 sample of up to 12 per kind) by opening each claimed file/line and grepping the repo for the counterpart end. Overall precision 33/103 (~32%). Dominant false-positive causes: admin templates styled by pb-admin_v3.css linked in an ancestor base template (covers ~3355 of 3362 dom_attr claims), runtime-built Django admin URL names claimed unresolved despite the tool knowing it could not see them, delete() calls misread as writes (all 8 redis_ttl claims), and Redis keys read through local variables/wrappers/Lua EVAL.",
+ "_stack": "django",
+ "css_selector:class:hero-leaderboard": {
+  "verdict": "true",
+  "why": "defined in src/input.css only; no template/JS anywhere applies the class"
+ },
+ "css_selector:class:emoji-rocket": {
+  "verdict": "true",
+  "why": "defined in input.css + compiled output only; nothing applies it"
+ },
+ "css_selector:class:bk-table": {
+  "verdict": "false",
+  "why": "class applied at runtime in the same template via JS helper el('table','bk-table') at backups.html:150"
+ },
+ "css_selector:class:cosmic-ring": {
+  "verdict": "false",
+  "why": "applied in an HTML string in buttons/js/cosmic_pulse.js:165 (<div class=\"cosmic-ring cosmic-part\">)"
+ },
+ "css_selector:class:text-gradient-primary": {
+  "verdict": "true",
+  "why": "only other hits are translation-review markdown files; no template/JS applies it"
+ },
+ "css_selector:class:btn-glow-effect": {
+  "verdict": "true",
+  "why": "defined in input.css only; nothing applies it"
+ },
+ "css_selector:class:mobile-profile-section": {
+  "verdict": "false",
+  "why": "plain class= usage in pointless/templates/push_arena.html:896 that the tool failed to connect"
+ },
+ "css_selector:class:mobile-text-xs": {
+  "verdict": "true",
+  "why": "only a unit test mentions it; tests are not usage; no template/JS applies it"
+ },
+ "css_selector:class:btn-primary-gradient": {
+  "verdict": "true",
+  "why": "defined in input.css only; nothing applies it"
+ },
+ "css_selector:class:text-highlight-gold": {
+  "verdict": "true",
+  "why": "defined in input.css only; nothing applies it"
+ },
+ "css_selector:class:select-none-all": {
+  "verdict": "true",
+  "why": "defined in input.css only; nothing applies it"
+ },
+ "css_selector:class:page-title-section": {
+  "verdict": "false",
+  "why": "plain class= usage in pointless/templates/store.html:154, challenges.html, seasons.html etc. that the tool failed to connect"
+ },
+ "css_token_def:token:--color-error": {
+  "verdict": "true",
+  "why": "Tailwind4 @theme token; zero var() reads and zero generated-utility usage anywhere (compiled tailwind-output.css confirms 0 consumers)"
+ },
+ "css_token_def:token:--font-family-sans": {
+  "verdict": "true",
+  "why": "Tailwind4 @theme token; zero var() reads and zero generated-utility usage anywhere (compiled tailwind-output.css confirms 0 consumers)"
+ },
+ "css_token_def:token:--color-accent": {
+  "verdict": "true",
+  "why": "Tailwind4 @theme token; zero var() reads and zero generated-utility usage anywhere (compiled tailwind-output.css confirms 0 consumers)"
+ },
+ "css_token_def:token:--color-info": {
+  "verdict": "true",
+  "why": "Tailwind4 @theme token; zero var() reads and zero generated-utility usage anywhere (compiled tailwind-output.css confirms 0 consumers)"
+ },
+ "css_token_def:token:--color-warning": {
+  "verdict": "true",
+  "why": "Tailwind4 @theme token; zero var() reads and zero generated-utility usage anywhere (compiled tailwind-output.css confirms 0 consumers)"
+ },
+ "css_token_def:token:--color-primary": {
+  "verdict": "true",
+  "why": "Tailwind4 @theme token; zero var() reads and zero generated-utility usage anywhere (compiled tailwind-output.css confirms 0 consumers)"
+ },
+ "css_token_def:token:--shadow-glow-primary": {
+  "verdict": "true",
+  "why": "Tailwind4 @theme token; zero var() reads and zero generated-utility usage anywhere (compiled tailwind-output.css confirms 0 consumers)"
+ },
+ "css_token_def:token:--color-success": {
+  "verdict": "true",
+  "why": "Tailwind4 @theme token; zero var() reads and zero generated-utility usage anywhere (compiled tailwind-output.css confirms 0 consumers)"
+ },
+ "css_token_def:token:--gradient-primary": {
+  "verdict": "true",
+  "why": "Tailwind4 @theme token; zero var() reads and zero generated-utility usage anywhere (compiled tailwind-output.css confirms 0 consumers)"
+ },
+ "css_token_def:token:--shadow-glass": {
+  "verdict": "true",
+  "why": "Tailwind4 @theme token; zero var() reads and zero generated-utility usage anywhere (compiled tailwind-output.css confirms 0 consumers)"
+ },
+ "css_token_def:token:--icon-size": {
+  "verdict": "false",
+  "why": "input.css:34 only overrides it; quantum.css reads var(--icon-size) at lines 24/25/106 - cross-file custom-property cascade"
+ },
+ "css_token_def:token:--button-size": {
+  "verdict": "true",
+  "why": "set in input.css:58 and quantum.css:87 but var(--button-size) is read nowhere - genuinely dead"
+ },
+ "dom_attr:class:ru-search:templates/admin/buttonpusher_changelist.html:40": {
+  "verdict": "false",
+  "why": "styled by pb-admin_v3.css:3505; stylesheet linked in ancestor templates/admin/base.html via {% static %}"
+ },
+ "dom_attr:class:cs-stat-value:templates/admin/myapp/challengeschedule/change_list.html:61": {
+  "verdict": "false",
+  "why": "styled by pb-admin_v3.css:1500 (grouped selector); stylesheet linked in ancestor base.html"
+ },
+ "dom_attr:class:sd-btn-primary:templates/admin/sites_dashboard.html:30": {
+  "verdict": "false",
+  "why": "styled by pb-admin_v3.css:1996; stylesheet linked in ancestor base.html"
+ },
+ "dom_attr:class:fp-stat-sub:templates/admin/freepbitsconfig_change_form.html:74": {
+  "verdict": "false",
+  "why": "styled by pb-admin_v3.css:1511 (grouped selector); stylesheet linked in ancestor base.html"
+ },
+ "dom_attr:class:pb-form-group:templates/admin/season_edit.html:275": {
+  "verdict": "false",
+  "why": "styled by pb-admin_v3.css:323 and read by same-template JS closest('.pb-form-group')"
+ },
+ "dom_attr:id:panel-quarantine:templates/admin/bot_detection_dashboard.html:148": {
+  "verdict": "false",
+  "why": "reached by getElementById('panel-' + this.dataset.tab) at line 358 - id assembled by string concatenation"
+ },
+ "dom_attr:class:bd-stat-sub:templates/admin/bot_detection_dashboard.html:40": {
+  "verdict": "false",
+  "why": "styled by pb-admin_v3.css:1509 (grouped selector); stylesheet linked in ancestor base.html"
+ },
+ "dom_attr:class:ru-btn:templates/admin/buttonpusher_changelist.html:217": {
+  "verdict": "false",
+  "why": "styled by pb-admin_v3.css:1377 (grouped selector); stylesheet linked in ancestor base.html"
+ },
+ "dom_attr:class:su-btn-sm:templates/admin/myapp/superuserproxy/change_list.html:143": {
+  "verdict": "true",
+  "why": "no .su-btn* rule exists in any stylesheet incl. pb-admin_v3.css - class applied but genuinely unstyled"
+ },
+ "dom_attr:class:pb-form-label:templates/admin/season_edit.html:469": {
+  "verdict": "false",
+  "why": "styled by pb-admin_v3.css:330; stylesheet linked in ancestor base.html"
+ },
+ "dom_attr:class:info-item:templates/admin/bot_detection_user_detail.html:109": {
+  "verdict": "true",
+  "why": "no .info-item rule exists in any stylesheet - class applied but genuinely unstyled"
+ },
+ "dom_attr:class:hp-stats:templates/admin/honeypot_dashboard.html:33": {
+  "verdict": "false",
+  "why": "styled by pb-admin_v3.css:1825 (grouped selector); stylesheet linked in ancestor base.html"
+ },
+ "dom_selector:data:item-index:templates/admin/menu_order.html:195": {
+  "verdict": "false",
+  "why": "attribute written in same file via el.dataset.itemIndex = ii (line 118) - dataset property write missed"
+ },
+ "dom_selector:data:stat-label:src/input.css:215": {
+  "verdict": "false",
+  "why": "data-stat-label= set on 4 elements in pointless/templates/push_arena.html:835,1025 - template attr not connected"
+ },
+ "dom_selector:id:id_sites_to:templates/admin/socialaccount/socialapp/change_form.html:252": {
+  "verdict": "false",
+  "why": "element generated at runtime by Django admin's own SelectFilter widget JS (id_<field>_to) - framework-built DOM"
+ },
+ "dom_selector:data:si:templates/admin/menu_order.html:103": {
+  "verdict": "false",
+  "why": "written in same file via nameInput.dataset.si = si (line 72) and delBtn.dataset.si = si (line 84)"
+ },
+ "dom_selector:id:button-catalog-json-data:templates/admin/buttonpusher_changelist.html:231": {
+  "verdict": "false",
+  "why": "id created by Django json_script filter: {{ button_catalog_json|json_script:\"button-catalog-json-data\" }} at line 226"
+ },
+ "dom_selector:id:sidebar-data:templates/admin/menu_order.html:27": {
+  "verdict": "false",
+  "why": "id created by json_script filter at line 25: {{ sidebar_json|json_script:\"sidebar-data\" }}"
+ },
+ "dom_selector:data:item-index:templates/admin/menu_order.html:118": {
+  "verdict": "false",
+  "why": "line 118 IS the write (el.dataset.itemIndex = ii); tool called a write an unresolved read"
+ },
+ "dom_selector:data:section-index:templates/admin/menu_order.html:117": {
+  "verdict": "false",
+  "why": "line 117 IS the write (el.dataset.sectionIndex = si); also written at line 56"
+ },
+ "dom_selector:data:si:templates/admin/menu_order.html:84": {
+  "verdict": "false",
+  "why": "line 84 IS a write (delBtn.dataset.si = si)"
+ },
+ "dom_selector:data:section-index:templates/admin/menu_order.html:56": {
+  "verdict": "false",
+  "why": "line 56 IS the write (sec.dataset.sectionIndex = si)"
+ },
+ "dom_selector:data:stat-label:src/input.css:214": {
+  "verdict": "false",
+  "why": "data-stat-label= set in pointless/templates/push_arena.html and read by its inline JS at line 1100"
+ },
+ "dom_selector:data:si:templates/admin/menu_order.html:74": {
+  "verdict": "false",
+  "why": "attribute written in same file via dataset.si assignments (lines 72/84)"
+ },
+ "env_var:SECURE_HSTS_PRELOAD": {
+  "verdict": "true",
+  "why": "settings.py:149 hardcodes SECURE_HSTS_PRELOAD = True; the env var is never read - .env.example entry is dead"
+ },
+ "env_var:SECURE_SSL_REDIRECT": {
+  "verdict": "true",
+  "why": "settings.py derives it from IS_LOCAL/DEBUG, never reads the env var; compose passes it into the container unread"
+ },
+ "env_var:CSRF_COOKIE_SECURE": {
+  "verdict": "true",
+  "why": "settings.py:720 computes it from IS_LOCAL; env var never read"
+ },
+ "env_var:DJANGO_DEBUG": {
+  "verdict": "true",
+  "why": "settings.py:33 reads os.getenv('DEBUG'), not DJANGO_DEBUG - the .env.example var does nothing (real footgun)"
+ },
+ "env_var:MYSQL_ROOT_PASSWORD": {
+  "verdict": "false",
+  "why": "consumed by the mysql:8.0 image entrypoint declared in the same docker-compose.yml service - documented image interface"
+ },
+ "env_var:MYSQL_PASSWORD": {
+  "verdict": "false",
+  "why": "consumed by the mysql:8.0 image entrypoint declared in the same compose file"
+ },
+ "env_var:MYSQL_DATABASE": {
+  "verdict": "false",
+  "why": "consumed by the mysql:8.0 image entrypoint (creates the database) declared in the same compose file"
+ },
+ "env_var:SESSION_COOKIE_SECURE": {
+  "verdict": "true",
+  "why": "settings.py derives it from IS_LOCAL; env var never read"
+ },
+ "env_var:USE_PROXY_SSL_HEADER": {
+  "verdict": "true",
+  "why": "settings.py:568 hardcodes SECURE_PROXY_SSL_HEADER; env var never read"
+ },
+ "env_var:EMAIL_HOST_PASSWORD": {
+  "verdict": "true",
+  "why": "no python code reads it (not even settings.py); compose passes it into the container unread"
+ },
+ "env_var:DISCORD_CLIENT_SECRET": {
+  "verdict": "true",
+  "why": "only reference is an indirect read in OTHER/management_commands_archived/add_social_apps.py (archived one-off); no live reader"
+ },
+ "env_var:REPLICATE_API_TOKEN": {
+  "verdict": "true",
+  "why": "appears only in .env itself; nothing in the repo reads it"
+ },
+ "fetch:/api/purchase-button/": {
+  "verdict": "false",
+  "why": "claim sourced from stale hashed build artifact staticfiles/...1caca008ea73.js; live button_store.js has no such fetch and no route exists - dead-artifact noise, not a live seam"
+ },
+ "fetch:/api/hof/user-rewards/": {
+  "verdict": "false",
+  "why": "only in orphaned old-hash staticfiles copy; live pointless/static/pointless/js/arena_leaderboard.js no longer fetches it"
+ },
+ "fetch:/api/hof/claim-all-rewards/": {
+  "verdict": "false",
+  "why": "only in stale staticfiles build artifact; removed from the live source"
+ },
+ "fetch:/submit_push/": {
+  "verdict": "false",
+  "why": "handled by a raw ASGI handler in myproject/asgi.py:110 (deliberately outside URLconf for speed) - route exists"
+ },
+ "fetch:/static/pointless/dist/.vite/manifest.json": {
+  "verdict": "false",
+  "why": "the file exists at pointless/static/pointless/dist/.vite/manifest.json and is served by Django staticfiles - a file fetch, not a route"
+ },
+ "fetch:/hu/lobby/": {
+  "verdict": "false",
+  "why": "page_urls.py:102 path('lobby/') is included inside i18n_patterns (myproject/urls.py:139-167), so /hu/lobby/ resolves via the language prefix"
+ },
+ "fetch:/api/hof/claim-reward/": {
+  "verdict": "false",
+  "why": "only in stale staticfiles build artifact; removed from the live source"
+ },
+ "multi_writer_element:total_buttons_row": {
+  "verdict": "false",
+  "why": "the two 'writers' are alternative templates for separate pages; button_management.html is orphaned (no view renders it - only buttonpusher_buttons.html is, admin.py:2418) so they never co-render"
+ },
+ "multi_writer_element:button_type_row": {
+  "verdict": "false",
+  "why": "same-id elements in two templates that never render together (one is an orphaned duplicate)"
+ },
+ "multi_writer_element:button_index_row": {
+  "verdict": "false",
+  "why": "same-id elements in two templates that never render together (one is an orphaned duplicate)"
+ },
+ "multi_writer_element:toast": {
+  "verdict": "false",
+  "why": "buttonpusher_changelist.html and buttonpusher_stats.html are two different admin pages, each with its own #toast + showToast; never co-rendered"
+ },
+ "redis_key:season_ended_data:*:*": {
+  "verdict": "false",
+  "why": "flagged line 2440 is a cache.delete, and leaderboard_views.py:3393-3394 READS it via ck = f'season_ended_data:...'; data = cache.get(ck) - variable indirection"
+ },
+ "redis_key:warrior:positions:*": {
+  "verdict": "true",
+  "why": "only a leftover cache.delete + comment; real cache key is cache:arena_position:{uid} (arena_views.py:45) - nothing writes or reads warrior:positions"
+ },
+ "redis_key:store_rotation:prod:*:0": {
+  "verdict": "false",
+  "why": "flagged line is a cache.delete; key built in models.py:1911, returned, then cache.get at 1987 and cache.set at 2039 via the cache_key variable"
+ },
+ "redis_key:api:streak_opportunities:*": {
+  "verdict": "false",
+  "why": "read at api_views.py:1620-1624 via cache_key variable (aget) and deleted at 1095/1112 - reads exist through variable indirection"
+ },
+ "redis_key:lobby:100:members": {
+  "verdict": "false",
+  "why": "test literal instance of the live pattern lobby:{owner}:members, zcard-read in team_utils.py:99/133, arena_redis.py:268, gdpr_service.py - literal not unified with the f-string pattern"
+ },
+ "redis_key:user:*:country_checked": {
+  "verdict": "false",
+  "why": "written at navbar_views.py:142 via safe_set(r, f\"user:{id}:country_checked\", 1, ex=604800) - wrapper-function write missed"
+ },
+ "redis_key:user:*:challenges:cache": {
+  "verdict": "false",
+  "why": "read at challenges/core.py:836 via safe_get(self.r, cache_key) where cache_key = the f-string - wrapper + variable indirection"
+ },
+ "redis_key:store:current_rotation": {
+  "verdict": "true",
+  "why": "setex-written in store_notifications.py:46; only other touch is warm_redis_cache doing a warming GET from a key list - no real consumer, stale 'clients poll this' comment"
+ },
+ "redis_key:persistence:mirror:cursor": {
+  "verdict": "false",
+  "why": "production reads AND writes it via module constant _CURSOR_KEY in tasks/persistence_tasks.py:92/213 - constant indirection missed"
+ },
+ "redis_key:user:*:challenge_heartbeat": {
+  "verdict": "true",
+  "why": "SET with 120s TTL in two places and deleted in admin reset, but no code ever GETs/EXISTs it - presence key nothing consumes"
+ },
+ "redis_key:push_arena:page:*:*": {
+  "verdict": "false",
+  "why": "read at push_views.py:934-936 via page_cache_key variable (cache.aget) - variable indirection"
+ },
+ "redis_key:user:*:last_validated_streak": {
+  "verdict": "false",
+  "why": "written at api_views.py:998 (pipe.set ex=3600) and READ inside a Lua script via r.eval(streak_key,...) in push_utils.py:287 - EVAL-key read missed"
+ },
+ "redis_ttl:cache:sitemap:players:v1:pointless/tests/unit/test_public_profile.py:377": {
+  "verdict": "false",
+  "why": "line is cache.delete('cache:sitemap:players:v1') - a delete misread as a no-TTL write"
+ },
+ "redis_ttl:rate_limit:user_*:*:pointless/tests/integration/views/test_announcement_should_show_async.py:116": {
+  "verdict": "false",
+  "why": "line is mon_r.delete(f\"rate_limit:...\") - a delete misread as a no-TTL write"
+ },
+ "redis_ttl:cache:health:system:pointless/tests/unit/test_system_health.py:14": {
+  "verdict": "false",
+  "why": "line is cache.delete('cache:health:system') in a test fixture - delete, not a write"
+ },
+ "redis_ttl:cache:avatar_item:*:pointless/signals.py:264": {
+  "verdict": "false",
+  "why": "line is _dj_cache.delete(f\"cache:avatar_item:...\") - cache invalidation, not a write"
+ },
+ "redis_ttl:cache:health:system:pointless/tests/unit/test_system_health.py:12": {
+  "verdict": "false",
+  "why": "line is cache.delete('cache:health:system') - delete, not a write"
+ },
+ "redis_ttl:cache:sitemap:players:v1:pointless/tests/unit/test_crawl_budget.py:60": {
+  "verdict": "false",
+  "why": "line is cache.delete('cache:sitemap:players:v1') - delete, not a write"
+ },
+ "redis_ttl:cache:cps:stats:pointless/services/pps_service.py:589": {
+  "verdict": "false",
+  "why": "line is cache.delete(\"cache:cps:stats\") (PB-CPS-STALE-STATS bust) - delete, not a write"
+ },
+ "redis_ttl:cache:sitemap:players:v1:pointless/tests/unit/test_sitemap_index.py:83": {
+  "verdict": "false",
+  "why": "line is cache.delete('cache:sitemap:players:v1') - delete, not a write"
+ },
+ "url_reference:url_tag:admin:pointless_referralcode_history:templates/admin/myapp/referralcode/change_form.html:35": {
+  "verdict": "false",
+  "why": "reverses to /asd/pointless/referralcode/<id>/history/ - auto-generated ModelAdmin history URL, invisible to source-only route reading"
+ },
+ "url_reference:url_tag:admin:buttonpusher_game_analytics:templates/admin/api_analytics.html:25": {
+  "verdict": "false",
+  "why": "reverses OK - custom ModelAdmin.get_urls() route (admin.py), runtime-built"
+ },
+ "url_reference:url_tag:admin:socialaccount_socialapp_delete:templates/admin/socialauth/change_list.html:254": {
+  "verdict": "false",
+  "why": "reverses OK - auto-generated admin URL for allauth's registered SocialApp model"
+ },
+ "url_reference:url_tag:admin:pointless_challengeschedule_add:templates/admin/myapp/challengeschedule/change_list.html:31": {
+  "verdict": "false",
+  "why": "reverses to /asd/pointless/challengeschedule/add/ - auto-generated ModelAdmin add URL"
+ },
+ "url_reference:url_tag:admin:buttonpusher_live_api_analytics_aggregate:templates/admin/api_analytics.html:886": {
+  "verdict": "false",
+  "why": "reverses OK - custom get_urls() route"
+ },
+ "url_reference:url_tag:admin:buttonpusher_buttons:templates/admin/buttonpusher_change_form.html:68": {
+  "verdict": "false",
+  "why": "reverses OK with object_id arg - named route in ButtonPusherAdmin.get_urls() (admin.py:196)"
+ },
+ "url_reference:url_tag:admin:buttonpusher_live_api_analytics_celery:templates/admin/celery_health.html:107": {
+  "verdict": "false",
+  "why": "reverses OK - custom get_urls() route"
+ },
+ "url_reference:url_tag:admin:pointless_superuserproxy_add:templates/admin/myapp/superuserproxy/change_list.html:176": {
+  "verdict": "false",
+  "why": "reverses OK - auto-generated admin URL for the registered SuperUserProxy model"
+ },
+ "url_reference:url_tag:admin:pointless_buttonpusher_changelist:templates/admin/buttonpusher_changelist.html:67": {
+  "verdict": "false",
+  "why": "reverses to /asd/pointless/buttonpusher/ - auto-generated changelist URL"
+ },
+ "url_reference:url_tag:admin:pointless_buttonpusher_changelist:templates/admin/buttonpusher_changelist.html:44": {
+  "verdict": "false",
+  "why": "same auto-generated changelist URL, reverses OK"
+ },
+ "url_reference:url_tag:admin:buttonpusher_live_api_analytics_history:templates/admin/api_analytics.html:386": {
+  "verdict": "false",
+  "why": "reverses OK - custom get_urls() route"
+ },
+ "url_reference:url_tag:admin:pointless_challengeschedule_add:templates/admin/myapp/challengeschedule/change_list.html:205": {
+  "verdict": "false",
+  "why": "same auto-generated add URL, reverses OK"
+ }
 }

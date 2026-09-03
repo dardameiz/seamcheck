@@ -180,3 +180,88 @@ class Helpers(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheChainAsGhostWritesIt(unittest.TestCase):
+    """Four links, and three of them were dropped.
+
+    Ghost mounts its entire admin API as `backendApp.lazyUse(BASE_API_PATH,
+    require('../api'))` -> `apiApp.lazyUse('/admin/', require('./endpoints/admin/app'))`
+    -> `apiApp.use(routes())` -> `router.get('/site')`. Every claim judged on Ghost was
+    a false one, all eleven of them the same shape: a real endpoint reported as a route
+    the server does not serve, because `/ghost/api/admin/site` came out as `/site`.
+    """
+
+    def test_a_mount_helper_by_another_name_is_still_a_mount(self):
+        root = _repo({
+            "routes.js": "const r = require('express').Router();\n"
+                         "r.get('/site', h);\nmodule.exports = r;\n",
+            "server.js": APP + "app.lazyUse('/api', require('./routes'));\n",
+        })
+        self.assertIn("/api/site", _paths(root))
+
+    def test_a_prefix_held_in_a_constant_in_the_same_file(self):
+        root = _repo({
+            "routes.js": "const r = require('express').Router();\n"
+                         "r.get('/site', h);\nmodule.exports = r;\n",
+            "server.js": APP + "const BASE = '/ghost/api';\n"
+                               "app.use(BASE, require('./routes'));\n",
+        })
+        self.assertIn("/ghost/api/site", _paths(root))
+
+    def test_a_prefix_imported_from_another_module(self):
+        # Where a shared prefix always lives, and Ghost's is in a .ts file - which the
+        # resolver did not try, so the constant was never found and the mount was lost.
+        root = _repo({
+            "shared/url-utils.ts": "const BASE_API_PATH = '/ghost/api';\n"
+                                   "export { BASE_API_PATH };\n",
+            "routes.js": "const r = require('express').Router();\n"
+                         "r.get('/site', h);\nmodule.exports = r;\n",
+            "server.js": APP + "const { BASE_API_PATH } = require('./shared/url-utils');\n"
+                               "app.use(BASE_API_PATH, require('./routes'));\n",
+        })
+        self.assertIn("/ghost/api/site", _paths(root))
+
+    def test_a_mount_with_no_path_still_carries_the_chain(self):
+        # `apiApp.use(routes())` adds nothing to the path and everything to the chain:
+        # without it the prefix above never reaches the routes underneath.
+        root = _repo({
+            "routes.js": "const r = require('express').Router();\n"
+                         "r.get('/site', h);\nmodule.exports = function () { return r; };\n",
+            "admin/app.js": "const express = require('express');\n"
+                            "const routes = require('../routes');\n"
+                            "module.exports = function () {\n"
+                            "  const apiApp = express();\n"
+                            "  apiApp.use(routes());\n"
+                            "  return apiApp;\n};\n",
+            "server.js": APP + "app.use('/ghost/api/admin', require('./admin/app'));\n",
+        })
+        self.assertIn("/ghost/api/admin/site", _paths(root))
+
+    def test_a_lone_middleware_is_not_a_prefix(self):
+        # `apiApp.use(versionMatch)` is one middleware and no path. Read as a prefix it
+        # mounted the whole app under a name - which is how the fix above could have
+        # traded eleven false findings for a hundred.
+        root = _repo({
+            "mw.js": "module.exports = function versionMatch(req, res, next) { next(); };\n",
+            "routes.js": "const r = require('express').Router();\n"
+                         "r.get('/site', h);\nmodule.exports = r;\n",
+            "server.js": APP + "const versionMatch = require('./mw');\n"
+                               "app.use(versionMatch);\n"
+                               "app.use('/api', require('./routes'));\n",
+        })
+        paths = _paths(root)
+        self.assertIn("/api/site", paths)
+        self.assertNotIn("/versionMatch/site", paths)
+
+    def test_an_unresolvable_constant_drops_the_mount_rather_than_inventing_a_path(self):
+        # Mounting at a made-up path does not lose one route: it moves every route under
+        # it to somewhere that does not exist, and reports each as a broken call.
+        root = _repo({
+            "routes.js": "const r = require('express').Router();\n"
+                         "r.get('/site', h);\nmodule.exports = r;\n",
+            "server.js": APP + "const { NOWHERE } = require('some-package');\n"
+                               "app.use(NOWHERE, require('./routes'));\n",
+        })
+        paths = _paths(root)
+        self.assertNotIn("/NOWHERE/site", paths)
