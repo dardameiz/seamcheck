@@ -113,11 +113,30 @@ def match_dom_selectors(dom_attrs: list[Symbol], dom_selectors: list[Symbol]) ->
     # class it would not be - those are also reached by CSS cascade and by markup this scan
     # does not model. 516 of these sat in `uncertain` with no explanation at all, which is
     # the one thing a status word must never do.
+    # An element can carry more than one handle, and only one of them needs to be the one
+    # the code uses. `<button id="lazyConfirmBtn" class="lazy-btn-confirm">` is bound by
+    # its id; the class is a spare label on a working button, and reporting it invites
+    # someone to strip an attribute off live markup for a handful of bytes. Measured on
+    # the reference project: 26 findings of this shape, 0 of them defects.
+    live_elements = {
+        attr.element for attr in dom_attrs if attr.element and attr.id in reached
+    }
     for attr in dom_attrs:
-        if _base_sub(attr) == "data" and attr.id not in reached:
-            edges.append(Edge(from_id=attr.id, to_id=attr.id, status=Status.UNUSED))
+        if _base_sub(attr) != "data" or attr.id in reached:
+            continue
+        if attr.element and attr.element in live_elements:
+            edges.append(Edge(from_id=attr.id, to_id=attr.id, status=Status.UNCERTAIN,
+                              note=_SPARE_LABEL_NOTE))
+            continue
+        edges.append(Edge(from_id=attr.id, to_id=attr.id, status=Status.UNUSED))
     return edges
 
+
+_SPARE_LABEL_NOTE = (
+    "Nothing reads this attribute, but the element it sits on IS reached - through "
+    "another of its attributes. So it is a spare handle on live markup, not a dead "
+    "element: worth removing only if you are tidying, and never worth removing blind."
+)
 
 _APPLIED_NOTE = (
     "No template renders this class; JavaScript puts it on an element, and that line is "
@@ -355,6 +374,24 @@ def _assemblable(label: str, stems: set[str]) -> str | None:
     return None
 
 
+# `ms-ladder--cyan` is a variant of `ms-ladder`, and BEM says so out loud. Where the base
+# block has a rule, the modifier is not a class nothing defines: often the modifier's rule
+# was simply never written, and the label is the only surviving trace that someone meant
+# to. Reported on 26 attributes of the reference project, none of which was a defect - and
+# deleting one destroys the intent along with the label.
+_BEM_SEPARATORS = ("--", "__")
+
+
+def _bem_block(label: str, css_by_key: dict[tuple[str, str], Symbol]) -> Symbol | None:
+    for separator in _BEM_SEPARATORS:
+        head = label.split(separator)[0]
+        if head and head != label:
+            styled = css_by_key.get(("class", head))
+            if styled is not None:
+                return styled
+    return None
+
+
 def match_css_selectors(
     dom_selectors: list[Symbol],
     dom_attrs: list[Symbol],
@@ -427,7 +464,16 @@ def match_css_selectors(
             continue
         else:
             from_cdn = _from_a_cdn(symbol.label, vendor_prefixes)
-            if not styles_are_local:
+            block = _bem_block(symbol.label, css_by_key)
+            if block:
+                edges.append(Edge(
+                    from_id=symbol.id, to_id=block.id, status=Status.UNCERTAIN,
+                    note=("A modifier of `" + block.label + "`, which is styled. Either "
+                          "the modifier's own rule was never written - the label being "
+                          "the only trace that someone meant to style it - or it exists "
+                          "to be matched by code. Not a class nothing defines."),
+                ))
+            elif not styles_are_local:
                 edges.append(Edge(
                     from_id=symbol.id, to_id=symbol.id, status=Status.UNCERTAIN,
                     note=("No stylesheet in this repository defines this class, and no "

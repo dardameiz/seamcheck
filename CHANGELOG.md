@@ -148,9 +148,30 @@ reference project - the first time a release was tested the way a user meets it.
   element is text, and a path has a letter in it; both rules now apply before a literal is
   read as a sighting.
 
-  Measured on the reference project: claims 3,960 → 3,756, `connected` +431. Replayed
-  against the graded push_arena table, 29 of the false claims whose code still exists are
-  no longer claims, and **every real finding that still exists is still reported**.
+- **Fixed** — **an element with more than one handle is not a dead element.**
+  `<button id="lazyConfirmBtn" class="lazy-btn-confirm">` is bound by its id, and the
+  class was reported as a label nothing uses - which invites someone to strip an attribute
+  off working markup. An attribute nothing reads, on an element something DOES reach
+  through another of its attributes, is now `uncertain` with that said plainly. Reading
+  all 26 findings of this shape on the reference project by hand produced zero deletions.
+  Attributes carry the element they sit on for this, because "same line" is a different
+  question: these templates run 400 characters wide and put four unrelated tags on a line.
+- **Fixed** — **a BEM modifier of a styled block is a variant, not a missing rule.**
+  `ms-ladder--cyan` where `.ms-ladder` is styled usually means the modifier's own rule was
+  never written, and the label is the only trace that somebody meant to write it.
+- **Fixed** — **an element named by a constant is found.**
+  `var COUNTDOWN_ID = 'arena-next-season-countdown'` followed by
+  `getElementById(COUNTDOWN_ID)` recorded a lookup of `<runtime value>`, so a plainly
+  rendered, plainly used element was reported as one nothing reaches. A string that spells
+  a name the markup declares is now evidence that the name is live in that file - bounded
+  by what the markup declares, so it can never invent an element, and emitted as evidence,
+  so it can never become a claim of its own.
+
+  Measured on the reference project: claims 4,023 → 3,658, `connected` +5,165. Replayed
+  against the graded push_arena table and counting only rows whose code still exists,
+  **87 of 143 false claims are no longer claims and no real finding was lost** - the three
+  that stopped being claims are the ones a hands-on review had already reclassified as
+  not-defects.
 
 Known open, recorded rather than hidden:
 

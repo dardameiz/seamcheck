@@ -171,6 +171,50 @@ these findings by hand on `push_arena.js`:
   was in the dead region. Before reporting two writers, check whether either is
   unreachable - a "risk" whose second writer never runs is not a risk, it is a corpse.
 
+## 8. F18, and a third correction: a mention is not a use
+
+Raised after the person acting on these findings read all 26 `dom_attr` rows on
+`push_arena.html` and **deleted none of them** - "26 findings, 0 defects". Three rules,
+all three now shipped or recorded:
+
+- **An element can carry more than one handle, and one of them is enough.**
+  `<button id="lazyConfirmBtn" class="lazy-btn-confirm">` is bound by its id; the class is
+  a spare label on a working button. Reporting it invites someone to strip an attribute
+  off live markup for a handful of bytes. Implemented, and it needed a new `element`
+  field: "same line" is not the same question on a template whose lines run 400
+  characters and carry four unrelated tags.
+- **A BEM modifier of a styled block is a variant, not a dead class.** `ms-ladder--cyan`
+  with `.ms-ladder` styled is usually a rule nobody wrote yet, and the label is the only
+  surviving trace that somebody meant to. Implemented.
+- **"Unreferenced" and "unreachable" are different findings and must not share a
+  severity.** The first was worth 0 fixes on that surface; the second was worth 329
+  lines. Not yet implemented - see §7, the dead region.
+
+**And the third correction to the adjudication.** Its evidence column counts any mention
+of a name as a reference, including a WRITE. `data-base-achieved` is rendered by the
+template and set by `dataset.baseAchieved = count` in two places, and read by nothing -
+no `getAttribute`, no `[data-base-achieved]` selector, no stylesheet. Graded false on
+"referenced from 2 files"; it is a true finding, and the same shape as correction 2. A
+mention is not a use.
+
+## Measured, 2026-09-04
+
+Reference project, claims (`unresolved` + `unused`) before and after §1-§4 and §8:
+
+| | before | after |
+|---|---:|---:|
+| claims | 4,023 | 3,658 |
+| unresolved | 2,554 | 2,249 |
+| unused | 1,469 | 1,409 |
+| connected | 40,169 | 45,334 |
+
+Replayed against the graded table, counting only rows whose code still exists: **87 of
+143 false claims are no longer claims**, and **no real finding was lost** - the three that
+stopped being claims are `ms-ladder--cyan`, `ms-ladder--green` and `mobile-hourly-base`,
+which are exactly the rows the hands-on pass reclassified as not-defects. 56 false claims
+remain, dominated by names assembled at runtime and by shapes where a mention really is
+the only evidence either way.
+
 ## Order and gates
 
 1. T6 (largest, and the one the map most visibly gains from).

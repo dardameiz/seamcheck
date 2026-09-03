@@ -452,12 +452,20 @@ def run_scan(
     # a file the bundler entry never reaches still proves the class is read, and six copies
     # of that class in a template were being reported as markup nothing touches while the
     # line that touches them sat one directory away.
-    entry_selectors = extract_dom_selectors(js_files, template_files or [])
+    # What the markup actually renders, so a string that spells one of those names can be
+    # recognised where the lookup itself is a variable. Built from the attributes just
+    # scanned rather than guessed, which is what keeps the rule from inventing elements.
+    declared_names = {
+        symbol.label: symbol.sub.split(":", 1)[0]
+        for symbol in dom_attrs if symbol.label
+    }
+    entry_selectors = extract_dom_selectors(js_files, template_files or [],
+                                            declared_names)
     seen_selector_ids = {symbol.id for symbol in entry_selectors}
     evidence_selectors = [
         dataclasses.replace(symbol, sub=f"{symbol.sub}:evidence")
         for symbol in extract_dom_selectors(
-            [f for f in js_evidence_files if f not in set(js_files)], [])
+            [f for f in js_evidence_files if f not in set(js_files)], [], declared_names)
         if symbol.id not in seen_selector_ids
     ] if js_evidence_files != js_files else []
     dom_selectors = (
@@ -472,7 +480,8 @@ def run_scan(
     # entry graph lost every one of them while the false positives stayed.
     dom_writes = (
         dom_selectors if js_evidence_files == js_files
-        else dom_selectors + extract_dom_selectors(js_evidence_files, template_files or [])
+        else dom_selectors + extract_dom_selectors(js_evidence_files, template_files or [],
+                                                   declared_names)
     )
     progress.step("reading stylesheets")
     css_symbols = extract_css(css_files or [])

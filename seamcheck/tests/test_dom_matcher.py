@@ -265,3 +265,72 @@ class AppliedClassIsEvidenceTests(SimpleTestCase):
         applier = self._selector("only-applied", "class:apply")
         edges = match_dom_selectors([], [applier])
         self.assertEqual(edges, [])
+
+
+class SpareLabelOnLiveMarkupTests(SimpleTestCase):
+    """An element can carry more than one handle, and one of them is enough.
+
+    `<button id="lazyConfirmBtn" class="lazy-btn-confirm">` is bound by its id. Reporting
+    the class as unused invites someone to strip an attribute off a working button for a
+    handful of bytes. Twenty-six findings of this shape on the reference project, none of
+    them a defect.
+    """
+
+    def _attr(self, sub, label, element, line=1):
+        return Symbol(id=f"dom_attr:{sub}:{label}:page.html:{line}", kind="dom_attr",
+                      label=label, sub=sub, file="page.html", line=line,
+                      status=Status.UNCERTAIN, snippet=f'{sub}="{label}"', chain=[label],
+                      note="", element=element)
+
+    def _selector(self, sub, label):
+        return Symbol(id=f"dom_selector:{sub}:{label}:app.js", kind="dom_selector",
+                      label=label, sub=sub, file="app.js", line=2,
+                      status=Status.UNCERTAIN, snippet=label, chain=[label], note="")
+
+    def test_a_spare_data_attribute_on_a_reached_element_is_not_a_finding(self):
+        read = self._attr("data", "used-one", "page.html:10")
+        spare = self._attr("data", "spare-one", "page.html:10")
+        edges = match_dom_selectors([read, spare], [self._selector("data:read", "used-one")])
+        status = {e.from_id: e.status for e in edges}
+        self.assertEqual(status[spare.id], Status.UNCERTAIN)
+        self.assertIn("spare handle", next(e.note for e in edges if e.from_id == spare.id))
+
+    def test_an_attribute_on_an_element_nothing_reaches_is_still_unused(self):
+        lonely = self._attr("data", "nobody-reads-this", "page.html:40")
+        edges = match_dom_selectors([lonely], [])
+        self.assertEqual([e.status for e in edges], [Status.UNUSED])
+
+    def test_two_tags_on_one_line_are_two_elements(self):
+        # The reason `element` exists rather than reusing the line: this project's
+        # templates run 400 characters wide and put four unrelated tags on a line.
+        read = self._attr("data", "used-one", "page.html:100", line=7)
+        other = self._attr("data", "spare-one", "page.html:260", line=7)
+        edges = match_dom_selectors([read, other], [self._selector("data:read", "used-one")])
+        status = {e.from_id: e.status for e in edges}
+        self.assertEqual(status[other.id], Status.UNUSED)
+
+
+class BemModifierTests(SimpleTestCase):
+    """`ms-ladder--cyan` where `.ms-ladder` is styled is a variant, not a dead class."""
+
+    def _css(self, label):
+        return Symbol(id=f"css_selector:class:{label}", kind="css_selector", label=label,
+                      sub="class", file="a.css", line=1, status=Status.UNCERTAIN,
+                      snippet=f".{label}", chain=[label], note="")
+
+    def _markup(self, label):
+        return Symbol(id=f"dom_attr:class:{label}:page.html", kind="dom_attr", label=label,
+                      sub="class", file="page.html", line=1, status=Status.UNCERTAIN,
+                      snippet=f'class="{label}"', chain=[label], note="")
+
+    def test_a_modifier_of_a_styled_block_is_not_unresolved(self):
+        edges = match_css_selectors([], [self._markup("ms-ladder--cyan")],
+                                    [self._css("ms-ladder")], set())
+        mine = [e for e in edges if e.from_id.endswith("ms-ladder--cyan:page.html")]
+        self.assertEqual([e.status for e in mine], [Status.UNCERTAIN])
+        self.assertIn("modifier of", mine[0].note)
+
+    def test_a_modifier_of_nothing_stays_a_finding(self):
+        edges = match_css_selectors([], [self._markup("orphan--cyan")], [], set())
+        mine = [e for e in edges if e.from_id.endswith("orphan--cyan:page.html")]
+        self.assertEqual([e.status for e in mine], [Status.UNRESOLVED])

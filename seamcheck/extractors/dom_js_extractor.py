@@ -306,21 +306,86 @@ def _dom_selectors_in_uncached(path: str, ast_root: dict, line_offset: int = 0) 
     return symbols
 
 
-def extract_dom_selectors(js_files: list[str], template_files: list[str] | None = None) -> list[Symbol]:
+def extract_dom_selectors(
+    js_files: list[str],
+    template_files: list[str] | None = None,
+    declared: dict[str, str] | None = None,
+) -> list[Symbol]:
     """DOM queries, from .js files AND from the JavaScript templates write inline.
 
     Inline <script> used to be invisible here. It is not a rounding error: the project this
     was measured on keeps 202 KB of it, and every getElementById inside it was unread - so
     148 template elements that JavaScript demonstrably uses were reported as elements
     nothing reaches, 17% of everything the scan claimed.
+
+    `declared` maps each name the markup renders to what it is - `id`, `class` or `data`.
+    When given, a bare string literal that spells one of them is recorded as evidence -
+    see `_named_in_a_constant`.
     """
     from seamcheck.extractors.js_extractor import parse_inline_blocks
 
     symbols: list[Symbol] = []
     for path, ast_root in iter_parsed([f for f in js_files if os.path.isfile(f)]):
         symbols += _dom_selectors_in(path, ast_root)
+        symbols += _named_in_a_constant(path, ast_root, declared)
     for template, ast_root, offset in parse_inline_blocks(template_files or []):
         symbols += _dom_selectors_in(template, ast_root, line_offset=offset)
+        symbols += _named_in_a_constant(template, ast_root, declared, line_offset=offset)
+    return symbols
+
+
+def _named_in_a_constant(
+    path: str, ast_root: dict, declared: dict[str, str] | None, line_offset: int = 0
+) -> list[Symbol]:
+    """A string that spells an element the markup renders, held in a variable.
+
+        var COUNTDOWN_ID = 'arena-next-season-countdown';
+        ...
+        document.getElementById(COUNTDOWN_ID);
+
+    The lookup names a variable, so the reader saw `getElementById(<runtime value>)` and
+    the element - plainly rendered, plainly used - was reported as one nothing reaches.
+    Following the variable is data-flow analysis this tool does not do; recognising the
+    string is not.
+
+    Bounded on purpose, and in two ways. Only strings that match a name the markup
+    ALREADY declares are recorded, so this can never invent an element and the output is
+    at most one symbol per declared name per file rather than one per string literal -
+    the reference project has 48,000 symbols and hundreds of thousands of strings.
+    And it is emitted as `:evidence`, so it satisfies the element it names and can never
+    become a claim of its own: a string is not proof that a lookup happened, only that
+    the name is live in this file.
+    """
+    if not declared:
+        return []
+    symbols: list[Symbol] = []
+    seen: set[str] = set()
+    basename = os.path.basename(path)
+    for node, enclosing in _walk(ast_root):
+        if node.get("type") != "Literal":
+            continue
+        text = node.get("value")
+        kind = declared.get(text) if isinstance(text, str) else None
+        if not kind:
+            continue
+        raw = node_line(node)
+        line = (raw + line_offset) if raw else raw
+        symbol_id = f"dom_selector:{kind}:string:{text}:{path}"
+        if symbol_id in seen:
+            continue
+        seen.add(symbol_id)
+        symbols.append(
+            Symbol(
+                id=symbol_id, kind="dom_selector", label=text,
+                sub=f"{kind}:string:evidence",
+                file=path, line=line, status=Status.UNCERTAIN, snippet=f"'{text}'",
+                chain=[basename, enclosing] if enclosing else [basename], owner=enclosing,
+                note="A string in this file spells the name of an element the markup "
+                     "renders - held in a variable, most likely, and used through it. "
+                     "Evidence that the name is live here; not a claim that this line "
+                     "looks it up.",
+            )
+        )
     return symbols
 
 

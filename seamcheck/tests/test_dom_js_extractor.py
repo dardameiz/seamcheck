@@ -145,3 +145,55 @@ class AttributeWritesAreDefinitionsTests(SimpleTestCase):
         """)], [])
         rows = [s for s in found if s.label == "incremented-today"]
         self.assertEqual(len(rows), 1, [(s.sub, s.line) for s in rows])
+
+
+class NamedInAConstantTests(SimpleTestCase):
+    """`var COUNTDOWN_ID = 'arena-next-season-countdown'` then `getElementById(ID)`.
+
+    The lookup names a variable, so the reader recorded `getElementById(<runtime value>)`
+    and the element - plainly rendered, plainly used - was reported as one nothing
+    reaches. Following the variable is data-flow analysis this tool does not do;
+    recognising the string is not.
+    """
+
+    def _selectors(self, source: str, declared: dict[str, str]):
+        import tempfile
+        import textwrap
+
+        path = Path(tempfile.mkdtemp()) / "app.js"
+        path.write_text(textwrap.dedent(source), encoding="utf-8")
+        return extract_dom_selectors([str(path)], [], declared)
+
+    def test_a_string_that_spells_a_rendered_element_is_evidence(self):
+        found = self._selectors("""
+            var COUNTDOWN_ID = 'arena-next-season-countdown';
+            export function tick() { return document.getElementById(COUNTDOWN_ID); }
+        """, {"arena-next-season-countdown": "id"})
+        rows = [(s.sub, s.label) for s in found if s.label == "arena-next-season-countdown"]
+        self.assertEqual(rows, [("id:string:evidence", "arena-next-season-countdown")])
+
+    def test_it_can_never_invent_an_element(self):
+        # Bounded by what the markup declares: a project's strings outnumber its symbols
+        # by orders of magnitude, and a rule that emitted one symbol per string would
+        # double the graph to say nothing.
+        found = self._selectors("""
+            const label = 'not-in-any-markup';
+        """, {"something-else": "id"})
+        self.assertEqual([s.label for s in found], [])
+
+    def test_it_is_evidence_and_never_a_claim(self):
+        # A string is not proof that a lookup happened. The sub ends in `:evidence`, which
+        # is how the matcher knows never to raise it as a finding of its own.
+        found = self._selectors("""
+            const NAME = 'known-thing';
+        """, {"known-thing": "class"})
+        self.assertTrue(all(s.sub.endswith(":evidence") for s in found), found)
+        self.assertEqual([s.sub for s in found], ["class:string:evidence"])
+
+    def test_one_symbol_per_name_per_file(self):
+        found = self._selectors("""
+            const A = 'known-thing';
+            const B = 'known-thing';
+            const C = ['known-thing', 'known-thing'];
+        """, {"known-thing": "id"})
+        self.assertEqual(len(found), 1, [(s.sub, s.line) for s in found])

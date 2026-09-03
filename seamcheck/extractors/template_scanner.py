@@ -166,11 +166,36 @@ def _without_code_blocks(text: str) -> str:
     return _SCRIPT_OR_STYLE_RE.sub(blank, text)
 
 
+# Where each opening tag begins, so two attributes on ONE tag can be recognised as one
+# element. "Same line" is not the same question: this project's templates run 400
+# characters wide and put four unrelated tags on a line.
+_TAG_START_RE = re.compile(r"<[A-Za-z][\w:-]*")
+
+
+def _tags_in(text: str) -> list[int]:
+    return [match.start() for match in _TAG_START_RE.finditer(text)]
+
+
+def _element_at(tags: list[int], offset: int, file_path: str) -> str:
+    """The tag an attribute at this offset sits in: the last tag opening before it."""
+    lo, hi = 0, len(tags) - 1
+    if hi < 0 or offset < tags[0]:
+        return ""
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if tags[mid] <= offset:
+            lo = mid
+        else:
+            hi = mid - 1
+    return f"{file_path}:{tags[lo]}"
+
+
 def scan_templates(template_files: list[str]) -> list[Symbol]:
     symbols: list[Symbol] = []
     for file_path in template_files:
         raw = pathlib.Path(file_path).read_text(encoding="utf-8", errors="replace")
         text = _without_code_blocks(raw)
+        tags = _tags_in(text)
         for match in _ATTRIBUTE_RE.finditer(text):
             attribute = match.group(1)
             value = match.group(2) if match.group(2) is not None else match.group(3)
@@ -182,6 +207,7 @@ def scan_templates(template_files: list[str]) -> list[Symbol]:
             kind = "data" if attribute.startswith("data-") else attribute
             label_prefix = attribute[len("data-"):] if kind == "data" else ""
             line = _line_of(text, match.start())
+            element = _element_at(tags, match.start(), file_path)
 
             for token in _tokens("class" if kind == "class" else kind, value):
                 label = label_prefix if kind == "data" else token
@@ -198,6 +224,7 @@ def scan_templates(template_files: list[str]) -> list[Symbol]:
                         status=Status.UNCERTAIN,
                         snippet=f'{attribute}="{value}"',
                         chain=[pathlib.Path(file_path).name, label],
+                        element=element,
                         note="",
                     )
                 )
@@ -207,7 +234,8 @@ def scan_templates(template_files: list[str]) -> list[Symbol]:
                         id=f"dom_attr:data:{label_prefix}:{file_path}:{line}",
                         kind="dom_attr", label=label_prefix, sub="data", file=file_path,
                         line=line, status=Status.UNCERTAIN, snippet=f'{attribute}="{value}"',
-                        chain=[pathlib.Path(file_path).name, label_prefix], note="",
+                        chain=[pathlib.Path(file_path).name, label_prefix],
+                        element=element, note="",
                     )
                 )
 

@@ -36,6 +36,11 @@ class Symbol:
     # Descriptive only: no status depends on it, so a wrong owner can never become a wrong
     # finding.
     owner: str = ""
+    # Which element in the markup an attribute belongs to - `file:line:offset`, one value
+    # per opening tag. Two attributes on one tag are two symbols and one element, and
+    # nothing could tell: on a template whose lines are 400 characters wide, "same line"
+    # lumps four unrelated tags together. Empty for everything that is not an attribute.
+    element: str = ""
 
 
 @dataclass
