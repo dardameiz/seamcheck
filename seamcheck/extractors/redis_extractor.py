@@ -59,6 +59,11 @@ _ALL = _READS | _WRITES
 _NOT_STORES = frozenset({"delete", "del", "unlink", "expire", "pexpire", "publish",
                          "srem", "zrem", "lpop", "rpop"})
 
+# Removing a key, as opposed to storing one. A group made ENTIRELY of these has a writer
+# the scan never saw - you cannot invalidate what nothing wrote.
+_INVALIDATIONS = frozenset({"delete", "del", "adelete", "delete_many", "adelete_many",
+                            "unlink", "expire", "pexpire", "clear"})
+
 # A receiver that says "this is Redis" rather than a dict. Without it, every `d.get(k)` in
 # a Python codebase becomes a Redis key and the finding list is noise.
 _RECEIVER = re.compile(r"redis|cache|kv|_r\b|^r$|client|conn|pool", re.I)
@@ -332,6 +337,28 @@ def extract_redis(root: str) -> tuple[list[Symbol], list[Edge]]:
             status = Status.UNRESOLVED
             note = ("Read here and written nowhere in this repo, so this lookup can only "
                     "ever miss - which fails silently as a permanent cache miss.")
+        elif all(h.method in _INVALIDATIONS for h in writers):
+            # Only ever invalidated: deleted, unlinked, expired. Never stored, never read.
+            #
+            # That is not a dead key, it is the opposite - deleting a key is a statement
+            # that something PUT it there, and the only way to see no store is for the
+            # store to be somewhere this scan cannot follow. Measured on the reference
+            # project: `api:user_stats:*` was reported "6 write / 0 read - unused" while
+            # every one of the six was a `cache.delete(f"api:user_stats:{uid}")` and the
+            # actual write lives inside a cache helper that builds the key from its
+            # arguments (`swr_get(name="user_stats", user_id=...)`), so the literal never
+            # appears at the write site at all.
+            #
+            # This was the one finding class a consumer said they could not act on: 107
+            # rows left untouched, not because they were checked and dismissed, but
+            # because the category could not be trusted. Deleting is evidence, so this
+            # declines to call it dead and says which evidence is missing.
+            status = Status.UNCERTAIN
+            note = ("Only ever invalidated here - deleted or expired, never stored and "
+                    "never read. Deleting a key is evidence that something writes it, so "
+                    "the writer is somewhere this scan cannot follow: usually a cache "
+                    "helper that builds the key from its arguments, where the literal "
+                    "never appears. Not claimed dead for that reason.")
         else:
             status = Status.UNUSED
             note = "Written here and read nowhere in this repo."
@@ -354,7 +381,11 @@ def extract_redis(root: str) -> tuple[list[Symbol], list[Edge]]:
 
         symbols.append(Symbol(
             id=f"redis_key:{key}", kind="redis_key", label=key,
-            sub=f"{len(writers)} write / {len(readers)} read",
+            # Deleting is not writing, and a row reading "6 write / 0 read" over a key
+            # that is only ever deleted describes the opposite of what the code does.
+            sub=(f"{len(writers)} invalidate / {len(readers)} read"
+                 if writers and all(h.method in _INVALIDATIONS for h in writers)
+                 else f"{len(writers)} write / {len(readers)} read"),
             file=where.file, line=where.line, status=status,
             snippet=where.raw, chain=sorted({h.file for h in group})[:4], note=note,
         ))
