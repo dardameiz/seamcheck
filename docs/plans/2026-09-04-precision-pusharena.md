@@ -13,6 +13,34 @@ that prove each verdict) plus `OTHER/SEAMCHECK-FINDINGS-PUSHARENA.md`.
 below is judged twice: how much noise it removes, and whether any of the 94 survives it.
 The adjudication CSV is the fixture for that second question.
 
+## Two corrections to the adjudication, found while implementing it
+
+Both were found by replaying the table against the tool's own contract, and both change
+what the numbers mean. Neither reduces the value of the adjudication - it is the only
+graded set this tool has ever had.
+
+**1. `uncertain` rows are not claims, and 393 of the 712 are `uncertain`.** Precision is
+claims that are true ÷ claims made, and this tool's whole discipline is that `uncertain`
+is not a claim - it is the scan saying it cannot see the evidence either way. Counting
+those rows as findings puts the tool's honesty in the denominator. Over the rows that
+ARE claims - `unresolved` and `unused`, 298 of them once REVIEW and UNCLEAR are set
+aside - the graded precision is **73/298 = 24.5%**, not 13.2%.
+
+**2. Twenty-seven CSS claims were graded false on evidence that is the stylesheet
+itself.** Their recorded proof reads `referenced from 1 file: achievements.css (same
+file, x2)` - the second occurrence being the same rule repeated inside a media query. A
+rule written twice in its own stylesheet is not a rule anything uses. Hand-checked
+`achievement-header`: it appears in exactly two files, `achievements.css` and
+`shared/header_line.css`, and in no template, no JavaScript and no Python. It is dead,
+and the tool was right. Correcting those twenty-seven: **100/298 = 33.6%**.
+
+This is also a hard constraint on §1 below: the same-file rule must never be applied to a
+stylesheet, or it would silence exactly these twenty-seven true findings.
+
+**And the other direction:** 21 rows the tool called `uncertain` were graded REAL. Those
+are recall, not precision - things genuinely dead that the scan could not commit to. They
+are the more interesting half of the table and are not addressed by any fix below.
+
 ## The shape of the 515, counted from the CSV
 
 | Cause | Count | Kinds affected |
@@ -125,6 +153,23 @@ how many graded-false findings the current build still emits and how many graded
 survive. The push_arena CSV is the first fixture. Target after §1–§4: the 515 false
 positives fall below 120, and all 94 real findings survive. A commit that loses a real
 finding does not ship, whatever it does to the ratio.
+
+## 7. Two findings from the cleanup pass, raised by the person doing it
+
+Both are about the SHAPE of a report rather than its truth, and both come from acting on
+these findings by hand on `push_arena.js`:
+
+- **A dead region should be reported as a region, not as N symbols.** One guard -
+  `if (!#leaderboard-list || !#pioneers-btn || !#paradises-btn) return;` - fired on every
+  load because all three elements had been deleted from the markup, and 292 lines below
+  it were unreachable: a fetch, two click listeners, a `setTimeout`, three functions. The
+  scan reported **14 separate findings**. They were one. Where an early return depends on
+  elements that are all unresolved, everything after it in that function is unreachable,
+  and saying so once is worth more than fourteen rows that each look like a small chore.
+- **A multi-writer finding can be a dead-code finding wearing a disguise.** Deleting
+  `resetProgressBars()` retired two multi-writer reports, because one of the two writers
+  was in the dead region. Before reporting two writers, check whether either is
+  unreachable - a "risk" whose second writer never runs is not a risk, it is a corpse.
 
 ## Order and gates
 
