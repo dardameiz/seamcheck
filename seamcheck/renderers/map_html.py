@@ -264,6 +264,41 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overf
   background-size:5px 5px, 5px 5px; background-repeat:no-repeat;
 }
 .pagepick select:hover, .pagepick select:focus { border-color:var(--sig); outline:none; }
+/* The function picker: an input, its clear button, and the list it opens. Typing is the
+   whole interaction, so the list sits directly under the box and the first row is the
+   best match - a reader who types three letters and presses Enter gets what they meant. */
+.funcpick { position:relative; max-width:min(28vw, 260px); }
+.funcpick input {
+  width:100%; height:36px; padding:0 28px 0 13px;
+  border:1.2px solid var(--line-2); background:var(--panel); color:var(--ink);
+  border-radius:var(--r-pill); font-family:var(--mono); font-size:12.5px;
+  box-shadow:var(--shadow); appearance:none;
+}
+.funcpick input:hover, .funcpick input:focus { border-color:var(--sig); outline:none; }
+/* WebKit draws its own clear cross inside a search input; beside ours that is two
+   crosses a millimetre apart, one of which does something slightly different. */
+.funcpick input::-webkit-search-cancel-button { -webkit-appearance:none; appearance:none; }
+.funcpick #fnoff {
+  position:absolute; right:8px; top:7px; width:22px; height:22px; cursor:pointer;
+  border:0; border-radius:50%; background:transparent; color:var(--muted);
+  font-size:15px; line-height:1;
+}
+.funcpick #fnoff:hover { color:var(--ink); background:var(--sunk); }
+.fnlist {
+  position:absolute; top:41px; left:0; min-width:100%; max-width:82vw; z-index:6;
+  max-height:min(52vh, 420px); overflow:auto; padding:5px;
+  border:1.2px solid var(--line-2); border-radius:12px; background:var(--panel);
+  box-shadow:var(--shadow);
+}
+.fnrow {
+  display:block; width:100%; text-align:left; cursor:pointer; border:0; background:none;
+  color:var(--ink); font-family:var(--mono); font-size:12.5px; padding:7px 9px;
+  border-radius:8px; white-space:nowrap;
+}
+.fnrow:hover, .fnrow:focus, .fnrow.on { background:var(--sunk); outline:none; }
+.fnrow b { font-weight:600; }
+.fnrow span { color:var(--muted); margin-left:8px; font-size:11.5px; }
+.fnnone { padding:8px 9px; color:var(--muted); font-size:12px; }
 .menubtn {
   display:flex; align-items:center; gap:9px; cursor:pointer; padding:8px 15px 8px 12px;
   border:1.2px solid var(--line-2); background:var(--panel); color:var(--ink);
@@ -1429,6 +1464,10 @@ let current = 0, focus = null, view = {x:0, y:0, k:1}, query = "";
 // draws 1,366 symbols; the one question a click asks is "what is this joined to", and
 // answering it by colour beats answering it by making the reader trace a line by eye.
 let lit = null, isolate = false, fileFilter = null;
+// The function a reader is working in, and how far out from it to draw. One hop
+// is the default because everything a hot handler transitively reaches is the
+// whole application, which is the page view again.
+let funcFilter = null, funcHops = 1, _funcIndex = null, _funcLoading = null;
 // Which aggregate card a reader has opened, if any. One at a time: opening a second while
 // the first is out would put 18,000 cards on the canvas. Declared with the other filters
 // because the filter notice reads it, and that runs long before the canvas does.
@@ -1651,11 +1690,20 @@ function fillPages(counts) {
   // "0 nodes" is a list of things the picker cannot do. The page already picked stays.
   const listed = [...GROUP_WHOLE].filter(([g, i]) =>
     !store || g === here.g || reachedCount(i) > 0);
-  pages.innerHTML = every.concat(listed.map(([, i]) =>
+  // A picked function has a page of its own, unioned across everywhere it reaches. It
+  // is offered first and only while it is picked, so the picker never has a row nobody
+  // can get back to - and picking a real page underneath it narrows the function to that
+  // page, which is the "function on this page" question.
+  const fn = funcFilter
+    ? [`<option value="${FN_PAGE}">${esc(funcFilter)}() — everywhere it reaches`
+       + ` (${PAGES[FN_PAGE].n} node${PAGES[FN_PAGE].n === 1 ? "" : "s"})</option>`] : [];
+  pages.innerHTML = fn.concat(every, listed.map(([, i]) =>
     `<option value="${i}">${esc(pageLabel(PAGES[i]))} — ${tail(i)}</option>`)).join("");
-  pages.value = store && pageOnLayer === null ? "all"
+  pages.value = current === FN_PAGE ? String(FN_PAGE)
+    : store && pageOnLayer === null ? "all"
     : String(GROUP_WHOLE.has(here.g) ? GROUP_WHOLE.get(here.g) : current);
-  const entries = store && pageOnLayer === null ? [] : (GROUP_ENTRIES.get(here.g) || []);
+  const entries = (store && pageOnLayer === null) || current === FN_PAGE
+    ? [] : (GROUP_ENTRIES.get(here.g) || []);
   if (entries.length > 1) {
     const whole = GROUP_WHOLE.get(here.g);
     sections.innerHTML = [`<option value="${whole}">Whole page — ${tail(whole)}</option>`]
@@ -1671,6 +1719,7 @@ function fillPages(counts) {
 
 function syncPickers() {
   const store = PAGED_LAYERS.has(layer);
+  if (funcFilter) { fillPages(_pickers.counts); return; }
   if (store && pageOnLayer === null) { fillPages(_pickers.counts); return; }
   const here = PAGES[current] || EMPTY_PAGE;
   if (_pickers.group !== here.g || store) { fillPages(_pickers.counts); return; }
@@ -1705,6 +1754,117 @@ pages.onchange = e => {
   pickPage(Number(e.target.value));
 };
 sections.onchange = e => pickPage(Number(e.target.value));
+
+// ── the function picker ──────────────────────────────────────────────────────
+// A page filter and a section filter answer "where am I looking". This one answers "what
+// am I working on", which is the question a developer actually has open in their editor:
+// `submit_push` writes three Redis keys, queues a task and - the day it went slow - also
+// touched Postgres. That is one picture, and until now it took reading four files.
+const funcBox = document.getElementById("fn");
+const funcOff = document.getElementById("fnoff");
+const funcList = document.getElementById("fnlist");
+let _funcHi = 0;
+
+function closeFuncList() { funcList.hidden = true; funcList.innerHTML = ""; _funcHi = 0; }
+
+function renderFuncList(rows) {
+  if (!rows.length) {
+    funcList.innerHTML = `<div class="fnnone">No function is called that.</div>`;
+    funcList.hidden = false;
+    return;
+  }
+  funcList.innerHTML = rows.map((r, i) =>
+    `<button type="button" class="fnrow${i === _funcHi ? " on" : ""}"
+             data-name="${esc(r.name)}" data-page="${r.page}">
+       <b>${esc(r.name)}</b><span>${esc(r.file.split("/").pop())} · ${r.count}</span>
+     </button>`).join("");
+  funcList.hidden = false;
+  funcList.querySelectorAll(".fnrow").forEach(el => {
+    el.onclick = () => pickFunction(el.dataset.name);
+  });
+}
+
+function offerFunctions() {
+  const term = funcBox.value;
+  if (!term.trim()) { closeFuncList(); return; }
+  // The index is one chunk and loads once; until it is in, say so rather than showing
+  // an empty list that reads as "there are none".
+  if (!funcIndex(() => offerFunctions())) {
+    funcList.innerHTML = `<div class="fnnone">Opening the list of functions…</div>`;
+    funcList.hidden = false;
+    return;
+  }
+  _funcHi = 0;
+  renderFuncList(functionsMatching(term));
+}
+
+function pickFunction(name, hops) {
+  const row = functionRow(name);
+  funcFilter = name;
+  funcHops = typeof hops === "number" ? hops : 1;
+  funcBox.value = name;
+  funcOff.hidden = false;
+  closeFuncList();
+  focus = null;
+  layer = "";
+  pageOnLayer = null;
+  const ly = document.getElementById("ly");
+  if (ly) ly.value = "";
+  view = {x: 0, y: 0, k: 1};
+  _layout.key = null;
+  svg.innerHTML = "";
+  buildFunctionPage(name, row ? row.on : null, funcHops).then(() => {
+    if (funcFilter !== name) return;   // the reader moved on while a chunk was loading
+    current = FN_PAGE;
+    if (mode !== "map") { viewer.value = "map"; switchTo("map"); } else { draw(); }
+    if (window.syncChrome) syncChrome();
+    syncPickers();
+  }, reportFailure);
+}
+
+function clearFunction() {
+  if (!funcFilter && !funcBox.value) return;
+  const row = functionRow(funcFilter);
+  funcFilter = null; funcHops = 1;
+  funcBox.value = ""; funcOff.hidden = true;
+  closeFuncList();
+  _layout.key = null;
+  // Back to a real page - the one that draws most of the function - rather than leaving
+  // the reader on a synthetic page that no longer means anything.
+  if (current === FN_PAGE) current = row ? row.page : 0;
+  view = {x: 0, y: 0, k: 1};
+  draw();
+  if (window.syncChrome) syncChrome();
+  syncPickers();
+}
+
+funcBox.oninput = offerFunctions;
+funcBox.onfocus = () => { if (funcBox.value.trim()) offerFunctions(); };
+funcBox.onkeydown = e => {
+  const rows = [...funcList.querySelectorAll(".fnrow")];
+  if (e.key === "Escape") { closeFuncList(); funcBox.blur(); return; }
+  if (!rows.length) return;
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    _funcHi = Math.max(0, Math.min(rows.length - 1, _funcHi + (e.key === "ArrowDown" ? 1 : -1)));
+    rows.forEach((el, i) => el.classList.toggle("on", i === _funcHi));
+    rows[_funcHi].scrollIntoView({block: "nearest"});
+    return;
+  }
+  if (e.key === "Enter") {
+    e.preventDefault();
+    const el = rows[_funcHi] || rows[0];
+    pickFunction(el.dataset.name);
+  }
+};
+funcOff.onclick = clearFunction;
+document.getElementById("widen").onclick = () => {
+  if (!funcFilter) return;
+  pickFunction(funcFilter, funcHops > 1 ? 1 : 2);
+};
+document.addEventListener("click", e => {
+  if (!funcList.hidden && !e.target.closest(".funcpick")) closeFuncList();
+});
 
 // Clicking a colour in the key filters the canvas to that status. Toggling, so several
 // can be on at once, and clicking the last one off restores everything rather than
@@ -1990,6 +2150,36 @@ function visible(p) {
   // and every one set afterwards did nothing - the control moved and the canvas did not.
   if (fileFilter) {
     return new Set(lensed(p).filter(n => n.file === fileFilter).map(n => n.id));
+  }
+  // One function's world: everything it touches, and everything one hop away that
+  // touches those. The seeds are what the function OWNS - the keys it writes, the tables
+  // it queries, the requests it makes, the elements it fills - and the hop outward is
+  // what reaches them: the route that dispatches to it, the fetch that calls the route.
+  // Unbounded reachability from a hot handler is the whole application, which is the
+  // page view with extra steps, so the default is one hop and widening is deliberate.
+  if (funcFilter) {
+    const on = lensed(p);
+    const here = new Set(on.map(n => n.id));
+    const keep = new Set(on.filter(n => n.owner === funcFilter).map(n => n.id));
+    if (!keep.size) return keep;
+    const adj = new Map();
+    p.edges.forEach(e => {
+      if (!here.has(e.source) || !here.has(e.target)) return;
+      if (!adj.has(e.source)) adj.set(e.source, []);
+      if (!adj.has(e.target)) adj.set(e.target, []);
+      adj.get(e.source).push(e.target);
+      adj.get(e.target).push(e.source);
+    });
+    let front = [...keep];
+    for (let hop = 0; hop < funcHops && front.length; hop++) {
+      const next = [];
+      front.forEach(id => (adj.get(id) || []).forEach(nb => {
+        if (keep.has(nb)) return;
+        keep.add(nb); next.push(nb);
+      }));
+      front = next;
+    }
+    return keep;
   }
   // Everything this page touches, in one canvas. Showing only modules until a reader
   // drilled in hid the whole point: which symbols connect and which stand alone.
@@ -2479,6 +2669,122 @@ function searchIndex(then) {
   return null;
 }
 
+// Every function in the project, loaded once. Names are a fraction of the symbol count -
+// a handler owns dozens - so this is a small index, searched the same way as the big one.
+function funcIndex(then) {
+  if (_funcIndex) return _funcIndex;
+  if (!_funcLoading) {
+    _funcLoading = readChunk("functions").then(cols => {
+      cols = cols || {n: 0, names: "", file: [], count: [], page: []};
+      const n = cols.n | 0, names = cols.names;
+      const at = rowStarts(names, n), FI = MAPDATA.files;
+      dropChunk("functions");
+      _funcIndex = {
+        n, lower: names.toLowerCase(), at,
+        count: Int32Array.from(cols.count), page: Int32Array.from(cols.page),
+        file: Int32Array.from(cols.file), on: cols.on || [],
+        name: i => names.slice(at[i], at[i + 1] - 1),
+        row: i => ({name: names.slice(at[i], at[i + 1] - 1), file: FI[cols.file[i]] || "",
+                    count: cols.count[i], page: cols.page[i],
+                    on: (cols.on || [])[i] || [cols.page[i]]}),
+      };
+      return _funcIndex;
+    });
+  }
+  if (then) _funcLoading.then(then, () => {});
+  return null;
+}
+
+// Prefix first, then anywhere, then shortest - somebody typing "sub" means `submit_push`
+// before `resubmit_push_batch`, and both before a function that merely mentions it.
+function functionsMatching(term, limit = 40) {
+  const needle = term.trim().toLowerCase();
+  const ix = funcIndex();
+  if (!ix || !needle) return [];
+  const found = new Map();
+  let pos = 0;
+  while (found.size <= 2000) {
+    const hit = ix.lower.indexOf(needle, pos);
+    if (hit === -1) break;
+    const i = rowOf(ix.at, hit);
+    const name = ix.lower.slice(ix.at[i], ix.at[i + 1] - 1);
+    found.set(i, name === needle ? 0 : name.startsWith(needle) ? 1 : 2);
+    pos = ix.at[i + 1];
+  }
+  return [...found]
+    .sort((a, b) => a[1] - b[1]
+      || (ix.at[a[0] + 1] - ix.at[a[0]]) - (ix.at[b[0] + 1] - ix.at[b[0]]))
+    .slice(0, limit).map(([i]) => ix.row(i));
+}
+
+function functionRow(name) {
+  const ix = funcIndex();
+  if (!ix) return null;
+  for (let i = 0; i < ix.n; i++) if (ix.name(i) === name) return ix.row(i);
+  return null;
+}
+
+// ── the function's own page ──────────────────────────────────────────────────
+// A function's symbols are not on one page and never were: the route it answers is on
+// the page, the keys it writes are drawn on the store layer, and whatever nothing
+// reaches sits in a bucket. Filtering any ONE of those shows a third of the picture and
+// looks like the function is barely wired. So the view is a page of its own, unioned
+// across every page the function touches, built here because there are thousands of
+// functions and pre-building a page for each would dwarf the map.
+const FN_PAGE = PAGES.push({page: "fn:", title: "", where: "", layer: "", n: 0, st: {},
+                            ks: [], nodes: null, edges: null, detailed: true}) - 1;
+
+function buildFunctionPage(name, on, hops) {
+  const pages = (on && on.length ? on : [current]).filter(i => PAGES[i]);
+  // Details up front: the synthetic page has no detail chunk of its own, and a card with
+  // no snippet is a card that cannot be acted on.
+  return Promise.all(pages.map(i => ensureDetail(i))).then(() => {
+    const known = new Map(), seeds = new Set(), edges = [], seen = new Set();
+    pages.forEach(i => {
+      (PAGES[i].nodes || []).forEach(node => {
+        known.set(node.id, node);
+        if (node.owner === name) seeds.add(node.id);
+      });
+      (PAGES[i].edges || []).forEach(e => {
+        const key = e.source + "\u0000" + e.target;
+        if (seen.has(key)) return;
+        seen.add(key); edges.push(e);
+      });
+    });
+    const adj = new Map();
+    edges.forEach(e => {
+      if (!adj.has(e.source)) adj.set(e.source, []);
+      if (!adj.has(e.target)) adj.set(e.target, []);
+      adj.get(e.source).push(e.target);
+      adj.get(e.target).push(e.source);
+    });
+    const keep = new Set(seeds);
+    let front = [...seeds];
+    for (let hop = 0; hop < hops && front.length; hop++) {
+      const next = [];
+      front.forEach(id => (adj.get(id) || []).forEach(nb => {
+        if (keep.has(nb) || !known.has(nb)) return;
+        keep.add(nb); next.push(nb);
+      }));
+      front = next;
+    }
+    const nodes = [...keep].map(id => known.get(id)).filter(Boolean);
+    const st = {};
+    nodes.forEach(node => { st[node.status] = (st[node.status] || 0) + 1; });
+    const p = PAGES[FN_PAGE];
+    p.page = "fn:" + name;
+    p.title = name + "()";
+    p.where = "everywhere this function reaches";
+    p.n = nodes.length;
+    p.st = st;
+    p.ks = [];
+    p.nodes = nodes;
+    p.edges = edges.filter(e => keep.has(e.source) && keep.has(e.target));
+    p.detailed = true;
+    return p;
+  });
+}
+
 // The row a character offset falls in: the last start at or before it.
 function rowOf(at, offset) {
   let lo = 0, hi = at.length - 2;
@@ -2621,7 +2927,8 @@ function layoutKey() {
   // missing, so choosing "Stripe" or "unresolved" recomputed the page COUNT and reused the
   // cached layout - the dropdown said 35 nodes over a canvas still drawing all 392. A
   // cache keyed on less than its function reads is a cache that lies.
-  return [current, mode, focus, fileFilter, only, isolate ? lit : "", asList,
+  return [current, mode, focus, fileFilter, funcFilter || "", funcHops,
+          only, isolate ? lit : "", asList,
           layer, pageOnLayer === null ? "" : pageOnLayer, expandedKind || "", expandedFrom,
           [...statusFilter].sort().join(",")].join("\u0000");
 }
@@ -2635,6 +2942,31 @@ function layoutFor(p) {
   }
   capped = _layout.capped;
   return _layout;
+}
+
+// What one call of this function costs, counted from the source the scan read: how many
+// times it touches each store. Not a benchmark and not an estimate - each number is
+// "operations written in this function", and the card for every one of them names its
+// line. The shape is what matters: a handler that should be Redis-only showing a single
+// Postgres write is the whole diagnosis, and at thirty thousand concurrent players that
+// one row is the difference between a cache read and a connection out of a pool of 45.
+const COST_LANES = [
+  ["Redis", new Set(["redis_key_use", "redis_key", "redis_ttl"])],
+  ["Postgres", new Set(["db_table_use", "db_column_use", "db_function_use", "model",
+                        "db_table", "db_column"])],
+  ["Celery", new Set(["celery_task", "celery_schedule", "job_enqueue", "job_schedule"])],
+  ["HTTP out", new Set(["js_call", "fetch_target"])],
+  ["DOM", new Set(["dom_selector", "dom_attr", "css_selector"])],
+];
+
+function functionCost(p) {
+  const mine = p.nodes.filter(n => n.owner === funcFilter);
+  const counts = COST_LANES.map(([name, kinds]) =>
+    [name, mine.filter(n => kinds.has(n.kind)).length]);
+  const said = counts.filter(([, n]) => n).map(([name, n]) => `${name} ${n}`);
+  const hops = funcHops > 1 ? `; ${funcHops} hops out` : "";
+  return `${mine.length} symbol${mine.length === 1 ? "" : "s"}`
+    + (said.length ? " · " + said.join(" · ") : "") + hops;
 }
 
 let _drawWaiting = -1;
@@ -2671,7 +3003,13 @@ function draw() {
   const drawnHere = fileFilter ? visible(p).size : 0;
   const inFile = FILE_TOTALS.get(fileFilter) || onPage;
   const narrowed = drawnHere < onPage;
-  crumb.textContent = fileFilter
+  const cost = funcFilter ? functionCost(p) : "";
+  crumb.textContent = funcFilter
+      // On the function's own page the name is already the page's name; on a real page
+      // underneath it, say which page the function is being narrowed to.
+      ? (current === FN_PAGE ? `${funcFilter}() — ${cost}`
+         : `${here} › ${funcFilter}() — ${cost}`)
+    : fileFilter
       ? `${here} › ${fileFilter} — ${drawnHere} of ${inFile} symbols`
         + (narrowed ? "; filtered" : "")
         + (onPage < inFile ? "; the rest are not reached from any page" : "")
@@ -2680,6 +3018,11 @@ function draw() {
     : PAGED_LAYERS.has(layer) ? `${here} — tap a card to open it`
     : `${here} — pick a module`;
   document.getElementById("up").hidden = !focus;
+  const widen = document.getElementById("widen");
+  if (widen) {
+    widen.hidden = !funcFilter;
+    widen.textContent = funcHops > 1 ? "Show one hop only" : "Widen by one hop";
+  }
   // draw() is what WRITES the breadcrumb, so the readout has to be told after it, not
   // before - switchTo asked the question while the answer was still the previous view's.
   if (window.syncReadout) syncReadout();
@@ -5081,6 +5424,13 @@ def _payload(connectivity_map: ConnectivityMap) -> tuple[str, list[Chunk], dict[
 
     meta_pages, chunks = [], []
     file_best: dict[str, tuple[int, int]] = {}
+    # Per function: the file it is in, how many symbols it owns, and which page draws most
+    # of them. Same construction as file_best, because the question is the same one -
+    # "take me where this thing actually is" - asked about a function instead of a file.
+    func_file: dict[str, str] = {}
+    func_total: dict[str, int] = {}
+    func_best: dict[str, tuple[int, int]] = {}
+    func_pages: dict[str, set[int]] = {}
     search_rows, in_search = [], set()
     per_page_changed = []
     commit_per_page = [[] for _ in commits]
@@ -5089,6 +5439,7 @@ def _payload(connectivity_map: ConnectivityMap) -> tuple[str, list[Chunk], dict[
         by_status: dict[str, int] = {}
         by_kind_status: dict[tuple[int, int], int] = {}
         file_counts: dict[str, int] = {}
+        func_counts: dict[str, int] = {}
         changed_here = 0
         commit_here = [0] * len(commits)
         for node, row in zip(nodes, rows, strict=True):
@@ -5097,6 +5448,15 @@ def _payload(connectivity_map: ConnectivityMap) -> tuple[str, list[Chunk], dict[
             by_kind_status[ks] = by_kind_status.get(ks, 0) + 1
             if node.file:
                 file_counts[node.file] = file_counts.get(node.file, 0) + 1
+            # A layer page repeats nodes that ordinary pages also carry, so it must not
+            # inflate the count - but it IS where a handler's keys are drawn, so it is
+            # named among the pages the function reaches.
+            if node.owner:
+                func_pages.setdefault(node.owner, set()).add(index)
+                if not layer and not union:
+                    func_counts[node.owner] = func_counts.get(node.owner, 0) + 1
+                    func_total[node.owner] = func_total.get(node.owner, 0) + 1
+                    func_file.setdefault(node.owner, node.file or "")
             if node.id in changed:
                 changed_here += 1
             for c, commit in enumerate(commits):
@@ -5112,6 +5472,9 @@ def _payload(connectivity_map: ConnectivityMap) -> tuple[str, list[Chunk], dict[
             for path, n in file_counts.items():
                 if n > file_best.get(path, (-1, 0))[1]:
                     file_best[path] = (index, n)
+            for name_, n in func_counts.items():
+                if n > func_best.get(name_, (-1, 0))[1]:
+                    func_best[name_] = (index, n)
         per_page_changed.append(changed_here)
         for c, n in enumerate(commit_here):
             commit_per_page[c].append(n)
@@ -5159,6 +5522,22 @@ def _payload(connectivity_map: ConnectivityMap) -> tuple[str, list[Chunk], dict[
         "file": [r[4] for r in search_rows],
         "line": [r[5] or 0 for r in search_rows],
         "page": [r[6] for r in search_rows],
+    }))
+    # Every function in the project, so the picker can answer a keystroke without asking
+    # for anything. Names are a fraction of the symbols - a hot handler owns dozens - so
+    # this is small where the search index is large, and it is built the same way: one
+    # string, scanned with indexOf, plus columns that become typed arrays on load.
+    func_names = sorted(func_total)
+    chunks.append(_chunk("functions", {
+        "n": len(func_names),
+        "names": _column(func_names),
+        "file": [files(func_file.get(name_, "")) for name_ in func_names],
+        "count": [func_total[name_] for name_ in func_names],
+        "page": [func_best.get(name_, (0, 0))[0] for name_ in func_names],
+        # Every page any of its symbols is drawn on. A function's world is not on one
+        # page - the route is on the page, the keys are on the store layer, and what
+        # nothing reaches is in a bucket - so the view unions them.
+        "on": [sorted(func_pages.get(name_, ())) for name_ in func_names],
     }))
     chunks.append(_chunk("commits", [
         {"changed": c.get("changed") or {}, "changes": c.get("changes") or []}
@@ -5384,6 +5763,14 @@ def render_document(connectivity_map: ConnectivityMap, console=None, files=None,
         '<label class="pagepick"><select id="pg" aria-label="Page"></select></label>'
         '<label id="secwrap" class="pagepick" hidden>'
         '<select id="sec" aria-label="Section"></select></label>'
+        # The third filter, and the one a developer reaches for first: the function they
+        # have open. A text box rather than a select, because a project has thousands of
+        # functions and the reader knows the first three letters of the one they want.
+        '<div class="pagepick funcpick">'
+        '<input id="fn" type="search" autocomplete="off" aria-label="Function"'
+        ' placeholder="Function…"><button type="button" id="fnoff" hidden'
+        ' aria-label="Clear the function">\u00d7</button>'
+        '<div class="fnlist" id="fnlist" hidden></div></div>'
         '</div>'
         "</div>",
 
@@ -5391,6 +5778,10 @@ def render_document(connectivity_map: ConnectivityMap, console=None, files=None,
         '<div class="hud tr">'
         '<button type="button" class="iconbtn" id="up" hidden aria-label="Back">\u2190</button>'
         '<button type="button" class="iconbtn wide" id="aslist" hidden>List</button>'
+        # Belongs with Back and List: the controls that appear only when the thing they
+        # act on is on screen. Inside the readout it was clipped by that pill's own
+        # overflow and could not be clicked at all.
+        '<button type="button" class="iconbtn wide" id="widen" hidden></button>'
         '<span class="packwrap">'
         '<button type="button" class="tmode" id="tmode" aria-label="Appearance">Aurora</button>'
         '<div class="packmenu" id="packmenu"></div></span>'

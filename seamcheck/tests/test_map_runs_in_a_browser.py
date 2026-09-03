@@ -1419,3 +1419,120 @@ class TheFunctionOnTheCard(SimpleTestCase):
         self.assertNotEqual(order["owner"], -1, order)
         self.assertTrue(any("loadOrders" in text for text in listed),
                         "the findings list names the function too")
+
+
+class TheFunctionFilter(SimpleTestCase):
+    """Type three letters, get the function, and see everything it touches.
+
+    The page and section pickers answer "where am I looking". This one answers "what am I
+    working on" - and the reason it earns a place on the glass is the cost line: a handler
+    that should be Redis-only, showing a Postgres write, is the whole diagnosis.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        try:
+            from playwright.sync_api import sync_playwright  # noqa: F401
+        except ImportError:  # pragma: no cover - depends on the optional extra
+            raise unittest.SkipTest("playwright is not installed (the observe extra)") from None
+
+    def _url(self) -> str:
+        from seamcheck.console import build_console
+        from seamcheck.mapdata import build_map
+        from seamcheck.renderers.map_html import render_document
+        from seamcheck.report import build_report
+
+        def symbol(kind, label, status=Status.CONNECTED, file="app/views.py", owner=""):
+            return Symbol(id=f"{kind}:{label}", kind=kind, label=label, sub="", file=file,
+                          line=12, status=status, snippet=f"{kind} {label}", chain=[label],
+                          note="", owner=owner)
+
+        js = "static/js/orders.js"
+        symbols = [
+            symbol("fetch_target", "/api/push/", file=js, owner="sendPush"),
+            symbol("url", "api/push/", file="app/urls.py"),
+            symbol("view", "submit_push", owner="submit_push"),
+            symbol("redis_key_use", "user:{id}:pushes", owner="submit_push"),
+            symbol("redis_key_use", "user:{id}:stats", owner="submit_push"),
+            # The accident: one Postgres write in a handler that should be Redis-only.
+            symbol("db_table_use", "pointless_push", owner="submit_push"),
+            symbol("celery_task", "tasks.settle", owner="submit_push"),
+            # Another function entirely, so the filter has something to exclude.
+            symbol("redis_key_use", "leaderboard:global", owner="get_user_stats"),
+        ]
+        edges = [
+            Edge(from_id="fetch_target:/api/push/", to_id="url:api/push/",
+                 status=Status.CONNECTED),
+            Edge(from_id="url:api/push/", to_id="view:submit_push", status=Status.CONNECTED),
+            Edge(from_id="view:submit_push", to_id="redis_key_use:user:{id}:pushes",
+                 status=Status.CONNECTED),
+        ]
+        graph = Graph(symbols=symbols, edges=edges)
+        report = build_report(graph=graph, diff=None, entries=[], git_sha="0" * 12)
+        connectivity = build_map(graph, {"orders-main": {js, "app/views.py", "app/urls.py"}},
+                                 git_sha="0" * 12)
+        document = render_document(connectivity, console=build_console(graph, report))
+        path = pathlib.Path(tempfile.mkdtemp()) / "map.html"
+        path.write_text(document.single_file(), encoding="utf-8")
+        return path.as_uri()
+
+    def test_typing_three_letters_offers_the_function_and_draws_what_it_touches(self):
+        from playwright.sync_api import sync_playwright
+
+        errors: list[str] = []
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch()
+            except Exception as error:  # pragma: no cover - no browser downloaded
+                raise unittest.SkipTest(f"no chromium: {error}") from None
+            page = browser.new_page(viewport={"width": 1280, "height": 800})
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.goto(page_url := self._url(), wait_until="load")
+            # The file opens on Overview; the pickers belong to the map.
+            _open_lens(page, "map")
+            page.wait_for_function(
+                "() => !!PAGES[Number(document.getElementById('pg').value)].nodes")
+            page.wait_for_timeout(200)
+            page.fill("#fn", "sub")
+            page.wait_for_function("() => document.querySelectorAll('#fnlist .fnrow').length > 0")
+            offered = page.evaluate(
+                "() => [...document.querySelectorAll('#fnlist .fnrow')].map(r => r.dataset.name)")
+            page.click("#fnlist .fnrow")
+            page.wait_for_function("() => funcFilter === 'submit_push'")
+            page.wait_for_timeout(300)
+            drawn = page.evaluate(
+                "() => [...document.querySelectorAll('#cv g[data-id]')].map(g => g.dataset.id)")
+            crumb = page.evaluate("() => document.getElementById('crumb').textContent")
+            # One hop out reaches the route; two reaches the fetch that calls it.
+            page.click("#widen")
+            page.wait_for_timeout(300)
+            wider = page.evaluate(
+                "() => [...document.querySelectorAll('#cv g[data-id]')].map(g => g.dataset.id)")
+            page.click("#fnoff")
+            page.wait_for_timeout(300)
+            cleared = page.evaluate("() => funcFilter")
+            after = page.evaluate(
+                "() => [...document.querySelectorAll('#cv g[data-id]')].map(g => g.dataset.id)")
+            browser.close()
+
+        self.assertEqual(errors, [], page_url)
+        self.assertEqual(offered, ["submit_push"], offered)
+        # What it touches: its own symbols, plus one hop - the route that dispatches to it.
+        self.assertIn("redis_key_use:user:{id}:stats", drawn)
+        self.assertIn("db_table_use:pointless_push", drawn)
+        self.assertIn("url:api/push/", drawn)
+        # ...and nothing owned by another function.
+        self.assertNotIn("redis_key_use:leaderboard:global", drawn)
+        # The cost line is the point: one Postgres write where there should be none.
+        self.assertIn("submit_push()", crumb)
+        self.assertIn("Redis 2", crumb)
+        self.assertIn("Postgres 1", crumb)
+        self.assertIn("Celery 1", crumb)
+        # Widening reaches the browser call one hop further out.
+        self.assertIn("fetch_target:/api/push/", wider)
+        self.assertNotIn("fetch_target:/api/push/", drawn)
+        self.assertIsNone(cleared)
+        # Cleared means cleared: another function's key is drawable again, and the reader
+        # is off the synthetic page.
+        self.assertIn("redis_key_use:leaderboard:global", after)

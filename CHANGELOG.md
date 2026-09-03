@@ -91,8 +91,27 @@ reference project - the first time a release was tested the way a user meets it.
   thing, the function, the file, the evidence - the findings list names the function on
   each row, `--explain` prints it, and the `unverified` JSON carries it. Descriptive
   only: no status depends on it, so a wrong owner cannot become a wrong finding.
+- **Added** — **a Function filter, beside Page and Section.** Type three letters and every
+  function in the project whose name matches is offered, prefix first; the reference
+  project's 1,474 functions answer a keystroke in 0.1 ms, from an index that loads once
+  (28 ms) and weighs 22 KB. Picking one draws **that function's world**: everything it
+  touches, unioned across every page its symbols are drawn on - the page holds its route,
+  the store layer holds its keys, and a bucket holds whatever nothing reaches, so any one
+  page shows a third of the picture - plus one hop out to what reaches those, widened by
+  a button. The breadcrumb counts the round-trips per lane, which is the point:
+  `submit_push() - 5 symbols · Redis 2 · Postgres 1 · Celery 1` is a handler that should
+  be Redis-only, and the Postgres write is the whole diagnosis.
 
 Known open, recorded rather than hidden:
+
+- **A function's world stops at its own body.** The neighbourhood is built from the lines
+  a function contains, so a handler that delegates - `submit_push` calls a service module
+  that writes the keys - shows the route it answers and little else. Following calls into
+  helpers needs a call graph, which the scan does not build yet.
+- **The map index is 413 KB on the reference project**, over the 400 KB the plans set as
+  the gate, before this release's 15 KB of new picker. The chunked data is not the
+  problem; the script itself is.
+
 
 - **Store attribution stops at the handler's file.** A view is linked to the keys and
   tables it touches only when both sit in the same file (the nearest view above the
