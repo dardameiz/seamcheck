@@ -125,3 +125,24 @@ checklist for the thing being built rather than as a list of complaints about a 
 
 Each commit: the gates above, plus a browser test for anything drawn. The push_arena
 precision work (`docs/plans/2026-09-04-precision-pusharena.md`) follows this batch.
+
+## What actually shipped, and the one thing the plan missed
+
+1. `owner` + `pyscope` + the card and the findings rows (`d209969dc`).
+2. The picker, the union page, the widen control and the cost line (`0926de441`).
+3. **A call graph, which this plan did not have and the feature needed.** Driving the
+   real project after (2) showed `submit_push` owning **one** symbol: the view delegates,
+   and its ten Redis operations live two calls away in a service class. A function view
+   that stops at the function's own body answers the wrong question for most handlers.
+   `seamcheck/callgraph.py` reads Python calls - same-file defs, `from x import y` of a
+   project module, `self.method`, and a method whose simple name is defined exactly once
+   in the project - and the view follows them three levels. `Called by` is the same map
+   reversed. Read at render time, so no snapshot carries it and no finding depends on it.
+
+Measured after: index 428 KB (413 KB before this batch, against a stale 400 KB gate),
+map render 20 s on the 12,000-file reference project, function chunk 188 KB lazy,
+9,664 functions, keystroke 0.1 ms.
+
+Still open, recorded in the changelog: the call graph is Python only (JavaScript carries
+`owner` but nothing reads its calls), and a LUA script's keys are not extracted, so the
+cost line cannot say which Redis operations are `eval`.

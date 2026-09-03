@@ -61,12 +61,34 @@ writes — one character apart. No compiler on either side spans that gap.</sub>
 four times. Whichever runs last wins, which is how a display bug survives being "fixed" in
 one of them.</sub>
 
+![One function's world: the route it answers, the Postgres table and three Redis keys it
+reaches through its helpers, and the background task it queues - with a line under the
+canvas counting them](docs/images/function.png)
+
+<sub>**One function, and what it costs.** Type three letters and pick `submit_push`: the
+map draws everything that function touches - **following the calls**, because a handler
+that delegates owns almost none of it itself - plus one hop out to what reaches it. The
+line under the canvas counts the round-trips per call. This handler is meant to be
+Redis-only, and it writes Postgres once. That is the whole diagnosis, and at thirty
+thousand concurrent users it is the difference between a cache read and a connection out
+of a pool of 45.</sub>
+
 **A page, then its sections.** The map is not one drawing of the whole codebase — the
 **Page** picker lists your HTML pages, and **Section** lists the *scripts* each one loads:
 the code that actually runs from that script tag, followed through every import to the
 selectors, URLs and keys it touches. A widget on a forty-module page is a section you can
 open alone; **Whole page** is all of them at once. Whatever no page ever reaches sits in
 the **Not reached from any page** buckets, which is a finding in itself.
+
+**...and then the function.** The third picker is the one you reach for while you are
+writing code: start typing and every function in the project is offered, prefix first.
+Picking one leaves the pages behind entirely - a function's symbols are never all on one
+page, since the page holds its route, the store layer holds its keys, and whatever nothing
+reaches sits in a bucket - and draws its own world instead: what it touches, what its
+helpers touch, and one hop out to whatever reaches those. **Called by** lists everything
+that calls it, each one a click. Building something new, the holes are the drawing: an
+unresolved request means the backend is not there yet, an unused route means the frontend
+is not calling it yet, a key written and never read means nobody consumes it.
 [More on reading the map →](docs/the-map.md)
 
 ## The four words

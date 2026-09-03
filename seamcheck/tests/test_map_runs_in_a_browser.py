@@ -1514,6 +1514,7 @@ class TheFunctionFilter(SimpleTestCase):
             drawn = page.evaluate(
                 "() => [...document.querySelectorAll('#cv g[data-id]')].map(g => g.dataset.id)")
             crumb = page.evaluate("() => document.getElementById('crumb').textContent")
+            note = page.evaluate("() => document.getElementById('callers').textContent")
             # One hop out reaches the route; two reaches the fetch that calls it.
             page.click("#widen")
             page.wait_for_timeout(300)
@@ -1542,11 +1543,12 @@ class TheFunctionFilter(SimpleTestCase):
         self.assertNotIn("redis_key_use:leaderboard:global", drawn)
         # The cost line is the point: one Postgres write where there should be none.
         self.assertIn("submit_push()", crumb)
-        self.assertIn("Redis 3", crumb)
         self.assertIn("through helpers", crumb)
+        # The lanes go under the canvas, where a long line is not ellipsised away.
+        self.assertIn("Redis 3", note)
         self.assertIn("redis_key_use:user:{id}:streak", drawn)
-        self.assertIn("Postgres 1", crumb)
-        self.assertIn("Celery 1", crumb)
+        self.assertIn("Postgres 1", note)
+        self.assertIn("Celery 1", note)
         # Widening reaches the browser call one hop further out.
         self.assertIn("fetch_target:/api/push/", wider)
         self.assertNotIn("fetch_target:/api/push/", drawn)

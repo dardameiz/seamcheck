@@ -59,6 +59,39 @@ There is still no "whole codebase" page, on purpose: a 40,000-node hairball woul
 none of them. The findings list and the search box are the cross-cutting views; they see
 everything.
 
+## A function, and everything it touches
+
+The third picker is the one you use while you are writing code. Type and it offers every
+function the scan saw defined, prefix matches first, with the file and how many symbols
+each one owns. On the reference project that is 9,664 functions answering a keystroke in a
+tenth of a millisecond, from an index that loads once.
+
+Picking one leaves the pages behind. A function's symbols are never all on one page — the
+page holds the route it answers, the store layer holds the keys it writes, and whatever no
+page reaches sits in a bucket — so the view is a page of its own, unioned across all of
+them, holding:
+
+- **what it touches** — every symbol the function owns: the requests it makes, the keys it
+  writes, the tables it queries, the tasks it queues, the elements it fills;
+- **what its helpers touch** — the same, for the functions it calls, three levels down.
+  Most handlers delegate, and a view of just the handler's own body would show the route
+  and nothing else;
+- **one hop out** — whatever reaches those: the route that dispatches to it, the request
+  that calls the route. **Widen by one hop** goes further; it is a button rather than the
+  default because everything a hot handler transitively reaches is the whole application.
+
+Under the canvas, **Touches** counts the round-trips per call by lane, and **Called by**
+names every function that calls this one, each a click away. `submit_push() — 11 symbols
+(1 its own, 10 through helpers) · Redis 10` is a push costing ten Redis operations; the
+same line reading `Postgres 1` on a handler meant to be Redis-only is a diagnosis.
+
+**How calls are resolved, and what is left out.** A def in the same file; a
+`from x import y` of a module in this project; `self.method` inside its own class; and a
+method whose simple name is defined exactly once in the whole project — `order.save()`
+where four classes define `save` resolves to nothing, and a call into an imported library
+never borrows a project name. Python only, for now, and keyed by the name you would type,
+so two files that both define `reset` share one entry.
+
 ## A store, across every page
 
 Redis and the database are not pages, so they are not drawn like one. Pick either from the

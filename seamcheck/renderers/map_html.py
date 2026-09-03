@@ -609,6 +609,7 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
 .capnote { color:var(--warn); }
 .callers { margin-top:6px; }
 .callers b { color:var(--muted); font-weight:600; margin-right:5px; }
+.callers .lanes { color:var(--ink); margin-bottom:3px; }
 .callers button { cursor:pointer; border:0; background:none; padding:0 4px 0 0;
   color:var(--sig); font-family:var(--mono); font-size:11.5px; }
 .callers button:hover { text-decoration:none; color:var(--ink); }
@@ -1804,6 +1805,13 @@ function offerFunctions() {
 }
 
 function pickFunction(name, hops) {
+  // The index may not be in yet - a pick can come from a link, a caller button or a
+  // restored view, not only from typing in the box. Without this the family came back as
+  // the function alone, and a handler that delegates drew as though it did nothing.
+  if (!funcIndex(() => pickFunction(name, hops))) {
+    funcBox.value = name;
+    return;
+  }
   const row = functionRow(name);
   funcFilter = name;
   funcHops = typeof hops === "number" ? hops : 1;
@@ -3035,6 +3043,10 @@ const COST_LANES = [
   ["DOM", new Set(["dom_selector", "dom_attr", "css_selector"])],
 ];
 
+// Two halves, because they belong in different places: the count is short enough for the
+// breadcrumb, and the lanes - the part a reader is actually here for - would be
+// ellipsised inside that pill the moment three pickers sit beside it. They go under the
+// canvas, next to who calls this function, where there is room for the whole line.
 function functionCost(p) {
   const family = (p.family && p.family.has(funcFilter)) ? p.family : null;
   const mine = p.nodes.filter(n => n.owner &&
@@ -3048,8 +3060,10 @@ function functionCost(p) {
   // to be told which of the two they are looking at.
   const via = mine.length > own ? ` (${own} its own, ${mine.length - own} through helpers)` : "";
   const hops = funcHops > 1 ? `; ${funcHops} hops out` : "";
-  return `${mine.length} symbol${mine.length === 1 ? "" : "s"}${via}`
-    + (said.length ? " · " + said.join(" · ") : "") + hops;
+  return {
+    count: `${mine.length} symbol${mine.length === 1 ? "" : "s"}${via}${hops}`,
+    lanes: said.join(" · "),
+  };
 }
 
 let _drawWaiting = -1;
@@ -3086,12 +3100,12 @@ function draw() {
   const drawnHere = fileFilter ? visible(p).size : 0;
   const inFile = FILE_TOTALS.get(fileFilter) || onPage;
   const narrowed = drawnHere < onPage;
-  const cost = funcFilter ? functionCost(p) : "";
+  const cost = funcFilter ? functionCost(p) : null;
   crumb.textContent = funcFilter
       // On the function's own page the name is already the page's name; on a real page
       // underneath it, say which page the function is being narrowed to.
-      ? (current === FN_PAGE ? `${funcFilter}() — ${cost}`
-         : `${here} › ${funcFilter}() — ${cost}`)
+      ? (current === FN_PAGE ? `${funcFilter}() — ${cost.count}`
+         : `${here} › ${funcFilter}() — ${cost.count}`)
     : fileFilter
       ? `${here} › ${fileFilter} — ${drawnHere} of ${inFile} symbols`
         + (narrowed ? "; filtered" : "")
@@ -3114,11 +3128,13 @@ function draw() {
   const callers = document.getElementById("callers");
   if (callers) {
     const who = funcFilter ? functionCallers(funcFilter) : [];
-    callers.hidden = !who.length;
-    callers.innerHTML = who.length
-      ? `<b>Called by</b>` + who.map(name =>
-          `<button type="button" data-fn="${esc(name)}">${esc(name)}</button>`).join("")
-      : "";
+    const lanes = cost && cost.lanes
+      ? `<div class="lanes"><b>Touches</b>${esc(cost.lanes)}</div>` : "";
+    callers.hidden = !funcFilter || (!who.length && !lanes);
+    callers.innerHTML = lanes + (who.length
+      ? `<div><b>Called by</b>` + who.map(name =>
+          `<button type="button" data-fn="${esc(name)}">${esc(name)}</button>`).join("") + "</div>"
+      : "");
     callers.querySelectorAll("button").forEach(el => {
       el.onclick = () => pickFunction(el.dataset.fn);
     });
@@ -5918,6 +5934,11 @@ def render_document(connectivity_map: ConnectivityMap, console=None, files=None,
         # went with it, so choosing Stripe on a page that has none stranded you with an
         # empty map and no visible control that would undo it.
         '<div class="fnote" id="fnote" hidden></div>'
+        # What the picked function costs, and who calls it. Beside the colour key rather
+        # than in the breadcrumb: that pill is capped by the corners either side of it,
+        # and the lane counts - the reason anyone picked a function - were the first
+        # thing its ellipsis ate.
+        '<div class="callers" id="callers" hidden></div>'
         "</div>",
 
         # Every element the script still writes to, kept in the tree and out of the way.
@@ -5932,10 +5953,6 @@ def render_document(connectivity_map: ConnectivityMap, console=None, files=None,
         '<div class="crumbrow"></div>'
         '<div class="note" id="cmnote"></div>'
         '<div class="note capnote" id="capnote"></div>'
-        # "Everything touching submit_push" is a list, not a second canvas: the callers of
-        # a caller is the whole application again, and a reader asking the question wants
-        # names they can click.
-        '<div class="note callers" id="callers" hidden></div>'
         '<div class="gone" id="gone"></div>'
         "</div>",
         '<div class="zoom"><button id="zo" type="button" aria-label="Zoom out">\u2212</button>'
