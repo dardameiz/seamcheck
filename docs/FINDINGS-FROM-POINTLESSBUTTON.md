@@ -404,3 +404,98 @@ on this project were left untouched for this reason** — not because they were 
 but because the category cannot currently be trusted enough to act on.
 
 It is the one open item that changes what a consumer is able to do with the output.
+
+---
+
+# Update · 0.8.2 · two new bugs in the Redis lens, and a correction to my own C7
+
+## Stats: confirmed working, twice
+
+`share` reports **47,879 symbols / 95,941 edges**, matching the scan exactly. T3 has now held across
+two releases.
+
+| | 0.8.0 (pre-cleanup) | 0.8.1 | 0.8.2 |
+|---|---:|---:|---:|
+| unresolved | 3,492 | 2,695 | **2,584** |
+| unused | 2,136 | 1,560 | 1,560 |
+| uncertain | 2,883 | 3,345 | 3,630 |
+| connected | 39,323 | 39,531 | **40,105** |
+| multi-writer | 370 | 48 | 48 (all genuine) |
+
+## C7 — my recommendation was wrong, and the revert is the better call
+
+`dd1e66fc1` reverted the cost-ranking check after testing it against real historical code rather
+than a fixture. **That was the right decision and this file should say so**, because the proposal
+came from here and was overconfident.
+
+I described it as *"one line of post-processing"*. Three granularities, none both precise and
+complete:
+
+- **proximity** (my exact proposal) — flags an unrelated selector seven lines below a timer;
+- **statement containment** — cannot see the real case, whose `getElementById`, `setInterval`,
+  `fetch` and write sit in four methods ~95 lines apart;
+- **file level** — 88 findings for 3 real ones, because two files poll legitimately.
+
+The question is *"is this element's writer reached from a timer"* — **a call-graph question, not a
+text question.** My query worked because I hand-verified all sixteen hits; as an automated check it
+buries three real findings in eighty-eight. A triage aid with that ratio is worse than none.
+
+**The finding was real. The claim that it generalised cheaply was never tested before I made it.**
+
+---
+
+## T5 — a symbol with incoming `connected` edges is still reported `unused`
+
+0.8.2 adds `redis_key_use` (570 symbols, all connected) and 570 `redis_key_use → redis_key` edges.
+**The extraction works and the join works.** The status pass ignores both:
+
+```
+USE : redis_key_use:api:user_stats:*:pointless/views/admin_views.py:1586
+   -> redis_key:api:user_stats:*
+      edge status   = connected
+      target status = unused      <-- the contradiction
+```
+
+| | count |
+|---|---:|
+| `redis_key` reported `unused` | 107 |
+| …with incoming `connected` use edges | **107** |
+| …genuinely with no incoming use | **0** |
+
+`api:user_stats:*` has 6 uses. `api:streak_opportunities:*` has 6. `user:*:achievement_timeline`
+has 6. All still `unused`.
+
+**Suggested fix, and it is cheap:** assert as a scan-time invariant that *no symbol may hold status
+`unused` while an incoming edge holds status `connected`*. That single assertion catches this class
+before release, for every kind, forever.
+
+**Deliberately scoped to `unused`.** `unresolved` is a different axis — "read here and written
+nowhere", or "reaches a name that does not exist" — and an incoming edge does not contradict it. I
+checked before generalising: 24 `redis_key|unresolved` and 7 `fetch_target|unresolved` also have
+incoming connected edges and are **not** contradictions.
+
+## F15 — a write through a pipeline object is not counted as a write
+
+The other half of the Redis lens. `redis_key|unresolved` claims *"read here and written nowhere in
+this repo, so this lookup can only ever miss"*. For at least six keys that is wrong, because the
+write goes through a pipeline rather than the client:
+
+```python
+pipe.setex("admin:config_sync_lock", 15, 1)              # period_calculator.py:293
+pipe.hincrby('admin:global_stats', 'lifetime_pushes', n) # push_views.py:2360
+hist_pipe.hset('analytics:history:concurrent', ...)      # admin_analytics_views.py:296
+pipe.setex("global:mode_switch_occurred", ...)           # period_calculator.py:298
+pipe.hset("push_arena:config", mapping={...})            # signals.py:747
+```
+
+`r.pipeline()` returns an object with the same command set; the extractor appears to match on the
+client receiver only. **Track locals assigned from `.pipeline()`** — including
+`with r.pipeline() as pipe:` — and treat their command calls as the client's.
+
+Six verified against exact string literals across three files. The remaining 18 of 24 are not
+claimed: a base-string search is too crude for wildcard keys like `push_arena:*`.
+
+**Why this matters more than six:** pipelining is the house style on this project, not an edge case.
+Its scaling rules mandate pipelined reads, and the page-render path alone queues 30+ operations on
+one pipe. A Redis lens blind to `pipe.set(...)` reads the cold paths correctly and mis-reports the
+hottest ones.
