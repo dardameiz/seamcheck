@@ -19,6 +19,20 @@ backend that answered `uncertain` everywhere would score 100% precision and be u
 
 ## Unreleased
 
+- **Fixed** — **a function's page showed where it goes and not that anything arrives.**
+  Filtering the reference project on `submit_push` drew THE SERVER and THE STORE and
+  nothing above them: the page walks what the function REACHES, and the browser is on the
+  other side — the fetch reaches IN. So the one view built for *"I am working on
+  submit_push, show me everything"* could not answer **does a push actually get here**.
+  The request is followed as a shape — store row → handler → route → fetch → js call —
+  rather than by widening, because the seam is three or four hops from a store row and
+  widening that far drags in half the project. All four bands now.
+- **Fixed** — and `visible()` threw it away again. It re-derived the set from
+  owner-matched seeds with the same one-hop walk the page had already done: two
+  implementations of one thing, disagreeing, with the weaker one running last. A
+  function's own page is now trusted, since it was built for exactly that filter.
+
+
 - **Fixed** — **the chain reached one store row on the busiest handler in the reference
   project.** `submit_push` walked 74 functions deep and matched four of them: the call
   graph names a method `Class.method` and a symbol's owner was looked up bare, so every

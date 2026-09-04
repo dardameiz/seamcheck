@@ -1617,9 +1617,14 @@ class TheFunctionFilter(SimpleTestCase):
         self.assertIn("redis_key_use:user:{id}:streak", drawn)
         self.assertIn("Postgres 1", note)
         self.assertIn("Celery 1", note)
-        # Widening reaches the browser call one hop further out.
+        # The request ARRIVING is drawn without widening. This used to assert the
+        # opposite - that the fetch appeared only after "widen by one hop" - and that was
+        # the defect: filtering the reference project on `submit_push` drew THE SERVER and
+        # THE STORE and nothing above them, so the view built to answer "what is this
+        # handler" could not show that a push reaches it at all. Widening still reaches
+        # further; the request path is not what it is for.
+        self.assertIn("fetch_target:/api/push/", drawn)
         self.assertIn("fetch_target:/api/push/", wider)
-        self.assertNotIn("fetch_target:/api/push/", drawn)
         self.assertIsNone(cleared)
         # Cleared means cleared: another function's key is drawable again, and the reader
         # is off the synthetic page.
@@ -1817,3 +1822,112 @@ class TracingAWireTests(SimpleTestCase):
                            "hovering the same card after a redraw must light it again")
         self.assertFalse(state["dimmedWithNothingLit"],
                          "and a redraw must never leave the canvas dimmed for nothing")
+
+
+class FunctionReachesTheBrowserTests(SimpleTestCase):
+    """A handler's page must show the request arriving, not only where it goes.
+
+    Filtering the reference project on `submit_push` drew THE SERVER and THE STORE and
+    nothing above them: the page walks what the function REACHES, and the browser is on
+    the other side - the fetch reaches IN. So the one view built for "I am working on
+    submit_push, show me everything" could not answer *does a push actually arrive here*,
+    which is the first thing a reader asks of it.
+
+    Widening by hops is the wrong lever: the seam is three or four hops from a store row
+    and widening that far drags in half the project. The request has a shape - js call →
+    fetch → route → handler - and it is followed as a shape.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        try:
+            from playwright.sync_api import sync_playwright  # noqa: F401
+        except ImportError:
+            raise unittest.SkipTest("playwright is not installed (the observe extra)") from None
+
+    def test_a_function_page_shows_the_request_arriving(self):
+        from playwright.sync_api import sync_playwright
+
+        from seamcheck.mapdata import build_map
+        from seamcheck.renderers.map_html import render_document
+
+        # A whole request, and a store row the handler's own work owns - which is what
+        # makes the handler a seed on its own function page.
+        def sym(kind, label, owner="", file="app/thing.py", sub=""):
+            return Symbol(id=f"{kind}:{label}", kind=kind, label=label, sub=sub,
+                          file=file, line=1, status=Status.CONNECTED,
+                          snippet=f"{kind} {label}", chain=[label], note="", owner=owner)
+
+        graph = Graph(
+            symbols=[
+                sym("js_call", "/api/orders/", file="static/js/orders.js"),
+                sym("fetch_target", "/api/orders/", file="static/js/orders.js"),
+                sym("url", "api/orders/"),
+                sym("view", "orders"),
+                sym("redis_key_use", "orders:count", owner="orders", sub="writes"),
+                sym("redis_key", "orders:count"),
+            ],
+            edges=[
+                Edge(from_id="js_call:/api/orders/", to_id="fetch_target:/api/orders/",
+                     status=Status.CONNECTED),
+                Edge(from_id="fetch_target:/api/orders/", to_id="url:api/orders/",
+                     status=Status.CONNECTED),
+                Edge(from_id="url:api/orders/", to_id="view:orders",
+                     status=Status.CONNECTED),
+                Edge(from_id="view:orders", to_id="redis_key_use:orders:count",
+                     status=Status.CONNECTED),
+                Edge(from_id="redis_key_use:orders:count", to_id="redis_key:orders:count",
+                     status=Status.CONNECTED),
+            ],
+        )
+        # build_map takes the FILES a page is built from, not symbol ids - passing ids
+        # puts every symbol on an "unreached" page and drops the edges between bands,
+        # which is the whole chain this test is about.
+        pages = {"orders-main": {"app/thing.py", "static/js/orders.js"}}
+        document = render_document(build_map(graph, pages, git_sha="0" * 12,
+                                             calls={"orders": []},
+                                             defined={"orders": "app/thing.py"}),
+                                   console=_console_for(graph))
+        path = pathlib.Path(tempfile.mkdtemp()) / "map.html"
+        path.write_text(document.single_file(), encoding="utf-8")
+
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch()
+            except Exception as error:  # pragma: no cover - no browser downloaded
+                raise unittest.SkipTest(f"no chromium: {error}") from None
+            page = browser.new_page()
+            errors: list[str] = []
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.goto(path.as_uri(), wait_until="load")
+            _open_lens(page, "map")
+            page.wait_for_selector("#cv .nd")
+            kinds = page.evaluate("""async () => {
+                const fn = document.getElementById('fn');
+                fn.value = 'orders';
+                fn.dispatchEvent(new Event('input', {bubbles: true}));
+                await new Promise(r => setTimeout(r, 400));
+                const row = document.querySelector('.fnrow');
+                if (!row) return {error: 'no function row'};
+                row.click();
+                await new Promise(r => setTimeout(r, 800));
+                return {kinds: PAGES[FN_PAGE].nodes.map(n => n.kind),
+                        drawn: [...document.querySelectorAll('#cv .nd')].length,
+                        bands: [...document.querySelectorAll('#cv .bandbig')]
+                                 .map(b => b.textContent)};
+            }""")
+            browser.close()
+
+        self.assertEqual(errors, [])
+        self.assertNotIn("error", kinds, kinds)
+        # The handler is what was asked for; the route and the fetch are how the request
+        # gets to it, and both belong on the page that answers "what is this function".
+        self.assertIn("view", kinds["kinds"])
+        self.assertIn("url", kinds["kinds"])
+        self.assertIn("fetch_target", kinds["kinds"])
+        # ...and DRAWN, not merely present in the page's data. `visible()` used to re-run
+        # the same one-hop walk from owner-matched seeds and throw the request path away
+        # again - two implementations of one thing, disagreeing, with the weaker one last.
+        self.assertIn("THE BROWSER", kinds["bands"])
+        self.assertIn("THE SEAM", kinds["bands"])

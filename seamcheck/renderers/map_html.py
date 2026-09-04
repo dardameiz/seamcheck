@@ -2199,6 +2199,13 @@ function visible(p) {
     const on = lensed(p);
     const here = new Set(on.map(n => n.id));
     const family = (p.family && p.family.has(funcFilter)) ? p.family : null;
+    // The function's own page was built FOR this filter - seeds, hops and the request
+    // path arriving at the handler - so re-deriving the set here ran a second, weaker
+    // copy of the same walk and threw the request path away again. Two implementations
+    // of one thing, and the weaker one ran last.
+    if (family && p.page === "fn:" + funcFilter) {
+      return new Set(lensed(p).map(n => n.id));
+    }
     const mine = n => n.owner && (family ? family.has(n.owner) : n.owner === funcFilter);
     const keep = new Set(on.filter(mine).map(n => n.id));
     if (!keep.size) return keep;
@@ -2906,6 +2913,41 @@ function buildFunctionPage(name, on, hops) {
         keep.add(nb); next.push(nb);
       }));
       front = next;
+    }
+    // ...and the request ARRIVING, which the walk above cannot reach: it follows what
+    // the function touches, and the browser is on the other side - the fetch reaches IN.
+    // Filtering the reference project on `submit_push` drew THE SERVER and THE STORE and
+    // nothing above them, so the one view built for "show me everything about this
+    // function" could not answer whether a push gets there at all.
+    //
+    // Followed as a SHAPE rather than by widening: the seam is three or four hops from a
+    // store row, and widening that far drags in half the project. A request is
+    // js call -> fetch -> route -> handler, every time.
+    // Read right to left: a store row is reached by the handler whose work touched it,
+    // a handler by its route, a route by the fetch that resolves to it, a fetch by the
+    // call that makes it. The seeds are usually store rows, so the walk starts there.
+    const ARRIVES = {
+      redis_key_use: "view", db_table_use: "view", db_column_use: "view",
+      view: "url", url: "fetch_target", fetch_target: "js_call",
+    };
+    const incoming = new Map();
+    edges.forEach(e => {
+      if (!incoming.has(e.target)) incoming.set(e.target, []);
+      incoming.get(e.target).push(e.source);
+    });
+    let upstream = [...keep];
+    for (let step = 0; step < 4 && upstream.length; step++) {
+      const next = [];
+      upstream.forEach(id => {
+        const want = ARRIVES[(known.get(id) || {}).kind];
+        if (!want) return;
+        (incoming.get(id) || []).forEach(source => {
+          const node = known.get(source);
+          if (!node || node.kind !== want || keep.has(source)) return;
+          keep.add(source); next.push(source);
+        });
+      });
+      upstream = next;
     }
     const nodes = [...keep].map(id => known.get(id)).filter(Boolean);
     const st = {};
