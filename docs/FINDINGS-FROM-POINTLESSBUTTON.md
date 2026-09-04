@@ -499,3 +499,343 @@ claimed: a base-string search is too crude for wildcard keys like `push_arena:*`
 Its scaling rules mandate pipelined reads, and the page-render path alone queues 30+ operations on
 one pipe. A Redis lens blind to `pipe.set(...)` reads the cold paths correctly and mis-reports the
 hottest ones.
+
+---
+
+# Update · 0.8.2 · every push_arena finding adjudicated, one by one
+
+2026-09-03. The owner asked for the thing this file has been circling: **a graded set.** Every
+non-connected symbol on one surface — `push_arena.js`, `push_arena.html`, everything under
+`push_arena/` — given a real/not-real verdict with the evidence attached. **712 findings.**
+
+Table: `pointlessbutton/OTHER/seamcheck-pusharena-adjudication.csv`.
+Script: `pointlessbutton/OTHER/navbar-mob/seam_final.py`.
+
+| Verdict | Count | Share |
+|---|---:|---:|
+| NOT REAL | 515 | 72.3% |
+| REAL | 94 | 13.2% |
+| LIMITATION (tool correctly says "cannot resolve") | 73 | 10.3% |
+| REVIEW (multi-writer) | 24 | 3.4% |
+| UNCLEAR | 4 | 0.6% |
+| TOOL BUG | 2 | 0.3% |
+
+**Precision on this surface: 13.2%** — 14.7% if LIMITATION is excluded, which it should be, since
+`<dynamic>` is the tool being honest rather than making a claim. The 94 are real and nothing else
+finds them; the job is cutting noise without losing them.
+
+## T6 — intra-file references are not credited · **306 findings, 59% of all noise**
+
+The single biggest defect, and the cheapest fix in this document.
+
+A script that does `el.classList.add('goal-celebrated')` on one line and
+`querySelector('.goal-celebrated')` on another **is its own evidence**. seamcheck reports the second
+as unresolved because it only looks for the link in *other* files. `push_arena.js` alone produced
+188 findings, overwhelmingly this shape.
+
+**Fix:** before declaring a `dom_selector` or `dom_attr` unresolved, search the declaring file for
+the same name. Measured effect here: 306 of 515 false positives disappear.
+
+Verification detail that matters for implementing it — count occurrences, not presence. The finding's
+own line is one occurrence; **more than one** means a genuine second reference.
+
+## F16 — class names a third-party library consumes · **121 findings**
+
+`fa-moon`, `fa-ghost`, `fas`, `far`. Font Awesome swaps the `<i>` for an SVG at runtime. Nothing in
+the repo references these and nothing should — "unused by our code" is true, "unused" is false.
+
+**Fix:** a known-vendor prefix list (`fa-`, `swiper-`, `leaflet-`, `select2-`, `choices__`, `tippy-`,
+`noUi-`) is the 20-minute version. The inferred version: a class that appears only in markup and
+never in any selector or stylesheet in the project is probably somebody else's.
+
+## F17 — `fetch_target` never stats the file · **11 findings, and a missed check**
+
+Every `/static/…` path flagged uncertain on this surface **exists on disk** — all 11 verified.
+
+This one is worth more than the noise it removes: stat the file, and the same code path becomes a
+check that catches a **genuine 404 asset**, which is a real bug class in this project (a season's
+`icon_folder` can point at art that was never uploaded).
+
+## T7 — a display string parsed as a URL · **2 findings**
+
+```js
+periodsTotalElement.textContent = '/24';   // arena_inline_boot.js:665  → reported as a fetch target
+divisionEl.textContent = '/4';             // arena_lobby_boot.js:255   → same
+```
+
+That is the `/24` in "period 3/24". A fetch target should come from a fetch/XHR/`src`/`href`, not
+from any string literal beginning with `/`.
+
+## M2 — multi-writer needs a runtime half, and here is the shape of it
+
+24 multi-writer findings on this surface. Static detection cannot settle any of them, because a
+multi-writer is a **risk**, not a defect — it becomes a defect only when the writers *disagree*.
+
+At runtime that has a signature: a value that changes with the page idle. All flagged elements were
+sampled 14 times over ~12 seconds with nothing touching the page.
+
+- **14 were on screen and not one moved.** Writers coexist. Several by explicit design — in this
+  project `unlimited_pushes` has two writers and *both* carry a monotonic guard whose comments cite
+  each other.
+- **10 were not rendered** in the page's default state, so they are untested rather than clean.
+
+**Suggestion:** `seamcheck observe` already exists. If it can sample flagged elements on an idle page
+and report which ones move, the multi-writer lens goes from "here are 98 things to read" to "here are
+the 3 that actually fight". That is the difference between a lint and a bug finder.
+
+## Two ways to get the adjudication itself wrong
+
+Both were made while producing this, and anyone verifying seamcheck's output will hit them.
+
+**A token index under-reports hyphenated names.** Splitting the corpus into identifier tokens and
+looking each label up is fast and wrong: `achievement-category` never appears as its own token in a
+file containing `achievement-category-title`, because the tokeniser takes the longest run.
+**Measured: 5 of 52 verdicts were wrong this way** — all of them live classes graded dead. Plain
+substring search is the correct method.
+
+**The corpus filter decides the answer.** `staticfiles/` holds collectstatic *copies* of the same
+sources, and `docs/maps/connectivity-map.html` is seamcheck's **own output**. Counting either as
+"usage" makes every finding look connected: a first sample scored 10/10 wrong from this alone.
+
+Worth putting in seamcheck's own docs — the tool should tell people how to check it.
+
+## F18 — `dom_attr` "unused attribute" on a template: 26 findings, 0 defects
+
+The clearest actionability result from the graded set, and the strongest case for demoting a whole
+finding kind.
+
+All 26 `dom_attr` findings on `push_arena.html` pass every automated test: each name appears exactly
+once in the entire repository, so nothing references it. Reading them in context, **not one is dead
+code.** Every single one is a *label* — a class or an id — on a live, working element:
+
+| Finding | What it is |
+|---|---|
+| `lazy-btn-cancel`, `lazy-btn-confirm` | classes on buttons that also carry `id="lazyCancelBtn"` / `id="lazyConfirmBtn"` — the ids are what JS binds |
+| `notificationContainer` | the unused **id**; the element's **class** `.notification-container` is read by three JS files |
+| `bcrStrip` | unused **id** on a div another module reads the contents of |
+| `achievementModalPercent` | unused **id** on a span already filled server-side |
+| `success-popup-content/-header/-body` | unstyled wrapper classes inside a `.success-popup` that IS styled and IS driven by JS |
+| `ms-ladder--cyan`, `ms-ladder--green` | BEM modifiers with no rule; `.ms-ladder` is styled |
+
+An `id` or `class` in markup is frequently a **name**, not a **hook**. "Nothing reads this
+attribute" is therefore true and useless on its own.
+
+### Three rules that would remove nearly all of it
+
+1. **Do not report an unused id/class when the same element carries another attribute that IS
+   referenced.** `id="lazyConfirmBtn"` is used, so `class="lazy-btn-confirm"` on that tag is a label.
+   This one rule kills most of the 26.
+2. **Treat a BEM modifier (`block--modifier`) as covered when its base block is styled.** A modifier
+   with no rule is a *styling gap* — a different report, with different urgency, and arguably a more
+   interesting one.
+3. **Separate "unreferenced" from "unreachable", and rank them differently.** In the same audit,
+   `dom_selector` findings led to a 292-line unreachable region plus 9 orphan declarations —
+   **329 lines deleted**, and 14 of those findings were one cause. The 26 `dom_attr` findings led to
+   **nothing**. Presenting both at one severity is precisely what makes 712 findings read as noise
+   and get skimmed.
+
+## M3 — a multi-writer report can be a dead-code report in disguise
+
+Deleting the unreachable region retired two multi-writer findings for free: `.progress` and
+`.goal-bar` were reported as "two places in push_arena.js write this element — initPushArenaDOM,
+`resetProgressBars`", and `resetProgressBars` was itself dead.
+
+So before reporting N writers, check whether any of them is reachable. "Two writers, one of them
+dead" is a dead-code finding with a much clearer fix than "pick a canonical owner".
+
+## Score for this surface, after acting on it
+
+| Finding kind | Findings | Outcome |
+|---|---:|---|
+| `dom_selector` (unreachable) | 23 | **329 lines deleted** — 14 of them were one region |
+| `css_selector` | 24 | **24 selectors deleted** from 4 stylesheets |
+| `dom_attr` | 26 | **0 actioned** — all labels on live elements |
+| `multi_writer_element` | 24 | 14 cleared by runtime idle-sampling; 2 retired by the dead-code deletion |
+| `fetch_target` | 13 | 11 assets verified present; 2 were the `/24` parser bug |
+
+**353 lines of genuinely dead code removed from one surface.** That is the number that justifies the
+tool — and the reason to fix the noise rather than lower the ambition.
+
+---
+
+# Update · 0.8.2 · the STORE surface graded (401 findings)
+
+Same method as the push_arena set. **401 findings: 308 NOT REAL (76.8%), 39 REAL (9.7%), 24
+LIMITATION, 14 LABEL, 13 REVIEW.** Precision lands close to push_arena's 13.2%, which suggests
+~10-15% is the current baseline on a mature Django + vanilla-JS surface.
+
+**One genuine defect found, and it is a good one.** `.badge-unlock-notification` was styled nowhere,
+and `showBadgeNotification()` appends that div to `document.body`. With no rule, `position` fell back
+to `static` — so a "New Badge Unlocked!" toast rendered as unstyled raw text at the end of the
+document, below the footer, for three seconds. Its own comment said "Remove after animation"; there
+was no animation. Nothing but a connectivity scan finds that: the code is correct, the markup is
+correct, and the missing half is a CSS rule that was never written. **That is the case for the tool.**
+
+**Also good news for the backend lenses:** all 5 `view`, 5 `url`, 13 `json_field` and 7
+`fetch_target` findings on this surface were false. No dead endpoints. The server-side lenses are
+behaving.
+
+## F19 — the Redis/cache lens counts an INVALIDATION as the key's definition · 8/8 false
+
+Every store Redis key reported "unused" is live.
+
+| Key | Cited at | Reality |
+|---|---|---|
+| `store:current_period` | `admin.py:4043` | 6 non-test modules |
+| `stripe:receipt:*` | `stripe_service.py:1261` | 3 modules |
+| `store:purchasable_buttons` | `button_utils.py:124` | read at `:104`, deleted at `:124` |
+| `store:basic_items:*` | `button_utils.py:125-126` | read at `:22` via an f-string `cache_key` |
+| `store:total_buttons_count` | `button_utils.py:127` | `circuit_cached(...)` in `store_views.py:74` |
+
+Two compounding causes:
+
+1. **The cited line is `cache.delete('key')`.** An invalidation is a *use* of a key, not a
+   declaration of one. Treating it as the definition means the key's only "site" is the one place
+   guaranteed not to read it.
+2. **The read is behind a variable.** `cache_key = f"store:basic_items:{item_type}"` then
+   `cache.get(cache_key)`. Resolving a string variable within the same function would close most of
+   this.
+
+Repo-wide this lens reports **145 non-connected keys** — including `cache:cps:stats`, which I proved
+live earlier the same day while working on an unrelated bug. Until it can follow a variable, this
+lens is closer to noise than signal, and it is the one I would suppress by default.
+
+## F20 — a note for whoever acts on `css_selector` findings: brace counts are not a syntax check
+
+Not a seamcheck bug — a consumer bug, and worth documenting because the findings invite it.
+
+I pruned 32 verified-dead selectors from three store stylesheets with a regex
+(`[^{}]+?\{([^{}]*)\}`) and broke the build: `postcss: button_badges.css:185:1 Unexpected }`. Brace
+counts balanced perfectly (59/59). The regex cannot see a rule nested inside `@media`, so removing
+one left the at-rule malformed in a way counting cannot detect.
+
+If seamcheck ever offers to apply a CSS fix, it must go through a real CSS parser. And the finding
+text could say so: *"verify with your CSS build after removing — nested at-rules make brace counting
+unreliable."*
+
+## A smaller one worth recording: a failed shell glob looks exactly like a true negative
+
+`button_badges.css` briefly appeared orphaned because `grep -rn "button_badges" --include=*` failed
+under zsh (`no matches found: --include=*`) and printed nothing. It is imported by
+`js/buttons-css-main.js`. **A tool that errors and a tool that finds nothing produce the same empty
+output**, and in a verification workflow that turns into a deletion. Anything that checks its own
+findings should assert the search RAN, not just that it was empty.
+
+## F21 — the report emits the same symbol more than once · 49 of 401 rows (12.2%)
+
+| | |
+|---|---:|
+| rows in the store report | 401 |
+| distinct `(kind, label, file, line)` | **352** |
+| symbols emitted more than once | 47 |
+| extra rows from duplication | **49 (12.2%)** |
+
+Multiplicity is 2 for 46 of them and **4** for `itemPurchaseModal` (`store.js:316`). By kind:
+`dom_selector` 45, `js_call` 2. Adjacent lines duplicate independently — `auto-close-timeout` at
+`store.js:89` and `:90` are two separate doubled entries.
+
+Three of the REAL findings appear twice, which is why my "39 REAL" is really 36 distinct symbols.
+**Deduping on `(kind, label, file, line)` before output costs nothing and removes an eighth of the
+report.** It also matters for trust: a reader who spots the same finding twice starts doubting the
+count, and the count is what gets quoted.
+
+## F23 — split `multi_writer_element` on "does this element exist at runtime?"
+
+**The best result of the whole store pass came from a `multi_writer_element` finding that was
+mislabelled — and the truth was BETTER than the report.**
+
+`modal-container` was flagged as multi-writer in `store.js`. The runtime watch could not find that
+element on the page at all: 14 samples, ~12 idle seconds, purchase modal open, nothing. Reading the
+code explained it — `store.js` had the same block in four places:
+
+```js
+// Support both old (.modal-container) and new (.push-store-glass) modal structures
+const glassModal = modal.querySelector('.push-store-glass');
+const modalContainer = modal.querySelector('.modal-container');
+if (glassModal) { … } else if (modalContainer) { … }
+```
+
+`store.js` runs on `store.html` alone; that template carries 12 `.push-store-glass` and zero
+`.modal-container`. **Four dead branches.** (`.modal-container` does exist elsewhere in the app, on
+pages `store.js` never runs on — which is exactly why the fallback survived every code review.)
+
+So: **a "multi-writer" finding whose element does not exist is a dead-code finding wearing the wrong
+label.** If the tool can answer "does this element ever exist in the rendered templates this file
+runs against?", the kind splits into two much sharper verdicts:
+
+- **element exists, several writers** → a genuine flicker risk, hand it to a runtime check
+- **element never exists** → **dead branch; the surviving branch is canonical** — actionable
+  immediately, and it is the single most valuable finding shape for a codebase that has been
+  refactored more than once
+
+The template side is statically knowable: which templates load this JS (script tags, and the Vite
+entry graph), and which selectors those templates contain. That is the same resolution the
+`dom_selector` lens already needs.
+
+## Ranked ask list, from both surveyed surfaces
+
+1. **Credit a reference the scan can already see** — cross-file (194) + intra-file (68 store, 306
+   arena). On the store that is **85% of all noise**.
+2. **Dedupe the output** — 12.2% of rows, free (F21).
+3. **Allowlist library prefixes** (`fa-`, `fas`, `far`, `fab`, `swiper-`, `leaflet-`, `select2-`,
+   `choices__`, `tippy-`, `noUi-`) — 11% of store noise, ~10 lines of config.
+4. **Split `multi_writer_element` on element existence** (F23) — turns a vague risk into either a
+   flicker check or a dead-code finding.
+5. **Fix or suppress the Redis/cache lens** — 8/8 false on the store, 145 repo-wide (F19).
+6. **Suppress `dom_attr` on templates by default** — 145 findings across two surfaces, **0 defects**
+   (F18).
+7. **`os.path.exists` for `/static/` fetch targets** — converts 6 false positives into a check that
+   would catch a real 404, which is a bug only a static scan finds.
+8. **Report LIMITATION findings in their own section** — 24 unresolvable-by-design should not dilute
+   the actionable count. They are the tool being honest and should read that way.
+9. **Minimum label length 3** — drops the `'ok'` / `'sm'` class silently.
+
+**And the counter-argument to all of the above, which should go in the README:** the one real defect
+this pass found — a notification div appended to `document.body` with no CSS rule anywhere, so it
+rendered as raw text below the footer for three seconds — **is invisible to every other instrument.**
+The JS is correct. The markup is correct. Nothing is missing but a rule nobody wrote. No unit test,
+no lint, no type checker, and no code review that has ever read past that function will find it.
+A connectivity map is the only tool that looks for the missing half of a pair, and that is the pitch:
+not "find dead code", but **"find the pair with one half missing"**.
+
+## The best outcome so far: 15 `css_selector` findings led to a whole dead feature
+
+Worth writing up in full, because it is the strongest argument for the tool I have found and it did
+not come from a finding being *right* — it came from a finding being a **thread**.
+
+The store report listed 15 unreferenced selectors in `button_badges.css`. Pulling on them:
+
+1. **Grep**: 24 of the file's 33 class selectors are referenced by no JS, HTML or Python.
+2. **Grep, tokens**: the file reads 6 custom properties and **5 are defined nowhere in the repo**.
+   9 of its 17 `var()` declarations resolved to nothing.
+3. **Reading the selectors rather than the class names**: the 9 "referenced" classes are generic —
+   `locked`, `unlocked`, `achieved`, `tooltip` — and every rule using them is a descendant or
+   compound of `.button-badge`. They cannot match without it. **A class-name census calls those
+   live; a selector-aware one does not.** This is a concrete improvement for the `css_selector`
+   lens: resolve the whole selector, not the names in it.
+4. **Rendering the two pages the stylesheet loads on**: 32 of its 33 classes matched **zero**
+   elements. All 69 rules unreachable.
+
+That unwound into four dead layers and a twin: the stylesheet (377 lines), its bundle import
+(8.9 KB shipped to every store and arena visitor), a **per-render server context build no template
+read**, DOM writers in three JS places aiming at an element that has never existed — and
+`AVATAR_BADGES`, an identical parallel copy. **569 lines removed.**
+
+Two things to take from it:
+
+- **The finding was not the bug; it was the entrance.** 15 selectors were reported. What was
+  actually wrong was a whole feature. A tool that reports "these 15 names are unreferenced" is more
+  valuable if it can also say **"and they are 15 of the 33 in one file, whose other 18 only match as
+  descendants of one of them"** — i.e. cluster findings by file and by selector dependency. That
+  sentence is what turned a tidy-up into a real cleanup.
+- **The server-side half was invisible to the CSS lens and would have been the bigger win.** A
+  Django context key computed on every request and read by no template is exactly the shape this
+  tool should own, and it currently has no lens for it: `view` → `template variable` connectivity.
+  On the hottest page in this app it was two loops, eight dict copies and two sorts, per request,
+  for nothing.
+
+**And the caution, from the same episode:** the first removal pass introduced a crash
+(`ReferenceError`, every arena load) because a second use of a deleted declaration sat 36 lines
+below the matched block. Syntax checks passed. **If seamcheck ever gains an "apply fix" mode, a
+removal must be followed by a render, not a parse.** Dead-code removal is the change that looks
+safest and is not — everything about it says nothing depended on this.
