@@ -91,3 +91,67 @@ class PipelineRegressionGateTests(SimpleTestCase):
 
         self.assertTrue(receivers)
         self.assertTrue(all(s.status == Status.CONNECTED for s in receivers))
+
+
+class DataLayerGateTests(SimpleTestCase):
+    """The store half of the mandatory gate.
+
+    Planted:
+      fixture_season                the table `Season` declares in Meta.db_table
+      fixture_season.owner_id       a ForeignKey, stored as `_id`, named as `owner`
+      fixture_season.naem           `values("naem")` - a FieldError the moment it runs
+      fixture:season:current        written and read in one helper
+      current_season                a handler that touches nothing ITSELF
+
+    The last two together are the point: a handler delegates, and the map has to reach
+    the store through the helper or it stops at the server band.
+    """
+
+    def setUp(self):
+        from seamcheck.extractors.django_orm_extractor import extract_django_orm
+        from seamcheck.extractors.redis_extractor import extract_redis
+
+        self.root = str(Path(__file__).parent / "fixtures" / "datalayer")
+        self.orm, _ = extract_django_orm(self.root)
+        self.redis, _ = extract_redis(self.root)
+
+    def _rows(self, symbols, kind):
+        return {s.label: s.status for s in symbols if s.kind == kind}
+
+    def test_the_model_is_the_table_its_meta_names(self):
+        self.assertIn("fixture_season", self._rows(self.orm, "db_table"))
+
+    def test_a_foreign_key_is_stored_with_id_and_named_without_it(self):
+        columns = self._rows(self.orm, "db_column")
+        self.assertIn("fixture_season.owner_id", columns)
+        uses = self._rows(self.orm, "db_column_use")
+        # `filter(owner=user)` - the commonest line in a Django project.
+        self.assertEqual(uses.get("fixture_season.owner_id"), Status.CONNECTED)
+
+    def test_a_column_the_table_has_not_got_is_the_one_claim(self):
+        uses = self._rows(self.orm, "db_column_use")
+        self.assertEqual(
+            [label for label, status in uses.items() if status is Status.UNRESOLVED],
+            ["fixture_season.naem"])
+
+    def test_a_key_built_into_a_local_pairs_its_write_against_its_read(self):
+        keys = {s.label: (s.status, s.sub) for s in self.redis if s.kind == "redis_key"}
+        self.assertEqual(keys["fixture:season:current"],
+                         (Status.CONNECTED, "1 write / 1 read"))
+
+    def test_a_handler_that_delegates_still_reaches_its_store(self):
+        from seamcheck.graph import Graph, Symbol
+        from seamcheck.storelink import link_handlers_to_stores
+
+        handler = Symbol(
+            id="view:fixture.current_season", kind="view", label="current_season",
+            sub="handler", file="views.py", line=11, status=Status.CONNECTED,
+            snippet="", chain=[], note="")
+        graph = Graph(symbols=[handler, *self.orm, *self.redis], edges=[])
+
+        reached = {e.to_id for e in link_handlers_to_stores(graph, self.root)}
+
+        self.assertTrue(any("redis_key_use:fixture:season:current" in i for i in reached),
+                        "the handler must reach the key its helper writes")
+        self.assertTrue(any(i.startswith("db_table_use:fixture_season") for i in reached),
+                        "and the table its helper queries")

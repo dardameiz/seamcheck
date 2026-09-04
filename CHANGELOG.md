@@ -21,6 +21,14 @@ backend that answered `uncertain` everywhere would score 100% precision and be u
 
 ### The chain reaches the store
 
+- **Added** — the data layer is in the **mandatory gate**. It had no fixture at all: the
+  suite that must pass on every commit planted routes, fetches, DOM and CSS, and not one
+  table, column or key - so everything above could regress and only a column in the
+  corpus table would notice, if somebody read it. The planted set is a `Meta.db_table`,
+  a ForeignKey named both ways, a `values("naem")` that Django raises on, a key built
+  into a local, and **a handler that touches nothing itself** - the shape every real
+  handler has, and the one that used to stop the map at the server band.
+
 - **Added** — **a handler is joined to the store rows its own work reaches**, through the
   functions it calls. The map drew the reference project's Index page as
   browser → seam → server and stopped there, on a page whose handler exists to increment
