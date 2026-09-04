@@ -526,9 +526,16 @@ def run_scan(
         if parent == vendor_dir:
             break
         vendor_dir = parent
-    for symbol in extract_css(framework_stylesheets(vendor_dir)):
-        if symbol.id not in by_id:
-            css_symbols.append(dataclasses.replace(symbol, sub=f"vendor:{symbol.sub}"))
+    # Kept OUT of the graph, and used only to answer "is this class defined anywhere".
+    # They were being carried as symbols, so 180 rules of Django's own admin CSS were
+    # listed on the reference project: somebody else's file, in a package directory, that
+    # nobody reading the report can edit or delete. An oracle is a thing you ask, not a
+    # thing you report.
+    vendor_rules = [
+        dataclasses.replace(symbol, sub=f"vendor:{symbol.sub}")
+        for symbol in extract_css(framework_stylesheets(vendor_dir))
+        if symbol.id not in by_id
+    ]
 
     # Elements the JavaScript brings into existence. Half of what a modern page renders is
     # never in a template, and reading definitions from templates alone made every query
@@ -577,7 +584,8 @@ def run_scan(
         # to refuse.
         scss_classes, scss_stems = preprocessor_classes(preprocessor_sources or [])
         edges += match_css_selectors(
-            dom_selectors, dom_attrs, selectors,
+            dom_selectors, dom_attrs,
+            selectors + [v for v in vendor_rules if v.kind == "css_selector"],
             (tailwind_build_classes or set()) | scss_classes | scss_stems,
             usage_only=js_dom_attrs,
             styles_are_local=bool(css_files) or bool(tailwind_build_classes),
@@ -608,7 +616,16 @@ def run_scan(
             and any(edge.from_id == symbol.id and edge.to_id == symbol.id
                     and edge.status is Status.UNRESOLVED for edge in dom_edges)
         }
-        region_symbols, spans = find_dead_regions(js_evidence_files, missing)
+        # Which files reach for each element, so a guard on something TWO modules want
+        # is read as conditional rather than missing. `#lostStreakBtn` - a payment-adjacent
+        # CTA rendered only for players with a buyback opportunity - has exactly the
+        # evidence of a dead element, and two readers.
+        element_readers: dict[str, set[str]] = {}
+        for selector in dom_selectors:
+            if selector.kind == "dom_selector" and selector.label and selector.file:
+                element_readers.setdefault(selector.label, set()).add(selector.file)
+        region_symbols, spans = find_dead_regions(js_evidence_files, missing,
+                                                  readers=element_readers)
         symbols += region_symbols
         # ...and everything inside a region now points AT the region instead of being
         # raised on its own. A reference made by code that does not execute is neither

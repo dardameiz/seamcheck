@@ -17,6 +17,53 @@ Coverage and precision have **different denominators** and neither is meaningful
 backend that answered `uncertain` everywhere would score 100% precision and be useless.
 `uncertain` is not counted as a claim in precision, because it is not a claim.
 
+## Unreleased
+
+From the 0.10.0 report: all 869 findings on two surfaces of the reference project
+re-adjudicated against this release, every REAL verified against the running page before
+anything was touched. The new `dead_region` lens deleted 161 lines that four hand passes
+had walked past - and flagged one thing that must never be deleted, which is the first
+fix below.
+
+- **Fixed** — **a guard element more than one module reaches for is CONDITIONAL, not
+  missing.** `#avatarGrid` is read by one cluster in one file: the region under it was
+  dead, and 161 lines went, including a `window` resize listener every arena page was
+  registering for code that cannot run. `#lostStreakBtn` had **identical evidence** -
+  absent from every template, absent at runtime - and is the production streak-save CTA,
+  rendered only when a player has a lost-streak buyback opportunity, read by a second
+  module and asserted by the regression suite. A conditionally rendered element and a
+  nonexistent one are indistinguishable to guard reachability, and to a probe run on an
+  account in the wrong state. What separates them is mechanical: **who else reaches for
+  it.** A region whose guard element another module also reads is now `uncertain`, says
+  "check first", and does not fold the findings inside it away. Getting this wrong deletes
+  a payment-adjacent feature no ordinary test run would catch.
+- **Fixed** — **an element the markup itself wires up is in use.** `<label for="ann-title">`
+  on line 72 and `<input id="ann-title">` on line 73: the browser resolves that with no
+  script and no rule, and the input was reported because no stylesheet names it. Nobody
+  styles a form field by id. `for`, `aria-controls`, `aria-labelledby`, `headers`, `list`,
+  `form` and `popovertarget` were already read as evidence; the CSS branch never asked.
+  246 findings of this shape across two surfaces.
+- **Fixed** — **somebody else's stylesheet is an oracle, not a finding.** Django's own
+  admin CSS was carried as symbols, so 180 rules in a package directory - which nobody
+  reading the report can edit - were listed. It still answers "is this class defined
+  anywhere"; it is no longer reported.
+- **Fixed** — **a model knows which file it is in.** 65 model symbols carried no path at
+  all: not openable, not attributable to a page, not distinguishable from another of the
+  same name. Django knows; nothing was asking.
+- **Fixed** — **the `unverified` JSON lists one row per place**, like the console and the
+  map already do.
+- **Fixed** — **copying a command is not marking anything, and the panel said otherwise.**
+  Tapping a reason in "This is wrong" replaced that option's DESCRIPTION with "copied",
+  permanently and for every option tapped - so five taps left five identical green rows
+  with their meanings gone, nothing recorded anywhere, and no way back. It reads exactly
+  like five marks that cannot be undone. The description comes back after a few seconds,
+  only one option shows the copied state, the button that opens the panel closes it, and
+  the panel says plainly that nothing is marked until the command is run.
+
+  Measured on the reference project: claims **3,646 → 3,571**, non-connected
+  **7,230 → 6,975**, and `showLostStreakBuyBackButton` now reads *"22 lines, check
+  first"* instead of *"22 lines unreachable"*.
+
 ## 0.10.0 — 4 Sep 2026
 
 **Measured:** coverage **81%** across 47 projects and 147,712 symbols (Flask 92%, Django

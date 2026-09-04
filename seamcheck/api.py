@@ -501,6 +501,18 @@ def unverified(repo_root: str = ".", limit: int = 25, kind: str = "") -> dict:
     # spare, and the first is the one that breaks at runtime.
     claims.sort(key=lambda s: (s.status is not Status.UNRESOLVED, s.kind, s.label))
     remaining = len(claims)
+    # One row per PLACE, like every other list a person reads. A name read and written on
+    # one line is two symbols and one thing to look at; 8.7% of one project's rows were
+    # repeats, and a count nobody trusts is a report nobody reads. The graph keeps both.
+    seen: set[tuple[str, str, str, int | None]] = set()
+    listed = []
+    for symbol in claims:
+        where = (symbol.kind, symbol.label, symbol.file, symbol.line)
+        if where in seen:
+            continue
+        seen.add(where)
+        listed.append(symbol)
+
     return {
         "total_unjudged": remaining,
         "by_kind": {
@@ -517,7 +529,7 @@ def unverified(repo_root: str = ".", limit: int = 25, kind: str = "") -> dict:
                 "owner": symbol.owner,
                 "note": symbol.note,
             }
-            for symbol in claims[:limit]
+            for symbol in listed[:limit]
         ],
     }
 

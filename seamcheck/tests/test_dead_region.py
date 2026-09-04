@@ -226,3 +226,50 @@ class DeadWriterTests(SimpleTestCase):
         out = demote_dead_writers([("z.js", 1, 2, "dead_region:z.js:1")], [finding],
                                   [self._write("level-name", "a.js", 3)])
         self.assertEqual(out, [finding])
+
+
+class ConditionalElementTests(SimpleTestCase):
+    """A guard element two modules reach for is conditional, not missing.
+
+    `#avatarGrid` is read by one cluster in one file: the region under it was dead, and
+    161 lines went. `#lostStreakBtn` had identical evidence - absent from every template,
+    absent at runtime - and is the production streak-save CTA, rendered only when a player
+    has a lost-streak buyback opportunity, read by a second module and asserted by the
+    regression suite. Deleting that is the worst false positive this tool can produce: no
+    ordinary test run would catch it.
+    """
+
+    def _js(self, name: str) -> str:
+        return _js(f"""
+            function show() {{
+              const el = document.getElementById('{name}');
+              if (!el) return;
+              paint();
+              more();
+            }}
+        """)
+
+    def test_one_reader_is_a_dead_region(self):
+        path = self._js("avatarGrid")
+        symbols, spans = find_dead_regions([path], {"avatarGrid"},
+                                           readers={"avatarGrid": {path}})
+        self.assertEqual(len(symbols), 1)
+        self.assertEqual(symbols[0].status.value, "unresolved")
+        self.assertEqual(len(spans), 1, "its findings fold into the region")
+
+    def test_a_second_module_makes_it_conditional(self):
+        path = self._js("lostStreakBtn")
+        symbols, spans = find_dead_regions(
+            [path], {"lostStreakBtn"},
+            readers={"lostStreakBtn": {path, "js/hourly_streak_manager.js"}})
+        self.assertEqual(len(symbols), 1)
+        self.assertEqual(symbols[0].status.value, "uncertain")
+        self.assertIn("only in some state", symbols[0].note)
+        self.assertIn("check first", symbols[0].sub)
+        # ...and nothing inside it is folded away: the region may well run.
+        self.assertEqual(spans, [])
+
+    def test_without_readers_the_old_behaviour_stands(self):
+        path = self._js("avatarGrid")
+        symbols, _ = find_dead_regions([path], {"avatarGrid"})
+        self.assertEqual(symbols[0].status.value, "unresolved")

@@ -379,3 +379,43 @@ class WritersOfAMissingElementTests(SimpleTestCase):
         found = detect_multi_writers(
             [self._write("thing", "a.js"), self._write("thing", "b.js")])
         self.assertIn("More than one file writes", found[0].note)
+
+
+class WiredByMarkupTests(SimpleTestCase):
+    """`<label for="x">` and `<input id="x">` need no script and no rule.
+
+    Line 72 and line 73 of one admin template, and the input was reported because no
+    stylesheet names it. Nobody styles a form field by id; the browser resolves the pair
+    on its own. 246 findings of this shape across two surfaces of the reference project.
+    """
+
+    def _element(self, label, sub="id"):
+        return Symbol(id=f"dom_attr:{sub}:{label}:page.html", kind="dom_attr", label=label,
+                      sub=sub, file="page.html", line=73, status=Status.UNCERTAIN,
+                      snippet=f'{sub}="{label}"', chain=[label], note="")
+
+    def _markup_reference(self, label):
+        return Symbol(id=f"dom_selector:id:{label}:page.html", kind="dom_selector",
+                      label=label, sub="id:evidence", file="page.html", line=72,
+                      status=Status.UNCERTAIN, snippet=f'for="{label}"', chain=[label],
+                      note="Referenced from the markup itself")
+
+    def test_an_element_a_label_points_at_is_not_a_missing_rule(self):
+        edges = match_css_selectors([self._markup_reference("ann-title")],
+                                    [self._element("ann-title")], [], set())
+        mine = [e for e in edges if e.from_id.endswith("ann-title:page.html")]
+        self.assertEqual([e.status for e in mine], [Status.CONNECTED])
+        self.assertIn("markup itself", mine[0].note)
+
+    def test_an_id_nothing_points_at_is_still_reported(self):
+        edges = match_css_selectors([], [self._element("orphan-id")], [], set())
+        mine = [e for e in edges if e.from_id.endswith("orphan-id:page.html")]
+        self.assertEqual([e.status for e in mine], [Status.UNRESOLVED])
+
+    def test_a_class_is_not_exempted_by_an_id_reference(self):
+        # The exemption is about ids, which are what markup relationships name. A class
+        # with no rule is a different question and keeps its answer.
+        edges = match_css_selectors([self._markup_reference("thing")],
+                                    [self._element("thing", sub="class")], [], set())
+        mine = [e for e in edges if e.from_id.endswith("thing:page.html")]
+        self.assertEqual([e.status for e in mine], [Status.UNRESOLVED])

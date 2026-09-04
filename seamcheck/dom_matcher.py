@@ -439,6 +439,14 @@ def match_css_selectors(
     for symbol in sorted(css_selectors, key=lambda s: not s.sub.startswith("vendor:")):
         css_by_key[(symbol.sub.removeprefix("vendor:"), symbol.label)] = symbol
     used_keys: set[tuple[str, str]] = set()
+    # What the markup wires up on its own: `<label for>`, `aria-controls`, `headers`,
+    # `list`, `form`, `popovertarget`. The template scanner records each as evidence; this
+    # is the one place that has to know an element can be in use without any code at all.
+    wired_by_markup = {
+        (_base_sub(selector), selector.label)
+        for selector in dom_selectors
+        if selector.sub.endswith(":evidence") and _base_sub(selector) == "id"
+    }
 
     edges: list[Edge] = []
     # Elements JavaScript creates answer one of this function's two questions and not the
@@ -480,6 +488,17 @@ def match_css_selectors(
             # this loop reaches the same symbols, so the exemption has to exist twice or
             # it does not exist at all - it silently produced 58 findings on healthchecks.
             continue
+        elif (_base_sub(symbol), symbol.label) in wired_by_markup:
+            # Reached by the markup itself: a label's `for`, an `aria-controls`, a
+            # `headers` on a cell. The browser resolves those without a line of script and
+            # without a rule, so "no stylesheet defines this" is true and useless - and on
+            # a form-heavy admin page it is most of the page.
+            edges.append(Edge(
+                from_id=symbol.id, to_id=symbol.id, status=Status.CONNECTED,
+                note=("Reached from the markup itself - a label, an ARIA relationship or a "
+                      "form association. The browser wires that up with no script and no "
+                      "rule, so a missing stylesheet entry says nothing about it."),
+            ))
         else:
             from_cdn = _from_a_cdn(symbol.label, vendor_prefixes)
             block = _bem_block(symbol.label, css_by_key)

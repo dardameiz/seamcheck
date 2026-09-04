@@ -21,6 +21,7 @@ def parse_graph_models_json(data: dict) -> list[Symbol]:
     The app label comes from the graph, not from each model's own `app_name` - that field
     reads "pointless_models" and is not a real app label.
     """
+    where = _model_files()
     symbols: list[Symbol] = []
     for graph in data.get("graphs", []):
         app_label = graph["app_name"]
@@ -32,7 +33,7 @@ def parse_graph_models_json(data: dict) -> list[Symbol]:
                     kind="model",
                     label=model_name,
                     sub=app_label,
-                    file="",
+                    file=where.get(model_name, ""),
                     line=None,
                     status=Status.UNCERTAIN,
                     snippet=f"class {model_name}(models.Model): ...",
@@ -41,6 +42,31 @@ def parse_graph_models_json(data: dict) -> list[Symbol]:
                 )
             )
     return symbols
+
+
+def _model_files() -> dict[str, str]:
+    """model name -> the file it is declared in, from Django's own registry.
+
+    A symbol with no file cannot be opened, cannot be attributed to a page, and cannot be
+    told apart from another of the same name: 65 of them on the reference project, every
+    one a row a reader can do nothing with. Django knows where each model lives; nothing
+    was asking.
+    """
+    try:
+        import inspect
+        import os
+
+        from django.apps import apps
+    except Exception:  # noqa: BLE001 - a file is a nicety, never a reason to fail a scan
+        return {}
+    found: dict[str, str] = {}
+    for model in apps.get_models():
+        try:
+            path = inspect.getfile(model)
+        except (TypeError, OSError):
+            continue
+        found.setdefault(model.__name__, os.path.abspath(path))
+    return found
 
 
 def extract_django_models(app_labels: list[str]) -> list[Symbol]:

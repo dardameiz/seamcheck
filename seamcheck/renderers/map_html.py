@@ -3765,7 +3765,9 @@ function show(id) {
     </div>
     ${markLine(id)}
     <div class="whybox" id="whybox" hidden>
-      <div class="lbl">Why is it wrong? One tap copies the command that records it.</div>
+      <div class="lbl">Why is it wrong? One tap copies the command that records it.
+        <b>Nothing is marked until you run it</b> - copying changes nothing here, so
+        there is nothing to undo.</div>
       ${Object.entries(WHY).map(([key, help]) =>
         `<button type="button" class="whyopt" data-why="${esc(key)}"
                  data-id="${esc(id)}"><b>${esc(key)}</b><span>${esc(help)}</span></button>`
@@ -3792,22 +3794,54 @@ function show(id) {
   // before running it - which is the same contract as the pre-filled issue link.
   const undoBtn = document.getElementById("undo");
   if (undoBtn) {
+    const undoLabel = undoBtn.textContent;
     undoBtn.onclick = () => {
       navigator.clipboard?.writeText(`seamcheck triage '${undoBtn.dataset.id}' --undo`);
       undoBtn.classList.add("copied");
-      undoBtn.textContent = "copied - run it in the project";
+      undoBtn.textContent = "copied - paste it in the project";
+      clearTimeout(undoBtn._revert);
+      undoBtn._revert = setTimeout(() => {
+        undoBtn.classList.remove("copied");
+        undoBtn.textContent = undoLabel;
+      }, 6000);
     };
   }
   const wrongBtn = document.getElementById("wrong");
   if (wrongBtn) {
     const box = document.getElementById("whybox");
-    wrongBtn.onclick = () => { box.hidden = !box.hidden; };
+    const label = wrongBtn.textContent;
+    wrongBtn.onclick = () => {
+      box.hidden = !box.hidden;
+      // A panel with no way out is a trap, and this one covers the card. The button that
+      // opened it closes it, and says so while it is open.
+      wrongBtn.textContent = box.hidden ? label : "Never mind";
+      if (box.hidden) {
+        box.querySelectorAll(".whyopt.copied").forEach(other => {
+          other.classList.remove("copied");
+          other.querySelector("span").textContent = other.dataset.said || "";
+        });
+      }
+    };
     box.querySelectorAll(".whyopt").forEach(b => {
+      // The description is the only thing that tells a reader what the reason MEANS, and
+      // overwriting it spent it for good. "Copied" is a state, not a new label: it shows
+      // on one option at a time and gives the sentence back after a few seconds.
+      const said = b.querySelector("span").textContent;
       b.onclick = () => {
         const cmd = `seamcheck triage '${b.dataset.id}' --wrong ${b.dataset.why}`;
         navigator.clipboard?.writeText(cmd);
+        box.querySelectorAll(".whyopt.copied").forEach(other => {
+          other.classList.remove("copied");
+          other.querySelector("span").textContent = other.dataset.said || "";
+        });
+        b.dataset.said = said;
         b.classList.add("copied");
-        b.querySelector("span").textContent = "copied - run it in the project";
+        b.querySelector("span").textContent = "copied - paste it in the project to record it";
+        clearTimeout(b._revert);
+        b._revert = setTimeout(() => {
+          b.classList.remove("copied");
+          b.querySelector("span").textContent = said;
+        }, 6000);
       };
     });
   }

@@ -150,8 +150,20 @@ _NOTE = (
 )
 
 
+_CONDITIONAL_NOTE = (
+    "The guard returns on {missing}, which no template renders - but {others} other "
+    "module(s) reach for the same element, so it is more likely rendered only in some "
+    "state than never rendered at all. Check the state that draws it before touching "
+    "anything here: a feature that appears for one player in a hundred looks exactly "
+    "like a dead one from the outside."
+)
+
+
 def find_dead_regions(
-    js_files: list[str], missing: set[str], line_offsets: dict[str, int] | None = None
+    js_files: list[str],
+    missing: set[str],
+    line_offsets: dict[str, int] | None = None,
+    readers: dict[str, set[str]] | None = None,
 ) -> tuple[list[Symbol], list[tuple[str, int, int, str]]]:
     """One finding per guard that always fires, instead of one per symbol below it.
 
@@ -162,6 +174,11 @@ def find_dead_regions(
 
     `missing` is the set of element names the scan has already decided nothing renders -
     so this runs after matching, and can never disagree with it.
+
+    `readers` maps each element name to the files that reach for it. A guard element only
+    one file touches is a dead branch; one that two unrelated modules touch is a
+    conditional element, and the region under it is reported as something to CHECK rather
+    than something to delete.
     """
     symbols: list[Symbol] = []
     spans: list[tuple[str, int, int, str]] = []
@@ -212,18 +229,35 @@ def find_dead_regions(
                     break
                 seen.add(fingerprint)
                 name = _function_name(function, holder) or os.path.basename(path)
+                # Who else reaches for the same element. Its own file does not count -
+                # the whole region is in it.
+                elsewhere = {
+                    where
+                    for element in gone
+                    for where in (readers or {}).get(element, ())
+                    if os.path.realpath(where) != os.path.realpath(path)
+                }
                 which = "it looks up an element" if len(gone) == 1 else \
                         "it looks up elements"
                 symbols.append(Symbol(
                     id=symbol_id, kind="dead_region", label=name,
-                    sub=f"{dead} lines", file=path, line=guard_line,
-                    status=Status.UNRESOLVED,
+                    sub=(f"{dead} lines, check first" if elsewhere else f"{dead} lines"),
+                    file=path, line=guard_line,
+                    # Uncertain, not a claim: the evidence is the same either way, and the
+                    # difference between the two readings is a feature nobody can see from
+                    # here. Said out loud rather than guessed at.
+                    status=Status.UNCERTAIN if elsewhere else Status.UNRESOLVED,
                     snippet=f"if (!{gone[0]}...) return;",
                     chain=[os.path.basename(path), name], owner=name,
-                    note=_NOTE.format(line=guard_line, which=which,
-                                      missing=", ".join(sorted(set(gone))), lines=dead),
+                    note=(_CONDITIONAL_NOTE.format(missing=", ".join(sorted(set(gone))),
+                                                   others=len(elsewhere))
+                          if elsewhere
+                          else _NOTE.format(line=guard_line, which=which,
+                                            missing=", ".join(sorted(set(gone))),
+                                            lines=dead)),
                 ))
-                spans.append((path, first, last, symbols[-1].id))
+                if not elsewhere:
+                    spans.append((path, first, last, symbols[-1].id))
                 break   # the first always-firing guard kills everything after it
     return symbols, spans
 
