@@ -19,6 +19,44 @@ backend that answered `uncertain` everywhere would score 100% precision and be u
 
 ## Unreleased
 
+### A table is asked the same question a key is
+
+`connected` on a table meant "some queryset mentions this", which put **59 of the
+reference project's 61 tables in one bucket** and asked nobody to look at anything. Redis
+has paired writes against reads from the start. A table is the same question.
+
+- **Added** — **reads paired against writes per table**, and the verdicts that follow:
+  written and never read, read and never written, or wired. The row now reads
+  `6 write / 0 read` the way a Redis key does.
+- **Added** — three things that had to be readable first, or the pairing would have
+  invented findings out of its own blind spots:
+  - **a reverse accessor is a read of the table it returns.** `self.tier_set.order_by(…)`
+    is how the reference project reads its bonus tiers; reading only `Model.objects` saw
+    those tables written by a seeding command and read by nobody.
+  - **`select_related("config")` is a read of the config table** — the join is the whole
+    point of it, and it used to be skipped entirely.
+  - **an admin-registered table is written by a person**, at runtime, through a form no
+    scan will ever see. Reading such a table and never writing it in code is how every
+    config table in every Django project works, and is not a finding.
+- **Fixed** — a reverse name two models share answers for neither. saleor declares
+  `related_name="lines"` on OrderLine, FulfillmentLine and more; keeping the first seen
+  made `fulfillment.lines.create(…)` a write to the ORDER line table and checked its
+  keywords against that model's fields — **609 invented missing columns on that project
+  alone.** Same rule as a class name two apps share.
+- **Fixed** — a chain stops at a call whose return type is not in the expression.
+  `request.profile.checks_from_all_projects().only("code")` returns a queryset of another
+  model, and unwrapping calls blindly walked past it to `profile` and checked `code`
+  against the wrong table's fields.
+- **Fixed** — one table row per PLACE. `Model.objects.filter(…).first()` is two queryset
+  methods, one line and one query, and counting both made every chained read read as two.
+
+**Across the corpus: 1,817 tables, 176,612 queries, one claim** — a field renamed by a
+migration that a fixture command still passes. On the reference project the eight tables
+the pairing first flagged came down to **one**, and it is real: `SeasonConfig` is written
+by its own `save()` and read by nothing, because the readers were migrated to `Season` —
+the code says so itself, in a comment reading *"replaces SeasonConfig.get_all_divisions_config"*.
+
+
 ### Reading the wires
 
 Reported from use: *"on the full map it is not visible which the wire is connecting"*, and

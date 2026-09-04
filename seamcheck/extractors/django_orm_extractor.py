@@ -44,6 +44,11 @@ _STRING_METHODS = frozenset({
 _CONTROL_KWARGS = frozenset({"defaults", "using", "output_field", "through_defaults"})
 # Everything that says "this queryset ran": the table is touched even when no column is
 # named, which is most reads.
+# What puts a row in, or takes one out. Everything else on a queryset reads.
+_TABLE_WRITES = frozenset({
+    "create", "get_or_create", "update_or_create", "update", "delete",
+    "bulk_create", "bulk_update", "select_for_update",
+})
 _QUERYSET_METHODS = _KWARG_METHODS | _DEFINING_METHODS | _STRING_METHODS | frozenset({
     "all", "first", "last", "count", "exists", "delete", "bulk_create", "bulk_update",
     "iterator", "in_bulk", "latest", "earliest", "none", "select_for_update",
@@ -72,7 +77,7 @@ class _Model:
 
     __slots__ = ("table", "columns", "names", "translated", "file", "line", "managers",
                  "managed", "bases", "proxy", "abstract", "own_table", "_settled",
-                 "declares_fields", "fully_read", "reverse")
+                 "declares_fields", "fully_read", "reverse", "relations")
 
     def __init__(self, table: str, file: str, line: int) -> None:
         self.table = table
@@ -99,6 +104,9 @@ class _Model:
         # (target model name, the name that target may be queried BY). The other end of
         # a relation is a legal name on a model that never declares it.
         self.reverse: list[tuple[str, str]] = []
+        # field name -> the model it points at, so `select_related("config")` can be
+        # read as what it is: a read of the config table.
+        self.relations: dict[str, str] = {}
 
     def column_for(self, name: str) -> tuple[bool, str]:
         """(is this name legal, which column it means)."""
@@ -266,6 +274,8 @@ def _models_in(tree: ast.AST, path: str, root: str) -> dict[str, _Model]:
                 model.names[name] = ""
                 target = _target_of(value)
                 if target:
+                    model.relations[name] = target
+                if target:
                     model.reverse.append(
                         (target, _keyword(value, "related_name") or node.name.lower()))
                 continue
@@ -278,6 +288,8 @@ def _models_in(tree: ast.AST, path: str, root: str) -> dict[str, _Model]:
             model.declares_fields = True
             if _is_relation(kind) or "ManyToMany" in kind:
                 target = _target_of(value)
+                if target:
+                    model.relations[name] = target
                 if target:
                     # `related_name="action"` if given, else Django's default reverse
                     # query name, which is the source model lowercased.
@@ -454,6 +466,31 @@ def _model_bodies(tree: ast.AST) -> list[tuple[int, int, str]]:
     return sorted(spans, key=lambda s: s[1] - s[0])
 
 
+def _admin_registered(trees: list[tuple[str, ast.AST]]) -> set[str]:
+    """Models registered in the Django admin.
+
+    An admin-registered table is written by a PERSON, at runtime, through a form this
+    scan will never see. Reading such a table and never writing it in code is not a
+    finding - it is how every config table in every Django project works.
+    """
+    found: set[str] = set()
+    for _rel, tree in trees:
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "register" and node.args):
+                name = getattr(node.args[0], "id", "")
+                if name:
+                    found.add(name)
+            # `@admin.register(Thing)` on a ModelAdmin class.
+            if isinstance(node, ast.ClassDef):
+                for decorator in node.decorator_list:
+                    if (isinstance(decorator, ast.Call)
+                            and getattr(decorator.func, "attr", "") == "register"):
+                        found |= {getattr(a, "id", "") for a in decorator.args
+                                  if getattr(a, "id", "")}
+    return found
+
+
 def _translated_fields(trees: list[tuple[str, ast.AST]]) -> dict[str, set[str]]:
     """model name -> its django-modeltranslation fields.
 
@@ -509,8 +546,16 @@ def _receiver(node: ast.Attribute) -> tuple[str, str]:
     # Unwrap a chain - `Season.objects.filter(...).exclude(...)` - and STOP when the next
     # step is not one: `owner = owner` on a plain `foo().filter()` is an infinite loop,
     # which is a scan that never ends rather than a wrong answer.
+    #
+    # And stop at a call this cannot name. `request.profile.checks_from_all_projects()`
+    # returns a queryset of ANOTHER model; walking past it landed on `profile` and
+    # checked the columns of the wrong table. A queryset method returns the same model
+    # and is safe to walk through; anything else is a method whose return type is not
+    # in this expression.
     while isinstance(owner, ast.Call):
         if not isinstance(owner.func, ast.Attribute):
+            return "", ""
+        if owner.func.attr not in _QUERYSET_METHODS:
             return "", ""
         owner = owner.func.value
     if isinstance(owner, ast.Attribute) and isinstance(owner.value, ast.Name):
@@ -582,6 +627,28 @@ def extract_django_orm(root: str) -> tuple[list[Symbol], list[Edge]]:
     for _rel, tree in files:
         aliases |= _annotation_names(tree)
 
+    # `config.tier_set.order_by(...)` returns TIER rows, so the read belongs to the table
+    # that DECLARED the relation. This is how the reference project reads its bonus
+    # tiers, and reading only `Model.objects` saw those tables written by a seeding
+    # command and read by nobody.
+    # ...and only when ONE model answers to the name. saleor declares
+    # `related_name="lines"` on OrderLine, FulfillmentLine and more; keeping the first
+    # seen made `fulfillment.lines.create(...)` a write to the order line table and
+    # checked its keywords against that model's fields - 609 invented missing columns on
+    # that project alone. Same rule as a class name two apps share: it answers for
+    # neither.
+    accessors: dict[str, _Model] = {}
+    ambiguous_accessors: set[str] = set()
+    for _name, model in models:
+        for _target_name, query_name in model.reverse:
+            if query_name in accessors and accessors[query_name] is not model:
+                ambiguous_accessors.add(query_name)
+            accessors[query_name] = model
+    for query_name in ambiguous_accessors:
+        accessors.pop(query_name, None)
+
+    admin_models = _admin_registered(files)
+
     translated = _translated_fields(files)
     for name, model in models:
         if name in translated:
@@ -591,6 +658,10 @@ def extract_django_orm(root: str) -> tuple[list[Symbol], list[Edge]]:
     edges: list[Edge] = []
     used_tables: set[str] = set()
     used_columns: set[str] = set()
+    table_reads: dict[str, int] = {}
+    table_writes: dict[str, int] = {}
+    # (table, file, line) -> (is a write, snippet, owner)
+    touches: dict[tuple[str, str, int], tuple[bool, str, str]] = {}
 
     for rel, tree in files:
         owners = owners_of(tree)
@@ -611,26 +682,39 @@ def extract_django_orm(root: str) -> tuple[list[Symbol], list[Edge]]:
                     (name for start, end, name in bodies
                      if start <= node.lineno <= end and name in by_file.get(here, {})), "")
             model = _pick(model_name, here, by_file, by_name) if model_name else None
-            if not model or manager not in model.managers:
+            # A reverse accessor names the table by the relation rather than by the class:
+            # whatever `config` is, `config.tier_set` is Tier.
+            through_relation = manager in accessors and (
+                model is None or manager not in model.managers)
+            if through_relation:
+                model = accessors[manager]
+                model_name = model.table
+            elif not model or manager not in model.managers:
                 continue
             line = node.lineno
             owner = owners.get(line, "")
             used_tables.add(model.table)
-            use_id = f"db_table_use:{model.table}:{rel}:{line}"
-            if not any(s.id == use_id for s in symbols[-4:]):
-                symbols.append(Symbol(
-                    id=use_id, kind="db_table_use", label=model.table,
-                    sub="reads a table" if method not in ("create", "update", "delete",
-                                                          "bulk_create", "bulk_update")
-                    else "writes a table",
-                    file=rel, line=line, status=Status.CONNECTED,
-                    snippet=f"{model_name}.{manager}.{method}(...)",
-                    chain=[model.table], owner=owner, note="",
-                ))
-                edges.append(Edge(use_id, f"db_table:{model.table}", Status.CONNECTED))
+            writing = method in _TABLE_WRITES
+            # One row per table per PLACE. `Model.objects.filter(...).first()` is two
+            # queryset methods on one line and one query, and counting both made every
+            # chained read read as two. A write outranks a read: if the line writes the
+            # table at all, that is what the line does.
+            at = (model.table, rel, line)
+            standing = touches.get(at)
+            if standing is None or (writing and not standing[0]):
+                touches[at] = (writing, f"{model_name}.{manager}.{method}(...)", owner)
 
-            # `select_related("user")` names a relation, not a column of this table.
+            # `select_related("user")` names a relation, not a column of this table -
+            # it is a read of the table at the OTHER end, which is the whole point of it.
             if method in ("select_related", "prefetch_related"):
+                for argument in node.args:
+                    named = _string(argument).partition("__")[0]
+                    target = _pick(model.relations.get(named, ""), here, by_file, by_name)
+                    if target is None:
+                        continue
+                    used_tables.add(target.table)
+                    touches.setdefault((target.table, rel, line),
+                                       (False, f'{method}("{named}")', owner))
                 continue
             named: list[str] = []
             if method in _KWARG_METHODS:
@@ -685,27 +769,64 @@ def extract_django_orm(root: str) -> tuple[list[Symbol], list[Edge]]:
 
     seen_tables: set[str] = set()
     # Proxies last, so the table is drawn under the model that actually declares it.
+    # Every table touch, one row per PLACE, now that the whole project is walked.
+    for (table, rel, line), (writing, snippet, owner) in sorted(touches.items()):
+        counter = table_writes if writing else table_reads
+        counter[table] = counter.get(table, 0) + 1
+        use_id = f"db_table_use:{table}:{rel}:{line}"
+        symbols.append(Symbol(
+            id=use_id, kind="db_table_use", label=table,
+            sub="writes a table" if writing else "reads a table",
+            file=rel, line=line, status=Status.CONNECTED, snippet=snippet,
+            chain=[table], owner=owner, note="",
+        ))
+        edges.append(Edge(use_id, f"db_table:{table}", Status.CONNECTED))
+
     for model_name, model in sorted(models, key=lambda kv: (kv[1].table, kv[1].proxy)):
         if model.table in seen_tables:
             # A proxy is a second name for a table that is already on the map.
             continue
         seen_tables.add(model.table)
-        touched = model.table in used_tables
-        symbols.append(Symbol(
-            id=f"db_table:{model.table}", kind="db_table", label=model.table, sub="table",
-            file=os.path.relpath(model.file, root), line=model.line,
-            status=Status.CONNECTED if touched else
-            # `Meta.managed = False` is a model over a table Django does not own - or, on
-            # the reference project, over no table at all: an admin page whose data lives
-            # in Redis. "Nothing queries this table" is not a finding about that.
-            (Status.UNUSED if model.managed else Status.UNCERTAIN),
-            snippet=f"class {model_name}(models.Model): ...", chain=[model.table],
-            note="" if touched else (
+        # Reads paired against writes, the same question Redis has always been asked.
+        # `connected` used to mean "some queryset mentions this table", which put 59 of
+        # the reference project's 61 tables in one bucket and asked nobody to look at
+        # anything. A table only ever written is filled for nobody; a table only ever
+        # read returns nothing, unless a person fills it through the admin.
+        reads = table_reads.get(model.table, 0)
+        writes = table_writes.get(model.table, 0)
+        in_admin = model_name in admin_models
+        counted = f"{writes} write / {reads} read"
+        if not model.managed:
+            status, note, sub = Status.UNCERTAIN, (
                 "`Meta.managed = False`: Django neither creates nor owns this table, so "
-                "nothing here can say whether it is used." if not model.managed else (
+                "nothing here can say whether it is used."), "table"
+        elif reads and writes:
+            status, note, sub = Status.CONNECTED, "", counted
+        elif in_admin and reads:
+            status, note, sub = Status.CONNECTED, (
+                "Read here and written only through the Django admin, where a person "
+                "fills it in a form this cannot see. That is how a config table works."
+            ), counted + " · admin"
+        elif reads:
+            status, note, sub = Status.UNRESOLVED, (
+                "Read here and written nowhere - no queryset in this repository puts a "
+                "row in this table, and it is not registered in the admin either, so "
+                "every read of it can only ever come back empty."), counted
+        elif writes:
+            status, note, sub = Status.UNUSED, (
+                "Written here and read nowhere in this repository. Rows go in and "
+                "nothing takes them out again."), counted
+        else:
+            status, note, sub = Status.UNUSED, (
                 "No queryset in this repository reads or writes this table. A model "
                 "reached only through the admin, a migration or raw SQL will look like "
-                "this too.")),
+                "this too."), counted
+        symbols.append(Symbol(
+            id=f"db_table:{model.table}", kind="db_table", label=model.table, sub=sub,
+            file=os.path.relpath(model.file, root), line=model.line,
+            status=status,
+            snippet=f"class {model_name}(models.Model): ...", chain=[model.table],
+            note=note,
         ))
         for column, (cfile, cline) in model.columns.items():
             full = f"{model.table}.{column}"

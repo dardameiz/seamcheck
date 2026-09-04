@@ -421,8 +421,10 @@ class OwnClassTests(SimpleTestCase):
                 def active(cls):
                     return cls.objects.filter(name="x").first()
         """}))
-        tables = {s.label: s.status.value for s in symbols if s.kind == "db_table"}
-        self.assertEqual(tables["app_promo"], "connected")
+        # The table is READ here and written nowhere, which is its own finding now -
+        # what this test is about is that `cls.objects` was resolved at all.
+        uses = [s for s in symbols if s.kind == "db_table_use" and s.label == "app_promo"]
+        self.assertEqual([s.sub for s in uses], ["reads a table"])
         rows = {s.label: s.status.value for s in symbols if s.kind == "db_column_use"}
         self.assertEqual(rows.get("app_promo.name"), "connected")
 
@@ -926,3 +928,206 @@ class LibraryBasesTests(SimpleTestCase):
         rows = {s.label: s.status.value for s in symbols if s.kind == "db_column_use"}
         self.assertEqual(rows.get("app_logentry.organizer_link_id"), "connected")
         self.assertNotIn("app_logentry.organizer_id", rows)
+
+
+class TablePairingTests(SimpleTestCase):
+    """A table read and written is wired. One only written is not, and should say so.
+
+    `connected` meant "some queryset mentions this table", which put 59 of the reference
+    project's 61 tables in the same bucket and asked nobody to look at anything. Redis has
+    paired writes against reads from the start; a table is the same question, and the
+    answer is the same shape: **written and never read** is a table filled for nobody.
+    """
+
+    SHOP = """
+        from django.db import models
+
+        class Tier(models.Model):
+            config = models.ForeignKey("app.Config", on_delete=models.CASCADE,
+                                       related_name="tier_set")
+            bonus = models.IntegerField()
+
+        class Config(models.Model):
+            name = models.CharField(max_length=5)
+
+        class Ledger(models.Model):
+            amount = models.IntegerField()
+
+        class Archive(models.Model):
+            note = models.CharField(max_length=5)
+    """
+
+    def _tables(self, files):
+        symbols, _ = extract_django_orm(_project(files))
+        return {s.label: (s.status.value, s.sub) for s in symbols if s.kind == "db_table"}
+
+    def test_a_table_written_and_never_read_says_so(self):
+        rows = self._tables({
+            "app/models.py": self.SHOP,
+            "app/seed.py": """
+                from app.models import Ledger
+
+                def seed():
+                    Ledger.objects.create(amount=1)
+                    Ledger.objects.filter(amount=0).delete()
+            """,
+        })
+        self.assertEqual(rows["app_ledger"][0], "unused")
+        self.assertIn("write", rows["app_ledger"][1])
+
+    def test_a_table_read_and_written_is_connected(self):
+        rows = self._tables({
+            "app/models.py": self.SHOP,
+            "app/views.py": """
+                from app.models import Ledger
+
+                def show():
+                    Ledger.objects.create(amount=1)
+                    return Ledger.objects.filter(amount=1).first()
+            """,
+        })
+        self.assertEqual(rows["app_ledger"][0], "connected")
+        self.assertEqual(rows["app_ledger"][1], "1 write / 1 read")
+
+    def test_a_reverse_accessor_is_a_read_of_the_table_it_returns(self):
+        # `self.tier_set.order_by(...)` on the config returns TIER rows. This is how the
+        # reference project reads its bonus tiers, and reading only `Model.objects` saw
+        # those tables written by a seeding command and read by nobody.
+        rows = self._tables({
+            "app/models.py": """
+                from django.db import models
+
+                class Tier(models.Model):
+                    config = models.ForeignKey("app.Config", on_delete=models.CASCADE,
+                                               related_name="tier_set")
+                    bonus = models.IntegerField()
+
+                class Config(models.Model):
+                    name = models.CharField(max_length=5)
+
+                    def tiers(self):
+                        return self.tier_set.order_by('bonus').values_list('bonus')
+            """,
+            "app/seed.py": """
+                from app.models import Tier
+
+                def seed(config):
+                    Tier.objects.bulk_create([Tier(config=config, bonus=1)])
+            """,
+        })
+        self.assertEqual(rows["app_tier"], ("connected", "1 write / 1 read"))
+
+    def test_select_related_reads_the_table_it_names(self):
+        # A join IS a read of the table at the other end, which is the whole point of
+        # `select_related`. It used to be skipped entirely.
+        symbols, _ = extract_django_orm(_project({
+            "app/models.py": self.SHOP,
+            "app/views.py": """
+                from app.models import Tier
+
+                def rows():
+                    return Tier.objects.select_related("config").all()
+            """,
+        }))
+        joined = [s for s in symbols
+                  if s.kind == "db_table_use" and s.label == "app_config"]
+        self.assertEqual([(s.sub, s.snippet) for s in joined],
+                         [("reads a table", 'select_related("config")')])
+
+    def test_a_table_only_the_admin_writes_is_not_called_unwritten(self):
+        # An admin-registered model is written by a person through the admin, at runtime.
+        # Reading it and never writing it in code is exactly how config tables work.
+        rows = self._tables({
+            "app/models.py": self.SHOP,
+            "app/admin.py": """
+                from django.contrib import admin
+
+                from .models import Config
+
+                admin_site.register(Config, ConfigAdmin)
+            """,
+            "app/views.py": """
+                from app.models import Config
+
+                def current():
+                    return Config.objects.filter(name="x").first()
+            """,
+        })
+        self.assertEqual(rows["app_config"][0], "connected")
+        self.assertIn("admin", (rows["app_config"][1] or "").lower())
+
+    def test_a_table_read_and_written_by_nothing_and_nobody_is_the_claim(self):
+        rows = self._tables({"app/models.py": self.SHOP})
+        self.assertEqual(rows["app_archive"][0], "unused")
+
+    def test_a_reverse_name_two_models_share_answers_for_neither(self):
+        # saleor declares `related_name="lines"` on OrderLine, FulfillmentLine and more.
+        # Keeping the first one seen made `fulfillment.lines.create(...)` a write to the
+        # ORDER line table, and checked its keywords against the wrong model's fields:
+        # 609 invented missing columns on that project alone.
+        symbols, _ = extract_django_orm(_project({
+            "app/models.py": """
+                from django.db import models
+
+                class Order(models.Model):
+                    ref = models.CharField(max_length=5)
+
+                class Fulfillment(models.Model):
+                    ref = models.CharField(max_length=5)
+
+                class OrderLine(models.Model):
+                    order = models.ForeignKey(Order, on_delete=models.CASCADE,
+                                              related_name="lines")
+                    quantity = models.IntegerField()
+
+                class FulfillmentLine(models.Model):
+                    fulfillment = models.ForeignKey(Fulfillment, on_delete=models.CASCADE,
+                                                    related_name="lines")
+                    stock = models.IntegerField()
+            """,
+            "app/views.py": """
+                def make(fulfillment, line):
+                    return fulfillment.lines.create(order_line=line, stock=1)
+            """,
+        }))
+        rows = {s.label: s.status.value for s in symbols if s.kind == "db_column_use"}
+        self.assertEqual([r for r, v in rows.items() if v == "unresolved"], [],
+                         "an ambiguous accessor must not claim anything")
+        self.assertEqual([s.label for s in symbols if s.kind == "db_table_use"], [],
+                         "nor attribute the write to whichever model was seen first")
+
+    def test_a_method_in_the_middle_of_a_chain_ends_the_walk(self):
+        # `request.profile.checks_from_all_projects().only("code")` - the method returns
+        # a queryset of a DIFFERENT model, and unwrapping calls blindly walked straight
+        # past it to `profile`, then checked `code` against the profile's fields.
+        symbols, _ = extract_django_orm(_project({
+            "app/models.py": """
+                from django.db import models
+
+                class Profile(models.Model):
+                    user = models.OneToOneField("auth.User", on_delete=models.CASCADE,
+                                                related_name="profile")
+
+                class Check(models.Model):
+                    code = models.CharField(max_length=8)
+            """,
+            "app/views.py": """
+                def uncloak(request):
+                    return request.profile.checks_from_all_projects().only("code")
+            """,
+        }))
+        rows = {s.label: s.status.value for s in symbols if s.kind == "db_column_use"}
+        self.assertEqual([r for r, v in rows.items() if v == "unresolved"], [])
+
+    def test_a_queryset_chain_still_walks(self):
+        symbols, _ = extract_django_orm(_project({
+            "app/models.py": MODELS,
+            "app/views.py": """
+                from app.models import Season
+
+                def go():
+                    return Season.objects.filter(is_active=True).exclude(name="x").only("name")
+            """,
+        }))
+        rows = {s.label: s.status.value for s in symbols if s.kind == "db_column_use"}
+        self.assertEqual(rows.get("pointless_season.name"), "connected")
