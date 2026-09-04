@@ -31,8 +31,10 @@ Two other things fall out of reading these calls, and both are real:
 from __future__ import annotations
 
 import ast
+import collections
 import os
 import re
+from dataclasses import replace
 
 from seamcheck.adapters.discovery import SKIP_DIRS
 from seamcheck.extractors.js_extractor import _walk, iter_parsed
@@ -56,7 +58,11 @@ _WRITES = frozenset({
     "unlink", "sadd", "srem", "zadd", "zrem", "zincrby", "lpush", "rpush",
     "append", "setbit", "publish",
 })
-_ALL = _READS | _WRITES
+# A Lua script: the keys it touches are named at the call, the commands it runs are not.
+# `evalsha(sha, 1, WS_CONNECTIONS_KEY)` is how the connection counter is incremented, and
+# reading only the plain calls reported that counter as a key nothing writes.
+_SCRIPTS = frozenset({"eval", "evalsha", "eval_ro", "evalsha_ro", "fcall", "fcall_ro"})
+_ALL = _READS | _WRITES | _SCRIPTS
 # Writes that REMOVE or merely touch, and so can never need an expiry.
 _NOT_STORES = frozenset({"delete", "del", "unlink", "expire", "pexpire", "publish",
                          "srem", "zrem", "lpop", "rpop"})
@@ -68,7 +74,10 @@ _INVALIDATIONS = frozenset({"delete", "del", "adelete", "delete_many", "adelete_
 
 # A receiver that says "this is Redis" rather than a dict. Without it, every `d.get(k)` in
 # a Python codebase becomes a Redis key and the finding list is noise.
-_RECEIVER = re.compile(r"redis|cache|kv|_r\b|^r$|client|conn|pool", re.I)
+# `ar` is the async client throughout the reference project - and `ar` is not `redis`,
+# `cache`, `client` or exactly `r`, so every async wrapper (`async def a_safe_rpush(ar,
+# key, *values)`) read as not-Redis and the whole async write path was invisible.
+_RECEIVER = re.compile(r"redis|cache|kv|_r\b|^a?r$|client|conn|pool", re.I)
 
 # Keys whose name says they are disposable. A `set()` on one of these with no expiry is
 # the leak this catches.
@@ -159,8 +168,13 @@ class _Hit:
 
 
 # ── Python ────────────────────────────────────────────────────────────────
-def _py_pattern(node) -> str | None:
-    """The key a Python expression names, with its interpolations left as holes."""
+def _py_pattern(node, known=None, owner: str = "", line: int = 0) -> str | None:
+    """The key a Python expression names, with its interpolations left as holes.
+
+    A hole that is itself a key keeps its shape: `base = f"challenges:schedule:django_{id}"`
+    and then `zscore(f"{base}:bonus_claimed")` is a key beginning
+    `challenges:schedule:django_`, not the pattern `*:bonus_claimed` that matches nothing.
+    """
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
     if isinstance(node, ast.JoinedStr):  # f-string
@@ -168,8 +182,11 @@ def _py_pattern(node) -> str | None:
         for piece in node.values:
             if isinstance(piece, ast.Constant) and isinstance(piece.value, str):
                 parts.append(piece.value)
-            else:
-                parts.append("{}")
+                continue
+            inner = getattr(piece, "value", None)
+            composed = (_key_named(known, owner, inner.id, line)
+                        if known is not None and isinstance(inner, ast.Name) else "")
+            parts.append(composed if composed else "{}")
         return "".join(parts)
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
         return _py_pattern(node.left)
@@ -229,6 +246,169 @@ def _pipeline_names(tree: ast.AST) -> dict[str, str]:
             client = source(node.context_expr)
             if client is not None and isinstance(node.optional_vars, ast.Name):
                 found[node.optional_vars.id] = client
+    return found
+
+
+_LUA_STRING = re.compile(r"""["']([A-Za-z0-9_:.\-{}*]{3,})["']""")
+
+
+def _lua_keys(tree: ast.AST) -> list[tuple[str, int]]:
+    """(key, line) for every key literal inside an embedded Lua script.
+
+    `local stats_key = "pps:stats:by_input"` sits in a Python string, and the HINCRBY
+    that uses it is Lua. Nothing outside the script writes the key, so the plain read
+    beside it read as a lookup nothing satisfies.
+    """
+    found: list[tuple[str, int]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+            continue
+        if "redis.call" not in node.value:
+            continue
+        for quoted in _LUA_STRING.findall(node.value):
+            if _looks_like_key(quoted):
+                found.append((quoted, node.lineno))
+    return found
+
+
+def _script_keys(node: ast.Call) -> list[ast.AST]:
+    """The KEYS a Lua call names: `evalsha(sha, 1, key)` or `evalsha(sha, keys=[key])`.
+
+    Only when the count is a literal - `evalsha(sha, n, *rest)` cannot say where the keys
+    stop and the script's arguments begin, and guessing turns plain arguments into keys.
+    """
+    for word in node.keywords:
+        if word.arg == "keys" and isinstance(word.value, (ast.List, ast.Tuple)):
+            return list(word.value.elts)
+    if len(node.args) >= 3 and isinstance(node.args[1], ast.Constant) \
+            and isinstance(node.args[1].value, int):
+        return node.args[2:2 + node.args[1].value]
+    return []
+
+
+def _key_variables(tree: ast.AST, owners: dict[int, str]) -> dict[tuple[str, str], str]:
+    """(enclosing def, variable) -> the key pattern assigned to it.
+
+    `cache_key = f"api:user_stats:{uid}"` and then `cache.set(cache_key, ...)` is the
+    house style for every cached endpoint on the reference project, and it made the
+    write invisible: 65 keys read "1 invalidate / 0 read" because the DELETE spells the
+    literal out and the write one line above does not.
+
+    Scoped to the function, and kept as a LIST: `err_key` is assigned in the 5xx branch
+    and again in the 4xx branch, each with its own write underneath, so a name means
+    whichever key was assigned nearest above the line that uses it. Dropping the name for
+    meaning two things left both error counters reported as read by nobody.
+    """
+    found: dict[tuple[str, str], list[tuple[int, str]]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets, value = [node.target], node.value
+        else:
+            continue
+        # No `_looks_like_key` here: `schedule_id = f"django_{obj.id}"` is not a key -
+        # no namespace, no colon - and it is what the key is built AROUND. Filtering it
+        # out left the hole as `*`, and one keyspace was read under two spellings.
+        pattern = _py_pattern(value)
+        if not pattern:
+            continue
+        for target in targets:
+            if not isinstance(target, ast.Name):
+                continue
+            found.setdefault((owners.get(node.lineno, ""), target.id), []).append(
+                (node.lineno, pattern))
+    for assignments in found.values():
+        assignments.sort()
+    return found
+
+
+def _key_named(key_names: dict, owner: str, name: str, line: int) -> str:
+    """The key a variable holds at `line`: the nearest assignment above it, in this
+    function first and then at module level."""
+    for where in ((owner, name), ("", name)):
+        above = [p for at, p in key_names.get(where, []) if at <= line]
+        if above:
+            return above[-1]
+    return ""
+
+
+def _client_identity(node: ast.AST) -> str:
+    """Which CONNECTION a factory call returns, or "" if it is not one.
+
+    The multi-client warning exists for a real bug - a write on db 0 and a delete on
+    db 6, where the stale value survives - and it compared what the file happened to
+    call the variable. On the reference project the commonest pair was `ar` and `r`:
+    the async and the sync client from the same factory, pointed at the same server,
+    on 21 keys. Async is not a different Redis; an explicit `db=` is.
+    """
+    if isinstance(node, ast.Await):
+        node = node.value
+    if not isinstance(node, ast.Call):
+        return ""
+    func = node.func
+    name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+    lowered = name.lower()
+    # The same test the receiver check uses, applied to the FACTORY instead of the
+    # variable - so a client is one because of what made it, not what it is called.
+    # `ar = get_async_redis_client()` matched nothing at all before this: `ar` is not
+    # `redis`, `cache`, `client` or `^r$`, so every write through it was invisible.
+    if not _RECEIVER.search(lowered):
+        return ""
+    for prefix, replacement in (("async_", ""), ("_async", ""), ("async", "")):
+        lowered = lowered.replace(prefix, replacement)
+    for word in node.keywords:
+        # `get_redis_client(db=6)` is a different store from `get_redis_client(db=0)`,
+        # and that difference is the whole point of the warning.
+        if word.arg == "db" and isinstance(word.value, ast.Constant):
+            return f"{lowered}#{word.value.value}"
+    return lowered
+
+
+def _script_names(tree: ast.AST) -> set[str]:
+    """Locals holding a Lua script: `cap = r.register_script(src)`.
+
+    redis-py hands back a callable, so the call that runs it is `cap(keys=[…])` and its
+    method name is whatever the variable is called. Without this the hero counter's
+    INCRBY - which is inside the script - was not a touch of the key at all.
+    """
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Call):
+            continue
+        func = node.value.func
+        name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+        if name in ("register_script", "Script"):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    found.add(target.id)
+    return found
+
+
+def _client_names(tree: ast.AST) -> dict[str, str]:
+    """Locals holding a Redis client, mapped to the connection they hold."""
+    found: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            identity = _client_identity(node.value)
+            if identity:
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        found[target.id] = identity
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            identity = _client_identity(node.value)
+            if identity:
+                found[node.target.id] = identity
+        elif isinstance(node, ast.withitem) and isinstance(node.optional_vars, ast.Name):
+            identity = _client_identity(node.context_expr)
+            if identity:
+                found[node.optional_vars.id] = identity
+        elif isinstance(node, ast.ImportFrom):
+            # `from app.redis_client import redis_client as _r_ann`: the alias is not
+            # client-shaped and the import is the only place its real name appears.
+            for alias in node.names:
+                if alias.asname and _RECEIVER.search(alias.name):
+                    found[alias.asname] = alias.name.lower()
     return found
 
 
@@ -292,6 +472,12 @@ def _scan_python(root: str) -> list[_Hit]:
             rel = os.path.relpath(path, root)
             owners = owners_of(tree)
             pipelines = _pipeline_names(tree)
+            clients = _client_names(tree)
+            key_names = _key_variables(tree, owners)
+            scripts = _script_names(tree)
+            for quoted, line in _lua_keys(tree):
+                hits.append(_Hit(_normalise(quoted), quoted, rel, line,
+                                 False, False, "", "eval", False, owners.get(line, "")))
             wrappers.update(_wrappers_in(tree))
             for node in ast.walk(tree):
                 # `safe_set(r, "key", ...)` - a plain call, whose first argument is a
@@ -302,7 +488,28 @@ def _scan_python(root: str) -> list[_Hit]:
                         and _RECEIVER.search(node.args[0].id)):
                     pending.append((node.func.id, node, rel, owners.get(node.lineno, ""),
                                     node.args[0].id))
-                if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                if not isinstance(node, ast.Call):
+                    continue
+                keyed = any(w.arg == "keys" and isinstance(w.value, (ast.List, ast.Tuple))
+                            for w in node.keywords)
+                if keyed or (isinstance(node.func, ast.Name) and node.func.id in scripts):
+                    # A Script object being run. `keys=` IS redis-py's Script signature,
+                    # so the keyword is the evidence - the callee may be any expression,
+                    # and `_get_max_cas_script(r)(keys=[...])` matched no name at all.
+                    # Same evidence as EVALSHA: it names its keys, hides its commands.
+                    for element in _script_keys(node):
+                        pattern = _py_pattern(element) or (
+                            _key_named(key_names, owners.get(node.lineno, ""),
+                                       element.id, node.lineno)
+                            if isinstance(element, ast.Name) else "")
+                        if pattern and _looks_like_key(pattern):
+                            hits.append(_Hit(
+                                _normalise(pattern), pattern, rel, node.lineno,
+                                False, False, "", "eval", False,
+                                owners.get(node.lineno, ""),
+                            ))
+                    continue
+                if not isinstance(node.func, ast.Attribute):
                     continue
                 method = node.func.attr
                 if method not in _ALL or not node.args:
@@ -312,13 +519,48 @@ def _scan_python(root: str) -> list[_Hit]:
                     # Reported as the client it came from, so a pipelined write and a
                     # direct read are one client, which is what they are.
                     receiver = pipelines[receiver] or receiver
-                elif not _RECEIVER.search(receiver or ""):
+                if receiver not in clients and not _RECEIVER.search(receiver or ""):
                     continue
-                pattern = _py_pattern(node.args[0])
+                # The connection it IS, not the name this file gave it - and nothing at
+                # all when this file never sees what made it. An unresolved name is an
+                # unknown connection, not a second one, and comparing one against a
+                # resolved factory warned on 33 keys for no reason.
+                receiver = clients.get(receiver, "")
+                if method in _SCRIPTS:
+                    for element in _script_keys(node):
+                        pattern = _py_pattern(element)
+                        if not pattern and isinstance(element, ast.Name):
+                            pattern = _key_named(key_names,
+                                                 owners.get(node.lineno, ""),
+                                                 element.id, node.lineno)
+                        if pattern and _looks_like_key(pattern):
+                            hits.append(_Hit(
+                                _normalise(pattern), pattern, rel, node.lineno,
+                                False, False, receiver, "eval", False,
+                                owners.get(node.lineno, ""),
+                            ))
+                    continue
+                pattern = _py_pattern(node.args[0], key_names,
+                                      owners.get(node.lineno, ""), node.lineno)
+                if not pattern and isinstance(node.args[0], ast.Name):
+                    # The key was built into a local a line or two above.
+                    # The enclosing def first, then the module: a key held in a constant
+                    # at the top of the file is written inside a handler further down,
+                    # which is how the Celery health hashes are named.
+                    pattern = _key_named(key_names, owners.get(node.lineno, ""),
+                                         node.args[0].id, node.lineno)
+                    if pattern and not _looks_like_key(pattern):
+                        # A fragment, not a key. Good enough to splice into an f-string,
+                        # not good enough to be one on its own.
+                        pattern = ""
                 if not pattern or not _looks_like_key(pattern):
                     continue
                 ttl = any(k.arg in _TTL_KWARGS for k in node.keywords if k.arg) or \
-                    method in ("setex", "psetex", "expire", "pexpire")
+                    method in ("setex", "psetex", "expire", "pexpire") or \
+                    (method in ("set", "aset") and len(node.args) >= 3)
+                # A third positional argument to `set` is the expiry in BOTH APIs -
+                # Django's `cache.set(key, value, timeout)` and redis-py's `ex`. Reading
+                # only `ex=`/`timeout=` keywords called six expiring caches leaks.
                 # `set(key, v, nx=True)` or setnx(): a lock, whose return value is the read.
                 nx = method == "setnx" or any(k.arg == "nx" for k in node.keywords)
                 hits.append(_Hit(
@@ -452,6 +694,43 @@ def _scan_js(root: str) -> list[_Hit]:
     return hits
 
 
+# Files this reads no code from, but which are still part of the project. A key named
+# in one is written in this repository - `celery:beat:crashloop` is set by the beat
+# wrapper, a shell script with Python inside it - and "written nowhere in this repo" is
+# then simply false.
+_UNPARSED = (".sh", ".bash", ".zsh", ".lua", ".yml", ".yaml", ".toml", ".conf", ".cfg",
+             ".ini", ".env", ".sql", ".tf", ".rb", ".go", ".php", ".rs", ".java", ".kt")
+
+
+def _named_elsewhere(root: str, keys: set[str]) -> dict[str, str]:
+    """key -> the first unparsed file that spells it out, for the keys that need it.
+
+    Only for keys about to be CLAIMED: the search is a plain substring scan and its
+    whole job is to stop the tool saying "nowhere in this repo" about something that is
+    demonstrably in the repo.
+    """
+    if not keys:
+        return {}
+    found: dict[str, str] = {}
+    for here, subdirectories, names in os.walk(root):
+        subdirectories[:] = [
+            d for d in subdirectories if d not in SKIP_DIRS and not d.startswith(".")
+        ]
+        for name in names:
+            if not name.endswith(_UNPARSED):
+                continue
+            path = os.path.join(here, name)
+            try:
+                with open(path, encoding="utf-8", errors="replace") as handle:
+                    text = handle.read()
+            except OSError:
+                continue
+            for key in keys - set(found):
+                if key in text:
+                    found[key] = os.path.relpath(path, root)
+    return found
+
+
 def extract_redis(root: str) -> tuple[list[Symbol], list[Edge]]:
     hits = _scan_python(root) + _scan_js(root)
     if not hits:
@@ -464,9 +743,72 @@ def extract_redis(root: str) -> tuple[list[Symbol], list[Edge]]:
     symbols: list[Symbol] = []
     edges: list[Edge] = []
 
+    # `pps:records:t*` read here and `pps:records:tnormal` written there are two
+    # spellings of one keyspace. Matched rather than merged, so the concrete keys keep
+    # their own rows and the pattern stops being reported as a read nothing satisfies.
+    def overlaps(one: str, other: str) -> bool:
+        """Can these two patterns name the same key?
+
+        Segment by segment, because a Redis key is a colon-separated namespace and its
+        depth is part of its identity. `user:*` and `user:*:current_streak` share a
+        prefix and are not the same key - letting the first vouch for the second
+        silently cleared four real findings, counters read in two places and written in
+        none. Within a segment a `*` is a hole and may match either way round.
+        """
+        left, right = one.split(":"), other.split(":")
+        if len(left) != len(right):
+            return False
+        for a, b in zip(left, right, strict=True):
+            if a == b:
+                continue
+            if "*" not in a and "*" not in b:
+                return False
+            # A bare `*` where this key has a name is the OTHER key being a namespace
+            # sweep - `user:*:*` is what a GDPR wipe scans, not something that writes
+            # `user:{id}:current_streak`. Letting it vouch cleared four real findings.
+            if b == "*" and "*" not in a:
+                return False
+            shape_a = re.compile("^" + ".*".join(re.escape(p) for p in a.split("*")) + "$")
+            shape_b = re.compile("^" + ".*".join(re.escape(p) for p in b.split("*")) + "$")
+            if not (shape_a.match(b) or shape_b.match(a)):
+                return False
+        return True
+
+    matches: dict[str, list[str]] = {}
+    for key in by_key:
+        # A pattern with no namespace of its own - `*:progress` - would match every key
+        # that happens to end in the same word. That is a connection built from a shared
+        # noun, not from evidence, so a pattern has to begin with something real.
+        if "*" not in key or len(key.split("*")[0]) < 4:
+            continue
+        # `overlaps(key, other)`, not the other way round: the question is whether the
+        # OTHER key is specific enough to be evidence for this one.
+        hit = [k for k in by_key if k != key and overlaps(key, k)]
+        if hit:
+            matches[key] = hit
+
+    elsewhere: set[str] = set()
+    pending_claims: list[int] = []
     for key, group in sorted(by_key.items()):
-        writers = [h for h in group if h.write]
-        readers = [h for h in group if not h.write]
+        # A Lua call names its keys and hides its commands: EVALSHA is neither a read
+        # nor a write here, it is evidence that something this cannot read touches the
+        # key. Counting it as a read reported the WebSocket connection counter - which
+        # a script increments on every connect - as a lookup that can only ever miss.
+        scripted = [h for h in group if h.method == "eval"]
+        plain = [h for h in group if h.method != "eval"]
+        writers = [h for h in plain if h.write]
+        readers = [h for h in plain if not h.write]
+        if not plain:
+            symbols.append(Symbol(
+                id=f"redis_key:{key}", kind="redis_key", label=key,
+                sub=f"{len(scripted)} script", file=scripted[0].file,
+                line=scripted[0].line, status=Status.UNCERTAIN, snippet=scripted[0].raw,
+                chain=[key], owner=scripted[0].owner,
+                note="Only ever passed to a Lua script (EVAL/EVALSHA). The script names "
+                     "this key and its commands are not in this source, so what it does "
+                     "with it cannot be read here.",
+            ))
+            continue
         where = writers[0] if writers else readers[0]
 
         # A `set(key, …, nx=True)` is a lock or a dedupe guard: the RETURN VALUE is the read
@@ -510,6 +852,27 @@ def extract_redis(root: str) -> tuple[list[Symbol], list[Edge]]:
             status = Status.UNUSED
             note = "Written here and read nowhere in this repo."
 
+        if key.startswith("*") and status in (Status.UNRESOLVED, Status.UNUSED):
+            # No namespace of its own: the prefix is decided at runtime, so there is no
+            # saying which key this is - let alone that nothing else touches it.
+            status = Status.UNCERTAIN
+            note = ("This key's namespace is decided at runtime - the prefix comes from a "
+                    "lookup, not from the source - so which key it names is not something "
+                    "that can be read here.")
+        if key in matches and status in (Status.UNRESOLVED, Status.UNUSED):
+            other = ", ".join(sorted(matches[key])[:3])
+            status = Status.CONNECTED
+            note = (f"The other half is spelled out: `{other}` matches this pattern and "
+                    f"is touched elsewhere in this repository.")
+        if status in (Status.UNRESOLVED, Status.UNUSED) and "*" not in key:
+            elsewhere.add(key)
+        if scripted and status in (Status.UNRESOLVED, Status.UNUSED):
+            status = Status.UNCERTAIN
+            note = ("Also passed to a Lua script (EVAL/EVALSHA), whose commands are not "
+                    "in this source. " + note.rstrip(".") +
+                    " - unless the script is the other half, which is what a script "
+                    "given this key usually is.")
+
         # A key touched through two different clients is the wrong-instance bug: the write
         # lands on one connection and the delete on another, so the stale value survives.
         def language(hit):
@@ -519,13 +882,24 @@ def extract_redis(root: str) -> tuple[list[Symbol], list[Edge]]:
             h for h in group if language(h) == language(group[0])
         ]
         clients = {h.receiver for h in same_language if h.receiver}
-        if status is Status.CONNECTED and len(clients) > 1 and len(same_language) == len(group):
+        # `get_redis_client` and `get_redis_client#0` are one factory, and whether the
+        # bare call means db 0 is not in the source. An unstated database is not a
+        # different one - the same mistake as reading `ar` and `r` as two connections.
+        factories = collections.defaultdict(set)
+        for name in clients:
+            base, _, db = name.partition("#")
+            factories[base].add(db)
+        differ = len(factories) > 1 or any(
+            len(dbs - {""}) > 1 for dbs in factories.values())
+        if status is Status.CONNECTED and differ and len(same_language) == len(group):
             status = Status.UNCERTAIN
             note = ("Touched through more than one client (" + ", ".join(sorted(clients)) +
                     "). If those are different Redis instances or databases, a write on "
                     "one and a delete on the other both succeed and the stale value "
                     "survives.")
 
+        if status in (Status.UNRESOLVED, Status.UNUSED):
+            pending_claims.append(len(symbols))
         symbols.append(Symbol(
             id=f"redis_key:{key}", kind="redis_key", label=key,
             # Deleting is not writing, and a row reading "6 write / 0 read" over a key
@@ -564,7 +938,11 @@ def extract_redis(root: str) -> tuple[list[Symbol], list[Edge]]:
 
         # The TTL check, and only where the key says it is disposable: a permanent key with
         # no expiry is correct, and flagging those would bury the ones that matter.
-        leaking = [
+        # A separate `expire(key, ...)` beside the write IS the expiry: a fixed-window
+        # rate limiter is `incr(key)` then `expire(key, period, nx=True)`, and reading
+        # the write on its own called it a key Redis keeps forever.
+        expires = any(h.ttl for h in group)
+        leaking = [] if expires else [
             h for h in writers
             if (not h.ttl and _CACHE_ISH.match(h.raw) and h.key.split(":")[0] != "*"
                     and h.method not in _NOT_STORES)
@@ -581,5 +959,20 @@ def extract_redis(root: str) -> tuple[list[Symbol], list[Edge]]:
                 f"redis_ttl:{key}:{hit.file}:{hit.line}", f"redis_key:{key}",
                 Status.UNRESOLVED,
             ))
+
+    # One pass over the files this reads no code from, for the keys it was about to
+    # claim. A key the beat wrapper sets is written in this repository.
+    seen = _named_elsewhere(root, elsewhere)
+    for index in pending_claims:
+        symbol = symbols[index]
+        where = seen.get(symbol.label)
+        if not where:
+            continue
+        symbols[index] = replace(
+            symbol, status=Status.UNCERTAIN,
+            note=(f"Named in `{where}`, which this reads no code from - a shell wrapper, "
+                  f"a job definition or a Lua file. It is not written nowhere; it is "
+                  f"written somewhere this cannot follow. " + (symbol.note or "")),
+        )
 
     return symbols, edges

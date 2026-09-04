@@ -19,6 +19,58 @@ backend that answered `uncertain` everywhere would score 100% precision and be u
 
 ## Unreleased
 
+### The Redis half: 260 keys to 446, and 98 claims to 92
+
+The same pass over the other store. The lens read the calls whose key is written out at
+the call site, which on the reference project is a minority of them - so it found 260
+keys and could not connect most of them. It finds **446** now, **186 connected** (was 59),
+and **2,260 uses** (was 1,399).
+
+Every one of these was a shape the source spells out and the lens did not read:
+
+- **Added** — a key built into a local. `cache_key = f"api:user_stats:{uid}"` and then
+  `cache.set(cache_key, …)` is the house style for every cached endpoint here, and it
+  made the WRITE invisible: 65 keys read "1 invalidate / 0 read", the delete spelling the
+  literal out and the write one line above not. Scoped to the enclosing function, then the
+  module, and a name reassigned per branch (`err_key` in the 5xx arm and again in the 4xx
+  arm) means whichever was assigned nearest above the line.
+- **Added** — the key a Lua script names. `evalsha(sha, 1, KEY)`, `keys=[KEY]` on any
+  call, a Script from `register_script`, and key literals inside the embedded Lua source
+  itself. A script names its keys and hides its commands, so this is `uncertain` with that
+  said - never a read, which is what it was being counted as.
+- **Added** — composed keys. `base = f"challenges:schedule:django_{id}"` then
+  `f"{base}:joined"` was the pattern `*:joined`, which matches nothing. Fragments count:
+  `schedule_id = f"django_{id}"` is not a key and is what the key is built around.
+- **Added** — two spellings of one keyspace meet. `pps:records:t*` read here and
+  `pps:records:tnormal` written there, matched segment by segment because a Redis key is a
+  colon-separated namespace and its depth is part of its identity. A namespace sweep
+  (`user:*:*`, what a GDPR wipe scans) vouches for nothing.
+- **Added** — a key named in a file this reads no code from. `celery:beat:crashloop` is
+  set by the beat wrapper, a shell script with Python inside it. It is not written
+  nowhere; it is written somewhere this cannot follow, and only one of those is a finding.
+- **Fixed** — **`ar` was not a Redis client.** The async client throughout the reference
+  project is called `ar`, which is not `redis`, `cache`, `client` or exactly `r` - so
+  every async wrapper (`async def a_safe_rpush(ar, key, *values)`) read as not-Redis and
+  the whole async write path was invisible.
+- **Fixed** — a client is one because of what MADE it. `ar` and `r` from the same factory
+  are one connection, and the "touched through more than one client" warning fired on 21
+  keys for the difference between two variable names. An unresolved name is an unknown
+  connection, not a second one; an unstated database is not a different one; an import
+  alias (`from … import redis_client as _r_ann`) is a client. 42 warnings down to 12, and
+  each remaining one names two real factories.
+- **Fixed** — `cache.set(key, value, 3600)`. The timeout is positional in Django's API and
+  in redis-py's, and reading only `ex=`/`timeout=` keywords reported six correctly-expiring
+  caches as keys Redis keeps forever. A separate `expire(key, …)` beside the write is the
+  expiry too - that is how a fixed-window rate limiter is written.
+- **Fixed** — a key whose namespace is decided at runtime is never claimed.
+  `sk = sched_map.get(id)` then `f"{sk}:progress"`: there is no saying which key that is,
+  let alone that nothing writes it.
+
+**Five claims survive on the reference project, and all five are real** - reads of keys
+nothing in the repository writes, in any file type: a reward payout that collects an empty
+list every run, a seven-day history that renders empty for everyone, and a streak column
+reading a key the codebase's own notes record as the wrong spelling.
+
 ### The Postgres half of a Django project, which did not exist
 
 A Django scan knew 65 model NAMES on the reference project and nothing else - every one
