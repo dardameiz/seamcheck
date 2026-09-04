@@ -17,10 +17,37 @@ Coverage and precision have **different denominators** and neither is meaningful
 backend that answered `uncertain` everywhere would score 100% precision and be useless.
 `uncertain` is not counted as a claim in precision, because it is not a claim.
 
-## Unreleased
+## 0.10.0 — 4 Sep 2026
+
+**Measured:** coverage **81%** across 47 projects and 147,712 symbols (Flask 92%, Django
+84%, Express 68%, FastAPI 57%, NestJS 48%, Next.js 46%) · precision **55%** (134
+hand-labelled claims) · recall **6/6** · render **46/46**.
+
+Three releases in one, and the thread between them is that a finding should say something
+a person can act on without reading the tool first.
+
+**The function became the unit.** A developer is organised around `def submit_push`, not
+around a page, and the map could not answer "what does this touch, and what touches it"
+at all. It can now: every symbol carries the function it lives in, a type-ahead over every
+function in the project draws that function's whole world - across every page its symbols
+land on, following its calls into the helpers that do the work - and counts the
+round-trips per call by lane. A handler that should be Redis-only, showing `Postgres 1`,
+is a diagnosis in one line.
+
+**Unreferenced and unreachable stopped sharing a severity.** A guard that returns because
+an element nothing renders was reported as fourteen small chores; it is one dead region of
+292 lines. Nine of them, 224 lines, on the reference project.
+
+**And the accuracy work got an instrument.** Precision is now reported per *stack* and per
+*lens*, because one number across six frameworks describes none of them - and the first
+thing it said was that Django sat at 62% while Express sat at 0%. Both moved: Express
+coverage 46% → 68% and NestJS 32% → 48%, from four missing links in one mount chain.
+`docs/verifying.md` hands over the same instrument, the protocol, and the seven ways a
+careful person gets the answer wrong. Every one of those was made here.
 
 Found by installing 0.9.0 from PyPI into a clean virtualenv and pointing it at the
-reference project - the first time a release was tested the way a user meets it.
+reference project - the first time a release was tested the way a user meets it - and then
+by adjudicating 1,113 findings on two surfaces of that project, one at a time, by hand.
 
 - **Fixed** — a scan without django-extensions **lost every model symbol and said
   nothing**. The extractor did warn, through `logger.warning`; the CLI runs the whole scan
@@ -260,6 +287,14 @@ reference project - the first time a release was tested the way a user meets it.
   gone. **No true finding was lost by either fix** - the true count is unchanged at 74.
   Across the corpus: routes **2,716 → 2,782** and `uncertain` **246 → 72**.
 
+- **Fixed** — **an opening `<script` in the payload swallowed the rest of the map.**
+  Escaping `</script>` is the defence everybody knows and it is not enough: an OPENING
+  `<script` inside script data puts the HTML tokenizer into its escaped state, so the next
+  `</script>` does not close the block and nothing below it runs. It took one note
+  explaining Django's `json_script` filter - which has the word `<script>` in it - to break
+  the map on two corpus projects while every unit test passed. Every `<` in embedded JSON
+  is now `\u003c`, which cannot interact with the tokenizer at all. Caught by the release
+  gate that renders all 46 corpus projects, which is exactly what that gate is for.
 - **Fixed** — **a command sent through a pipeline is a command.** `r.pipeline()` returns
   an object whose method calls are the same command set, and the receiver test matched the
   client by *name* - so `pipe.set(...)`, `pipe.hincrby(...)` and `hist_pipe.hset(...)` were

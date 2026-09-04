@@ -83,6 +83,22 @@ class MapRenderTests(SimpleTestCase):
 
         self.assertNotIn("</script><b>", map_html.render(built))
 
+    def test_an_opening_script_tag_in_the_payload_is_escaped_too(self):
+        """Escaping `</script>` is the defence everybody knows, and it is not enough.
+
+        An OPENING `<script` inside script data puts the HTML tokenizer into its escaped
+        state, and the next `</script>` then does not close the block - so the rest of the
+        page is swallowed and nothing on it runs. One note explaining Django's
+        `json_script` filter, which had the word `<script>` in it, broke the map on two
+        corpus projects and passed every unit test.
+        """
+        node = MapNode("x", "thing", "url", "connected",
+                       note="writes a <script> element carrying this id")
+        out = map_html.render(_map(pages=[PageMap("p", [node], [])]))
+
+        self.assertNotIn("<script> element", out)
+        self.assertIn("\\u003cscript", out)
+
     def test_it_records_the_commit_and_the_mode(self):
         self.assertIn("current", map_html.render(_map()))
         self.assertIn("diff vs", map_html.render(_map(baseline_sha="0000111222333")))

@@ -5323,9 +5323,15 @@ class _Table:
 
 
 def _json(value) -> str:
-    # </script> inside JSON would close the tag early; escaping the slash is the
-    # standard defence and stays valid JSON.
-    return json.dumps(value, separators=(",", ":")).replace("</", "<\\/")
+    # EVERY `<`, not just `</`. Escaping the closing tag is the defence everybody knows
+    # and it is not enough: an OPENING `<script` inside script data puts the HTML
+    # tokenizer into its escaped state, and the next `</script>` then does not close the
+    # block - so the rest of the page is swallowed. It took one note explaining Django's
+    # `json_script` filter, which had the word `<script>` in it, to break the map on two
+    # corpus projects. `\u003c` is valid JSON and cannot interact with the tokenizer at
+    # all, which is the property worth having when the text comes from a note anyone
+    # might write.
+    return json.dumps(value, separators=(",", ":")).replace("<", "\\u003c")
 
 
 # One block of deferred data: (name, encoding, text). The same triple is written two
@@ -5772,7 +5778,7 @@ def _console_payload(console, chunks: list[Chunk] | None = None) -> str:
         "sections": [_section(section) for section in console.sections],
         "marks": getattr(console, "marks", {}) or {},
     }
-    return json.dumps(data).replace("</", "<\\/")
+    return json.dumps(data).replace("<", "\\u003c")
 
 
 def _files_lazy(files, chunks: list[Chunk], file_page: dict[str, int] | None = None) -> dict:
