@@ -286,7 +286,26 @@ def scan(
         # asked of the filesystem rather than of the route table.
         static_roots=static_candidates,
     ), repo_root)
-    return _with_observations(scanned, repo_root)
+    return _with_stores_reached(_with_observations(scanned, repo_root), repo_root)
+
+
+def _with_stores_reached(graph: Graph, repo_root: str) -> Graph:
+    """Join each handler to the store rows its own work reaches, through its helpers.
+
+    The map drew the reference project's Index page as browser -> seam -> server and
+    stopped, on a page whose handler exists to increment a Redis counter: the reads sit
+    in a helper one call away, and the page walk follows edges. Delegating is what
+    handlers do, so the chain stopped one hop short on every page that has one.
+    """
+    try:
+        from seamcheck.storelink import link_handlers_to_stores
+
+        joined = link_handlers_to_stores(graph, repo_root)
+    except Exception:  # noqa: BLE001 - a wire is enrichment; never fail a scan for it
+        return graph
+    if not joined:
+        return graph
+    return Graph(symbols=graph.symbols, edges=graph.edges + joined)
 
 
 def _with_observations(graph: Graph, repo_root: str) -> Graph:

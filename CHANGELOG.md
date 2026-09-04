@@ -19,6 +19,19 @@ backend that answered `uncertain` everywhere would score 100% precision and be u
 
 ## Unreleased
 
+### The chain reaches the store
+
+- **Added** — **a handler is joined to the store rows its own work reaches**, through the
+  functions it calls. The map drew the reference project's Index page as
+  browser → seam → server and stopped there, on a page whose handler exists to increment
+  a Redis counter: the counter was found, the handler was found, and nothing joined them,
+  because the reads sit in `read_hero_push_count`, a helper one call away from
+  `hero_push_counter`. **Delegating is what handlers do**, so the chain stopped one hop
+  short on every page that has one — and *the database, the server, and everything going
+  out to the client and coming back* is the question a map of a Django project is for.
+  1,017 of these edges on the reference project; four calls deep, evidence and never a
+  verdict.
+
 ### Open
 
 - **13,700 duplicate symbol ids**, all in the DOM lens: 11,199 `dom_selector` and 2,518
