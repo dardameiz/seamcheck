@@ -177,9 +177,12 @@ class WrapperTests(SimpleTestCase):
                     store(1, "cache:third:arg", r)
             """,
         }))
-        # arg 0 is a client-shaped name only in the caller's eyes; the wrapper says the
-        # key is argument 1, and that is what gets read.
-        self.assertNotIn("cache:third:arg", keys)
+        # This used to assert the key was NOT found: the wrapper rule wants a
+        # client-shaped FIRST parameter and `store(value, key, r)` has not got one, so
+        # nothing here was a wrapper. Following the argument into the parameter answers
+        # it properly - the caller hands `key` a literal and the body writes it - and
+        # a limitation is not a rule worth keeping.
+        self.assertEqual(keys["cache:third:arg"], ("unused", "1 write / 0 read"))
 
 
 class ClientIdentityTests(SimpleTestCase):
@@ -1029,3 +1032,133 @@ class LuaBodyTests(SimpleTestCase):
         labels = {s.label for s in symbols if s.kind == "redis_key"}
         # The declared locals are keys; the field argument is not.
         self.assertEqual(labels, {"cache:agg:sums", "cache:agg:spare"})
+
+
+class AsyncCacheApiTests(SimpleTestCase):
+    """Django's async cache API, which the lens could half-see.
+
+    `adelete` was in the invalidation set and `aget`/`aset` were in nothing at all. On the
+    reference project that is **96 aget and 56 aset calls invisible while 23 adelete were
+    read** - so 45 keys came back "only ever invalidated here", a category built entirely
+    out of the half of the API that was missing. The tool was describing its own blind
+    spot and blaming the code.
+    """
+
+    def test_an_async_get_and_set_pair_like_any_other(self):
+        rows = _keys(_project({"app/views.py": """
+            from django.core.cache import cache
+
+            async def stats(uid):
+                cache_key = f"api:user_stats:{uid}"
+                found = await cache.aget(cache_key)
+                if found is None:
+                    found = await build(uid)
+                    await cache.aset(cache_key, found, 30)
+                return found
+        """}))
+        self.assertEqual(rows["api:user_stats:*"], ("connected", "1 write / 1 read"))
+
+    def test_an_async_delete_beside_an_async_write_is_not_invalidate_only(self):
+        root = _project({
+            "app/views.py": """
+                from django.core.cache import cache
+
+                async def show(uid):
+                    return await cache.aget(f"api:current_pbits:{uid}")
+            """,
+            "app/store.py": """
+                from django.core.cache import cache
+
+                async def buy(uid, value):
+                    await cache.aset(f"api:current_pbits:{uid}", value, 10)
+                    await cache.adelete(f"api:current_pbits:{uid}")
+            """,
+        })
+        self.assertEqual(_keys(root)["api:current_pbits:*"][0], "connected")
+        self.assertNotIn("invalidated", _note(root, "api:current_pbits:*"))
+
+    def test_add_sets_only_when_absent_and_its_return_is_the_read(self):
+        # `cache.add(key, ...)` is Django's SETNX: it answers "did I get it", which is a
+        # lock, and nothing will ever call get() on it.
+        rows = _keys(_project({"app/lock.py": """
+            from django.core.cache import cache
+
+            async def once(uid):
+                return await cache.aadd(f"lock:daily:{uid}", 1, 60)
+        """}))
+        self.assertEqual(rows["lock:daily:*"][0], "connected")
+
+
+class KeyPassedToAHelperTests(SimpleTestCase):
+    """The key is built in the caller and written inside the helper it is handed to.
+
+    ```
+    cache_key = f"cache:avatar:{user_id}"
+    cached = await cache.aget(cache_key)          # the read, visible
+    return await _build(request, user, cache_key)  # ...and it goes in here
+    ...
+    async def _build(request, user, cache_key):
+        await cache.aset(cache_key, data, 30)      # the write, invisible
+    ```
+
+    Inside the helper `cache_key` is a PARAMETER, so nothing in that file assigns it and
+    the write cannot be seen. This is how every cached endpoint on the reference project
+    is written, and it is most of what was left of "only ever invalidated here".
+    """
+
+    def test_a_key_handed_to_a_helper_is_written_there(self):
+        rows = _keys(_project({"app/views.py": """
+            from django.core.cache import cache
+
+            async def avatar(request, user_id):
+                cache_key = f"cache:avatar:{user_id}"
+                found = await cache.aget(cache_key)
+                if found is not None:
+                    return found
+                return await _build(request, cache_key)
+
+            async def _build(request, cache_key):
+                data = await compute(request)
+                await cache.aset(cache_key, data, 30)
+                return data
+        """}))
+        self.assertEqual(rows["cache:avatar:*"], ("connected", "1 write / 1 read"))
+
+    def test_the_helper_may_live_in_another_file(self):
+        rows = _keys(_project({
+            "app/views.py": """
+                from django.core.cache import cache
+
+                from .build import build_pending
+
+                async def pending(user):
+                    key = f"pending_announcements:{user.id}"
+                    found = await cache.aget(key)
+                    return found if found else await build_pending(user, key)
+            """,
+            "app/build.py": """
+                from django.core.cache import cache
+
+                async def build_pending(user, pending_cache_key):
+                    data = await collect(user)
+                    await cache.aset(pending_cache_key, data, 30)
+                    return data
+            """,
+        }))
+        self.assertEqual(rows["pending_announcements:*"][0], "connected")
+
+    def test_one_helper_called_with_two_keys_writes_both(self):
+        rows = _keys(_project({"app/views.py": """
+            from django.core.cache import cache
+
+            async def one(uid):
+                return await _store(f"cache:one:{uid}")
+
+            async def two(uid):
+                return await _store(f"cache:two:{uid}")
+
+            async def _store(cache_key):
+                await cache.aset(cache_key, 1, 30)
+        """}))
+        self.assertEqual(rows["cache:one:*"][1], "1 write / 0 read")
+        self.assertEqual(rows["cache:two:*"][1], "1 write / 0 read")

@@ -19,6 +19,29 @@ backend that answered `uncertain` everywhere would score 100% precision and be u
 
 ## Unreleased
 
+### The half of the cache API the lens could not see
+
+`adelete` was in the invalidation set and **`aget` and `aset` were in nothing at all**.
+On the reference project that is **96 `aget` and 56 `aset` calls invisible while 23
+`adelete` were read** — so 45 keys came back *"only ever invalidated here"*, a category
+built entirely out of the half of the API that was missing. The tool was describing its
+own blind spot and blaming the code.
+
+- **Added** — Django's async cache API: `aget`, `aset`, `aadd`, `aget_many`, `aset_many`,
+  `aincr`, `adecr`, `atouch`, `ahas_key`, `aget_or_set` — and `add`/`aadd` read as the
+  SETNX they are, a lock whose return value is the read.
+- **Added** — **a key follows the argument into the helper it is handed to.**
+  `cache_key = f"cache:avatar:{uid}"`, read in the caller, then passed to
+  `_build(request, cache_key)` where the `aset` lives. Inside the helper the name is a
+  parameter, so nothing in that file assigns it and the write could not be seen — and
+  that is how every cached endpoint on the reference project is written. One helper
+  called with two keys writes both, which is not ambiguity but two writes.
+
+On the reference project: **459 keys, 297 connected** (was 223), **2,958 uses** (was
+2,388), and the claims down to **5 read-never-written — every one hand-verified real —
+and 75 written-never-read.**
+
+
 ### A table is asked the same question a key is
 
 `connected` on a table meant "some queryset mentions this", which put **59 of the

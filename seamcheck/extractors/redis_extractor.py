@@ -57,6 +57,11 @@ _READS = frozenset({
     "zrangebyscore", "zrevrangebyscore", "zrank", "zrevrank", "zcount", "zrandmember",
     "hexists", "hlen", "hrandfield", "srandmember", "sinter", "sunion", "sdiff",
     "bitcount", "getbit", "strlen", "pfcount", "lpos", "getex", "object", "zdiff",
+    # Django's async cache API. `adelete` was in the invalidation set and these were in
+    # nothing at all - 96 `aget` and 56 `aset` calls invisible on the reference project
+    # while 23 `adelete` were read, which is the entire reason 45 keys came back "only
+    # ever invalidated here". The tool was describing its own blind spot.
+    "aget", "aget_many", "ahas_key", "aget_or_set",
 })
 _WRITES = frozenset({
     "set", "setex", "setnx", "psetex", "mset", "getset", "hset", "hmset", "hsetnx",
@@ -68,6 +73,7 @@ _WRITES = frozenset({
     "persist", "pfadd", "rename", "renamenx", "copy", "restore", "touch", "lpushx",
     "rpushx", "smove", "sinterstore", "sunionstore", "sdiffstore", "zunionstore",
     "zinterstore", "xadd", "geoadd",
+    "aset", "aset_many", "aadd", "add", "aincr", "adecr", "atouch",
 })
 # A Lua script: the keys it touches are named at the call, the commands it runs are not.
 # `evalsha(sha, 1, WS_CONNECTIONS_KEY)` is how the connection counter is incremented, and
@@ -617,6 +623,85 @@ def _wrappers_in(tree: ast.AST) -> dict[str, tuple[int, str]]:
     return found
 
 
+def ttl_of(node: ast.Call, method: str) -> bool:
+    """Whether this call gives the key an expiry.
+
+    A third positional argument to `set` is the expiry in BOTH APIs - Django's
+    `cache.set(key, value, timeout)` and redis-py's `ex`.
+    """
+    return (any(k.arg in _TTL_KWARGS for k in node.keywords if k.arg)
+            or method in ("setex", "psetex", "expire", "pexpire")
+            or (method in ("set", "aset") and len(node.args) >= 3))
+
+
+def nx_of(node: ast.Call, method: str) -> bool:
+    """`set(key, v, nx=True)`, `setnx()` or Django's `add()`: a lock, whose RETURN VALUE
+    is the read, so nothing will ever call get() on it."""
+    return method in ("setnx", "add", "aadd") or any(k.arg == "nx" for k in node.keywords)
+
+
+def _signatures(tree: ast.AST) -> dict[str, list[str]]:
+    """Function name -> its parameter names, by simple name."""
+    found: dict[str, list[str]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            found[node.name] = [a.arg for a in node.args.args] + \
+                [a.arg for a in node.args.kwonlyargs]
+    return found
+
+
+def _keys_into_parameters(
+    trees: list[tuple[str, ast.AST, dict[int, str], dict]],
+    signatures: dict[str, list[str]],
+) -> dict[tuple[str, str], set[str]]:
+    """(function, parameter) -> the key patterns callers hand it.
+
+    ```
+    cache_key = f"cache:avatar:{user_id}"
+    return await _build(request, cache_key)     # here
+    ...
+    async def _build(request, cache_key):
+        await cache.aset(cache_key, data, 30)   # ...and the write is here
+    ```
+
+    Inside the helper the name is a PARAMETER, so nothing in that file assigns it and the
+    write cannot be seen. That is how every cached endpoint on the reference project is
+    written, and it is most of what was left of "only ever invalidated here" - a category
+    that named the delete, which spells the key out, and missed the write, which does not.
+
+    One helper called with two different keys writes both; that is not ambiguity, it is
+    two writes.
+    """
+    found: dict[tuple[str, str], set[str]] = {}
+    for _rel, tree, owners, key_names in trees:
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = (node.func.id if isinstance(node.func, ast.Name)
+                    else getattr(node.func, "attr", ""))
+            params = signatures.get(name)
+            if not params:
+                continue
+            for position, argument in enumerate(node.args):
+                if position >= len(params):
+                    break
+                pattern = _py_pattern(argument, key_names,
+                                      owners.get(node.lineno, ""), node.lineno)
+                if not pattern and isinstance(argument, ast.Name):
+                    pattern = _key_named(key_names, owners.get(node.lineno, ""),
+                                         argument.id, node.lineno)
+                if pattern and _looks_like_key(pattern):
+                    found.setdefault((name, params[position]), set()).add(pattern)
+            for word in node.keywords:
+                if not word.arg or word.arg not in params:
+                    continue
+                pattern = _py_pattern(word.value, key_names,
+                                      owners.get(node.lineno, ""), node.lineno)
+                if pattern and _looks_like_key(pattern):
+                    found.setdefault((name, word.arg), set()).add(pattern)
+    return found
+
+
 def _scan_python(root: str) -> list[_Hit]:
     hits: list[_Hit] = []
     # name -> (key argument index, command), and the call sites waiting for it: a wrapper
@@ -626,6 +711,11 @@ def _scan_python(root: str) -> list[_Hit]:
     pending: list[tuple] = []
     # Module-level client singletons, which are global names in practice.
     singletons: dict[str, str] = {}
+    # Parsed once. A key built in one function and written inside the helper it is handed
+    # to cannot be resolved until every call site has been read, so the trees are kept
+    # rather than re-parsed.
+    parsed: list[tuple[str, ast.AST, dict[int, str], dict]] = []
+    signatures: dict[str, list[str]] = {}
     for here, subdirectories, names in os.walk(root):
         subdirectories[:] = [
             d for d in subdirectories if d not in _PY_SKIP and not d.startswith(".")
@@ -641,6 +731,12 @@ def _scan_python(root: str) -> list[_Hit]:
                 continue
             rel = os.path.relpath(path, root)
             owners = owners_of(tree)
+            parsed.append((rel, tree, owners, _key_variables(tree, owners)))
+            signatures.update(_signatures(tree))
+
+    parameter_keys = _keys_into_parameters(parsed, signatures)
+
+    for rel, tree, owners, key_names in parsed:
             pipelines = _pipeline_names(tree)
             clients = _client_names(tree)
             singletons.update({
@@ -648,7 +744,6 @@ def _scan_python(root: str) -> list[_Hit]:
                 if not owners.get(_assignment_line(tree, name), "")
             })
             singletons.update(_proxy_singletons(tree))
-            key_names = _key_variables(tree, owners)
             scripts = _script_names(tree)
             for quoted, line, command, owner in _lua_keys(tree, _script_runs(tree, owners)):
                 hits.append(_Hit(
@@ -730,22 +825,34 @@ def _scan_python(root: str) -> list[_Hit]:
                     # The enclosing def first, then the module: a key held in a constant
                     # at the top of the file is written inside a handler further down,
                     # which is how the Celery health hashes are named.
-                    pattern = _key_named(key_names, owners.get(node.lineno, ""),
-                                         node.args[0].id, node.lineno)
+                    here_owner = owners.get(node.lineno, "")
+                    pattern = _key_named(key_names, here_owner, node.args[0].id,
+                                         node.lineno)
                     if pattern and not _looks_like_key(pattern):
                         # A fragment, not a key. Good enough to splice into an f-string,
                         # not good enough to be one on its own.
                         pattern = ""
+                    if not pattern:
+                        # ...and last, a key this function was HANDED. One helper called
+                        # with two keys writes both, so every pattern gets its own hit.
+                        handed = parameter_keys.get(
+                            (here_owner.rpartition(".")[2], node.args[0].id), ())
+                        for given in sorted(handed):
+                            hits.append(_Hit(
+                                _normalise(given), given, rel, node.lineno,
+                                method in _WRITES, ttl_of(node, method), receiver,
+                                method, nx_of(node, method), here_owner,
+                            ))
+                        if handed:
+                            continue
                 if not pattern or not _looks_like_key(pattern):
                     continue
-                ttl = any(k.arg in _TTL_KWARGS for k in node.keywords if k.arg) or \
-                    method in ("setex", "psetex", "expire", "pexpire") or \
-                    (method in ("set", "aset") and len(node.args) >= 3)
+                ttl = ttl_of(node, method)
                 # A third positional argument to `set` is the expiry in BOTH APIs -
                 # Django's `cache.set(key, value, timeout)` and redis-py's `ex`. Reading
                 # only `ex=`/`timeout=` keywords called six expiring caches leaks.
                 # `set(key, v, nx=True)` or setnx(): a lock, whose return value is the read.
-                nx = method == "setnx" or any(k.arg == "nx" for k in node.keywords)
+                nx = nx_of(node, method)
                 hits.append(_Hit(
                     _normalise(pattern), pattern, rel, node.lineno,
                     method in _WRITES, ttl, receiver, method, nx,
