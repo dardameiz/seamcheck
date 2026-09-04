@@ -509,6 +509,9 @@ _CLASS_ATTR_RE = re.compile(r"""(?<![\w-])class\s*=\s*["']([^"']*)(?:["']|$)""")
 # element JavaScript builds with an id was invisible - and then every querySelector looking
 # for it reported an element no template renders.
 _ID_ATTR_RE = re.compile(r"""(?<![\w-])id\s*=\s*["']([^"'\s]+)["']""")
+# `data-ab-c-buy` in a markup string, with or without a value - a boolean data attribute
+# is how most JS-built hooks are written, and it has no `="..."` to look for.
+_DATA_ATTR_RE = re.compile(r"""(?<![\w-])data-([a-z][\w-]*)(?=[\s>=/"'])""", re.I)
 _ID_PROPERTIES = frozenset({"id", "className"})
 # A class token is written by a human or a utility framework; anything carrying JS
 # punctuation is an interpolation fragment, not a name.
@@ -866,6 +869,13 @@ def _definitions_in(path: str, ast_root: dict, line_offset: int = 0) -> list[Sym
             for found in _CLASS_ATTR_RE.findall(text):
                 for token in _class_tokens(found):
                     _emit("class", token, line, enclosing, 'class="..." in generated markup')
+            # Only inside something that is actually markup: a `data-` in prose is a word,
+            # and inventing an element is worse than missing one - it silences a true
+            # finding about an element that really is absent.
+            if "<" in text:
+                for found in _DATA_ATTR_RE.findall(text):
+                    _emit("data", found, line, enclosing,
+                          f"data-{found} in generated markup")
 
     return symbols
 

@@ -249,9 +249,20 @@ class JsxIsMarkupTests(SimpleTestCase):
             }
         """), [])
 
-    def test_a_data_class_attribute_does_not_declare_a_class(self):
-        self.assertEqual(self._definitions("""
+    def test_a_data_class_attribute_declares_the_attribute_not_the_class(self):
+        # `data-class="x"` is an attribute named `data-class`. It declares that attribute
+        # and it does NOT declare a CSS class - which is the half `\b` used to get wrong.
+        found = self._definitions("""
             export const html = '<div data-class="not-a-class"></div>';
+        """)
+        self.assertIn(("data", "class"), found)
+        self.assertEqual([f for f in found if f[0] == "class"], [])
+
+    def test_a_data_word_in_prose_declares_nothing(self):
+        # Only inside something that is actually markup. Inventing an element is worse
+        # than missing one: it silences a true finding about an element that is absent.
+        self.assertEqual(self._definitions("""
+            export const help = 'see the data-migration guide for details';
         """), [])
 
     def test_real_generated_markup_still_declares(self):

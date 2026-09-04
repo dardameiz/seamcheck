@@ -100,3 +100,77 @@ class PipelineWritesTests(SimpleTestCase):
             """,
         }))
         self.assertEqual(keys.get("queue:jobs", ("", ""))[0], "connected")
+
+
+class WrapperTests(SimpleTestCase):
+    """A project's own wrapper around the client is still the client.
+
+    `safe_set(r, "store:current_period", value, ex=3600)` is a SET. The reference project
+    routes most of its Redis through `safe_get`/`safe_set` - wrappers that exist to
+    recover from WRONGTYPE - so a key with six writes read as a key with none.
+    """
+
+    HELPERS = """
+        import redis
+
+        def safe_get(r, key, default=None):
+            try:
+                return r.get(key)
+            except redis.ResponseError:
+                return default
+
+        def safe_set(r, key, value, ex=None):
+            return r.set(key, value, ex=ex)
+    """
+
+    def test_a_wrapper_call_is_the_command_it_wraps(self):
+        keys = _keys(_project({
+            "helpers.py": self.HELPERS,
+            "views.py": """
+                from helpers import safe_get, safe_set
+                r = None
+
+                def write(value):
+                    safe_set(r, "store:current_period", value, ex=3600)
+
+                def read():
+                    return safe_get(r, "store:current_period")
+            """,
+        }))
+        self.assertEqual(keys.get("store:current_period", ("", ""))[0], "connected")
+
+    def test_the_wrapper_is_learned_from_its_body_not_its_name(self):
+        # A function called `set_the_table` is not a Redis command. The rule is that the
+        # body calls `<first parameter>.<command>(<that parameter>)` - nothing else.
+        keys = _keys(_project({
+            "helpers.py": """
+                def set_the_table(guests, key):
+                    guests.append(key)
+            """,
+            "views.py": """
+                from helpers import set_the_table
+                redis_client = None
+
+                def go():
+                    set_the_table(redis_client, "cache:not:a:key")
+            """,
+        }))
+        self.assertEqual(keys, {})
+
+    def test_the_key_is_taken_from_the_argument_the_wrapper_passes(self):
+        keys = _keys(_project({
+            "helpers.py": """
+                def store(value, key, r):
+                    return r.setex(key, 60, value)
+            """,
+            "views.py": """
+                from helpers import store
+                r = None
+
+                def go():
+                    store(1, "cache:third:arg", r)
+            """,
+        }))
+        # arg 0 is a client-shaped name only in the caller's eyes; the wrapper says the
+        # key is argument 1, and that is what gets read.
+        self.assertNotIn("cache:third:arg", keys)

@@ -60,9 +60,35 @@ fix below.
   only one option shows the copied state, the button that opens the panel closes it, and
   the panel says plainly that nothing is marked until the command is run.
 
-  Measured on the reference project: claims **3,646 → 3,571**, non-connected
-  **7,230 → 6,975**, and `showLostStreakBuyBackButton` now reads *"22 lines, check
-  first"* instead of *"22 lines unreachable"*.
+- **Fixed** — **a `data-` attribute in generated markup declares an element.**
+  `arena_band.js` builds its purchase confirm dialog as a string -
+  `'<button … data-ab-c-buy>'` - and queries `[data-ab-c-buy]` four times. The
+  generated-markup reader looked for `id=` and `class=` in those strings and not for
+  `data-`, so thirteen live hooks read as elements nothing renders. Acting on them would
+  have broken the arena's push-purchase dialog.
+- **Fixed** — **a project's own wrapper around the client is still the client.**
+  `safe_set(r, "store:current_period", value, ex=3600)` is a SET, and the lens saw a plain
+  function call with a string in it. Learned from the wrapper's BODY, never its name: a
+  function is a Redis command when its first parameter is client-shaped and its body calls
+  `<that parameter>.<command>(<another parameter>)`. `def set_the_table(guests, key):
+  guests.append(key)` is not - `append` is a Redis command and also what every list does,
+  which is exactly the trap the body rule avoids. Eleven keys the wrapper hid went from
+  claimed to connected.
+- **Fixed** — **an alias is not another client.** The "touched through more than one
+  client" check compares receiver NAMES, and a wrapper is called `r` in one module,
+  `redis_client` in another and `cache` in a third. Feeding it three names for one
+  connection turned eleven correct keys uncertain - the same mistake the pipeline change
+  had to undo a day earlier, in a second place.
+
+  Measured on the reference project: claims **3,646 → 3,531**, non-connected
+  **7,230 → 6,904**, Redis keys seen **240 → 260** with connected **44 → 59**, and
+  `showLostStreakBuyBackButton` now reads *"22 lines, check first"* instead of *"22 lines
+  unreachable"*.
+
+  **Checked and left alone:** the report asks for `store:current_period` to resolve,
+  saying the read is behind a variable. Every literal mention of that key in the project
+  is a write, a delete, or membership of a health-check list - there is no read of it
+  anywhere - so `written and never read` is the honest answer and it stays.
 
 ## 0.10.0 — 4 Sep 2026
 

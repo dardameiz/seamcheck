@@ -232,8 +232,50 @@ def _pipeline_names(tree: ast.AST) -> dict[str, str]:
     return found
 
 
+def _wrappers_in(tree: ast.AST) -> dict[str, tuple[int, str]]:
+    """`def safe_set(r, key, ...)` whose body calls `r.set(key, ...)`.
+
+    Returns name -> (which argument is the key, which command it is). Read from the body:
+    the first parameter has to be the receiver of the call, and the key argument has to be
+    the parameter the call passes first. That is a thin wrapper, and it is how a codebase
+    that has ever hit a WRONGTYPE writes every Redis line it has.
+    """
+    found: dict[str, tuple[int, str]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        params = [a.arg for a in node.args.args]
+        if len(params) < 2:
+            continue
+        client = params[0]
+        # ...and the receiver has to LOOK like a client. `append` is a Redis command and
+        # also what every list does, so `def set_the_table(guests, key): guests.append(
+        # key)` reads as a wrapper for APPEND without this. Two independent signals: the
+        # parameter is client-shaped here, and the argument is client-shaped at the call.
+        if not _RECEIVER.search(client):
+            continue
+        for inner in ast.walk(node):
+            if not isinstance(inner, ast.Call) or not isinstance(inner.func, ast.Attribute):
+                continue
+            method = inner.func.attr
+            if method not in _ALL or not inner.args:
+                continue
+            if not (isinstance(inner.func.value, ast.Name) and inner.func.value.id == client):
+                continue
+            first = inner.args[0]
+            if isinstance(first, ast.Name) and first.id in params[1:]:
+                found[node.name] = (params.index(first.id), method)
+                break
+    return found
+
+
 def _scan_python(root: str) -> list[_Hit]:
     hits: list[_Hit] = []
+    # name -> (key argument index, command), and the call sites waiting for it: a wrapper
+    # is usually defined in one module and called from forty others, so the table cannot
+    # be complete until every file has been read.
+    wrappers: dict[str, tuple[int, str]] = {}
+    pending: list[tuple] = []
     for here, subdirectories, names in os.walk(root):
         subdirectories[:] = [
             d for d in subdirectories if d not in _PY_SKIP and not d.startswith(".")
@@ -250,7 +292,16 @@ def _scan_python(root: str) -> list[_Hit]:
             rel = os.path.relpath(path, root)
             owners = owners_of(tree)
             pipelines = _pipeline_names(tree)
+            wrappers.update(_wrappers_in(tree))
             for node in ast.walk(tree):
+                # `safe_set(r, "key", ...)` - a plain call, whose first argument is a
+                # client and whose key is a literal. Resolved after every file is read.
+                if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                        and len(node.args) >= 2
+                        and isinstance(node.args[0], ast.Name)
+                        and _RECEIVER.search(node.args[0].id)):
+                    pending.append((node.func.id, node, rel, owners.get(node.lineno, ""),
+                                    node.args[0].id))
                 if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
                     continue
                 method = node.func.attr
@@ -275,6 +326,29 @@ def _scan_python(root: str) -> list[_Hit]:
                     method in _WRITES, ttl, receiver, method, nx,
                     owners.get(node.lineno, ""),
                 ))
+
+    for name, node, rel, owner, _client in pending:
+        known = wrappers.get(name)
+        if not known:
+            continue
+        index, method = known
+        if index >= len(node.args):
+            continue
+        pattern = _py_pattern(node.args[index])
+        if not pattern or not _looks_like_key(pattern):
+            continue
+        ttl = any(k.arg in _TTL_KWARGS for k in node.keywords if k.arg) or \
+            method in ("setex", "psetex", "expire", "pexpire")
+        nx = method == "setnx" or any(k.arg == "nx" for k in node.keywords)
+        hits.append(_Hit(
+            # No receiver. The caller's name for the client - `r` here, `redis_client`
+            # there, `cache` in the third module - says nothing about WHICH connection it
+            # is, and the "touched through more than one client" check compares names.
+            # Feeding it three aliases for one client turned eleven correct keys
+            # uncertain, which is the same mistake the pipeline fix had to undo.
+            _normalise(pattern), pattern, rel, node.lineno,
+            method in _WRITES, ttl, "", method, nx, owner,
+        ))
     return hits
 
 
