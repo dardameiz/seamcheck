@@ -1481,10 +1481,16 @@ let funcFilter = null, funcHops = 1, _funcIndex = null, _funcLoading = null;
 // Which aggregate card a reader has opened, if any. One at a time: opening a second while
 // the first is out would put 18,000 cards on the canvas. Declared with the other filters
 // because the filter notice reads it, and that runs long before the canvas does.
-let expandedKind = null;
+// The groups a reader has opened. A SET, not one key: opening a second group used to
+// close the first, so a wire into `user:*` and a wire into `leaderboard:*` could never be
+// on screen together - and nothing said the first had closed. Independent toggles, and
+// every card says whether it is open.
+const openGroups = new Set();
 // Where an opened kind's window starts. A kind with 2,000 members opens 500 at a time -
 // the cap used to cut silently at 2,000 and the reader never learned what was missing.
-let expandedFrom = 0;
+// Which window each open group is showing. Per group, because two groups can be open and
+// paging one must not move the other.
+const groupPage = new Map();
 const EXPAND_PAGE = 500;
 
 // A section is a lens on the same canvas, not a different page. The list of rows is the
@@ -1932,8 +1938,11 @@ function markFiltered() {
   if (layer) bits.push((LAYERS.find(([k]) => k === layer) || [, layer])[1]);
   if (statusFilter.size) bits.push([...statusFilter].join(" + "));
   if (fileFilter) bits.push(fileFilter.split("/").pop());
-  if (expandedKind) bits.push("opened " + expandedKind.replace(/_/g, " ").replace(/\/(.+)$/, " $1:*")
-    .replace(/\/$/, " other"));
+  if (openGroups.size > 1) bits.push(openGroups.size + " groups open");
+  else if (openGroups.size === 1) {
+    bits.push("opened " + [...openGroups][0].replace(/_/g, " ")
+      .replace(/\/(.+)$/, " $1:*").replace(/\/$/, " other"));
+  }
   note.hidden = bits.length === 0;
   if (!bits.length) return;
   note.innerHTML = `<span>${esc(bits.join(" \u00b7 "))}</span>` +
@@ -1945,7 +1954,8 @@ function markFiltered() {
     statusFilter.clear();
     layer = "";
     fileFilter = null;
-    expandedKind = null;
+    openGroups.clear();
+    groupPage.clear();
     const picker = document.getElementById("ly");
     if (picker) picker.value = "";
     pageOnLayer = null;
@@ -2421,7 +2431,7 @@ function place(buckets, used, perRow) {
       // page at once - 2,000 cards and every wire between them, the wall this card exists
       // to prevent. A kind is open only when it is the one the reader tapped.
       // One card standing for many, keyed so a tap opens exactly this card's nodes.
-      const park = (key, name, parked) => {
+      const park = (key, name, parked, isOpen) => {
         // One card per kind never reached the edge; one per namespace does, so the
         // parked cards wrap at the same width the small ones do.
         if (x > 44 && x + BIG_W > 44 + rowWidth) { x = 44; rowTop += tallest + GAP_Y; tallest = 0; }
@@ -2429,10 +2439,13 @@ function place(buckets, used, perRow) {
           .find(st => parked.some(n => n.status === st)) || "connected";
         const open = parked.filter(n => n.status === "unresolved" || n.status === "unused").length;
         aggregates.push({kind, key, label: name, x, y: rowTop, w: BIG_W, h: BIG_H,
-                         count: parked.length, open, status: worst});
+                         count: parked.length, open, status: worst, isOpen: !!isOpen});
         // Every node in the kind is parked on the card, so edges still land somewhere
-        // truthful and the chain a reader lights still reaches the right region.
-        parked.forEach(n => pos.set(n.id, {x, y: rowTop, w: BIG_W, h: BIG_H, agg: true}));
+        // truthful and the chain a reader lights still reaches the right region. An OPEN
+        // group's cards are drawn for real, so its card is a header and a way to close.
+        if (!isOpen) {
+          parked.forEach(n => pos.set(n.id, {x, y: rowTop, w: BIG_W, h: BIG_H, agg: true}));
+        }
         x += BIG_W + GAP_X;
         tallest = Math.max(tallest, BIG_H);
       };
@@ -2454,26 +2467,43 @@ function place(buckets, used, perRow) {
           return false;
         }).sort((a, b) => b[1].length - a[1].length);
         if (other.length) segs.push(["", other]);
-        let opened = null;
+        // Every open segment is laid out, one after another. One `opened` variable here
+        // was the whole bug: the last one won and the rest silently closed.
+        const opened = [];
         segs.forEach(([seg, parked]) => {
           const key = `${kind}/${seg}`;
-          if (expandedKind === key) { opened = parked; return; }
-          park(key, seg ? `${seg}:* ${label.toLowerCase()}` : `other ${label.toLowerCase()}`, parked);
+          const name = seg ? `${seg}:* ${label.toLowerCase()}` : `other ${label.toLowerCase()}`;
+          if (openGroups.has(key)) { opened.push([key, name, parked]); return; }
+          park(key, name, parked);
         });
-        if (!opened) return;
-        items = opened;
-        if (x > 44) { x = 44; rowTop += tallest + GAP_Y; tallest = 0; }
-      } else if (items.length > AGGREGATE_OVER && expandedKind !== kind) {
+        if (!opened.length) return;
+        opened.forEach(([key, name, parked]) => {
+          if (x > 44) { x = 44; rowTop += tallest + GAP_Y; tallest = 0; }
+          // A card that says "open - tap to close". Without it an opened group has no
+          // card at all, and the only way to close it was to open a different one.
+          park(key, name, parked, true);
+          layoutOpen(key, parked);
+        });
+        return;
+      } else if (items.length > AGGREGATE_OVER && !openGroups.has(kind)) {
         park(kind, label, items);
         return;
+      } else if (items.length > AGGREGATE_OVER) {
+        park(kind, label, items, true);
       }
+      layoutOpen(kind, items);
+      return;
+    };
+
+    // One open group's cards, and the "more" card that holds the rest of its window.
+    const layoutOpen = (openKey, items) => {
       // An opened kind shows one window of EXPAND_PAGE cards; the rest are parked on a
       // "more" card at the end, which is where their wires land and what the reader taps
       // to see the next window. Nothing is cut without a card that says so.
       let shown = items, rest = [];
-      const openKey = segmented ? expandedKind : kind;
-      if (expandedKind === openKey && items.length > EXPAND_PAGE) {
-        const from = Math.min(expandedFrom, items.length - 1);
+      const kind = openKey.split("/")[0];
+      if (items.length > EXPAND_PAGE) {
+        const from = Math.min(groupPage.get(openKey) || 0, items.length - 1);
         shown = items.slice(from, from + EXPAND_PAGE);
         rest = items.slice(0, from).concat(items.slice(from + EXPAND_PAGE));
       }
@@ -2485,9 +2515,10 @@ function place(buckets, used, perRow) {
       let rows = Math.ceil(shown.length / perRow);
       if (rest.length) {
         const my = rowTop + rows * (CARD_H + GAP_Y);
-        aggregates.push({kind, key: openKey, label, x, y: my, w: BIG_W, h: BIG_H, more: true,
-                         count: rest.length, open: 0, status: "connected",
-                         from: Math.min(expandedFrom, items.length - 1), total: items.length});
+        aggregates.push({kind, key: openKey, label: openKey, x, y: my, w: BIG_W, h: BIG_H,
+                         more: true, count: rest.length, open: 0, status: "connected",
+                         from: Math.min(groupPage.get(openKey) || 0, items.length - 1),
+                         total: items.length});
         rest.forEach(n => pos.set(n.id, {x, y: my, w: BIG_W, h: BIG_H, agg: true}));
         rows += 1;
         tallest = Math.max(tallest, rows * (CARD_H + GAP_Y) - GAP_Y + (BIG_H - CARD_H));
@@ -3019,7 +3050,9 @@ function layoutKey() {
   // cache keyed on less than its function reads is a cache that lies.
   return [current, mode, focus, fileFilter, funcFilter || "", funcHops,
           only, isolate ? lit : "", asList,
-          layer, pageOnLayer === null ? "" : pageOnLayer, expandedKind || "", expandedFrom,
+          layer, pageOnLayer === null ? "" : pageOnLayer,
+          [...openGroups].sort().join("|"),
+          [...groupPage].map(([k, v]) => `${k}=${v}`).sort().join("|"),
           [...statusFilter].sort().join(",")].join("\u0000");
 }
 
@@ -3363,14 +3396,22 @@ function draw() {
       </g>`);
       return;
     }
-    out.push(`<g class="nd agg st-${esc(g.status)}" data-kind="${esc(g.kind)}" data-key="${esc(g.key)}">
+    // Which state it is in, on the card. A group that reads the same open and closed
+    // leaves a reader guessing at what a tap did - and an open group used to have no card
+    // at all, so the only way to close it was to open another one, which closed this one.
+    const state = g.isOpen ? "open · tap to close"
+      : (g.open ? g.open.toLocaleString() + " to look at · tap to open" : "tap to open");
+    out.push(`<g class="nd agg st-${esc(g.status)}${g.isOpen ? " opened" : ""}"
+                data-kind="${esc(g.kind)}" data-key="${esc(g.key)}">
       <rect x="${g.x}" y="${g.y}" width="${g.w}" height="${g.h}" rx="${NODE_R}"
-            fill="${F[g.status] || "var(--panel)"}" stroke="${S[g.status] || "var(--dim)"}"
-            stroke-width="2"/>
-      <title>${esc(g.count.toLocaleString())} ${esc(g.label.toLowerCase())} — tap to open</title>
+            fill="${g.isOpen ? "transparent" : (F[g.status] || "var(--panel)")}"
+            stroke="${S[g.status] || "var(--dim)"}"
+            stroke-width="2"${g.isOpen ? ' stroke-dasharray="2 5"' : ""}/>
+      <title>${esc(g.count.toLocaleString())} ${esc(g.label.toLowerCase())} — ${
+        g.isOpen ? "open, tap to close" : "tap to open"}</title>
       <text class="big" x="${g.x + 14}" y="${g.y + 27}">${g.count.toLocaleString()}</text>
-      <text class="sub" x="${g.x + 14}" y="${g.y + 45}">${esc(g.label.toLowerCase())}${
-        g.open ? " · " + g.open.toLocaleString() + " to look at" : ""}</text>
+      <text class="sub" x="${g.x + 14}" y="${g.y + 45}">${esc(g.label.toLowerCase())}</text>
+      <text class="sub" x="${g.x + 14}" y="${g.y + 61}">${state}</text>
     </g>`);
   });
 
@@ -3444,13 +3485,18 @@ svg.addEventListener("click", e => {
   const agg = e.target.closest && e.target.closest(".nd.agg");
   if (agg) {
     e.stopPropagation();
+    const key = agg.dataset.key;
     if (agg.dataset.more) {
-      // Next window of the open kind; past the end, wrap to the first.
-      expandedFrom += EXPAND_PAGE;
-      if (expandedFrom >= Number(agg.dataset.total)) expandedFrom = 0;
+      // Next window of THIS group; past the end, wrap to the first. Per group, so paging
+      // one open namespace does not move another.
+      const next = (groupPage.get(key) || 0) + EXPAND_PAGE;
+      groupPage.set(key, next >= Number(agg.dataset.total) ? 0 : next);
+    } else if (openGroups.has(key)) {
+      openGroups.delete(key);
+      groupPage.delete(key);
     } else {
-      expandedKind = expandedKind === agg.dataset.key ? null : agg.dataset.key;
-      expandedFrom = 0;
+      openGroups.add(key);
+      groupPage.set(key, 0);
     }
     _layout.key = null;
     draw();

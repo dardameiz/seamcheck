@@ -1127,6 +1127,8 @@ class StoreLayerInTheBrowser(SimpleTestCase):
                 "drawn: document.querySelectorAll('#cv .nd:not(.agg)').length," \
                 "aggs: [...document.querySelectorAll('#cv .nd.agg')].map(g =>" \
                 "  [g.dataset.key, g.querySelector('.big').textContent])," \
+                "openCards: [...document.querySelectorAll('#cv .nd.agg.opened')]" \
+                "  .map(g => g.dataset.key)," \
                 "labels: [...document.querySelectorAll('#cv .nd:not(.agg) .lbl, #cv .nd:not(.agg) text')]" \
                 "  .map(t => t.textContent)})"
             page.select_option("#ly", "redis")
@@ -1172,13 +1174,79 @@ class StoreLayerInTheBrowser(SimpleTestCase):
         self.assertEqual(narrowed["aggs"], [])
         self.assertEqual(narrowed["drawn"], 6)
         self.assertEqual(narrowed["pages"][0], "Every page — 37 nodes", "the whole store's count holds")
-        # Opening user:* lays out its thirty keys and leaves the other namespaces parked.
+        # Opening user:* lays out its thirty keys and leaves the other namespaces parked -
+        # and the opened namespace keeps a card of its own, because a group with no card
+        # can only be closed by opening a different one, which is how two wires into two
+        # namespaces could never be seen at the same time.
         self.assertEqual(opened["drawn"], 30)
-        self.assertEqual(dict(opened["aggs"]), {"redis_key/leaderboard": "3", "redis_key/": "4"})
+        self.assertEqual(dict(opened["aggs"]), {"redis_key/user": "30",
+                                                "redis_key/leaderboard": "3",
+                                                "redis_key/": "4"})
+        self.assertEqual(opened["openCards"], ["redis_key/user"],
+                         "the open group says so on its card")
         self.assertEqual([b[0] for b in sheet], ["Arena · /arena/ › arena-main", "Home · / › home-main"])
         # The jump lands on the page, with the layer off and the picker back.
         self.assertEqual(landed, {"page": "arena-main", "layer": "", "pickerShown": True,
                                   "picked": str(sheet[0][1])})
+
+
+    def test_two_groups_can_be_open_at_once(self):
+        """Opening a second group used to close the first, silently.
+
+        The owner's words: "when I collapse one container or open one container, the other
+        collapses, so sometimes I cannot see the big picture" - one wire ran into one
+        namespace and another into a different one, and the two could never be on screen
+        together. The only way through was "Show only this chain", which answers a
+        different question.
+        """
+        from playwright.sync_api import sync_playwright
+
+        errors: list[str] = []
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch()
+            except Exception as error:  # pragma: no cover - no browser downloaded
+                raise unittest.SkipTest(f"no chromium: {error}") from None
+            page = browser.new_page()
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.goto(page_url := self._url(), wait_until="load")
+            page.wait_for_timeout(250)
+            _open_lens(page, "map")
+            page.wait_for_timeout(200)
+            page.select_option("#ly", "redis")
+            page.wait_for_function("() => !!PAGES[currentPageIndex()].nodes")
+            page.wait_for_timeout(250)
+
+            def tap(key):
+                page.evaluate("""(key) => {
+                    const card = [...document.querySelectorAll('#cv .nd.agg')]
+                        .find(g => g.dataset.key === key);
+                    card.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+                }""", key)
+                page.wait_for_timeout(200)
+
+            def state():
+                return page.evaluate("""() => ({
+                    open: [...document.querySelectorAll('#cv .nd.agg.opened')]
+                        .map(g => g.dataset.key).sort(),
+                    drawn: document.querySelectorAll('#cv .nd:not(.agg)').length,
+                })""")
+
+            tap("redis_key/user")
+            one = state()
+            tap("redis_key/leaderboard")
+            both = state()
+            tap("redis_key/user")
+            closed_one = state()
+            browser.close()
+
+        self.assertEqual(errors, [], page_url)
+        self.assertEqual(one["open"], ["redis_key/user"])
+        # The second stays open WITH the first - the whole point.
+        self.assertEqual(both["open"], ["redis_key/leaderboard", "redis_key/user"])
+        self.assertGreater(both["drawn"], one["drawn"], "both namespaces are laid out")
+        # ...and tapping an open one closes only itself.
+        self.assertEqual(closed_one["open"], ["redis_key/leaderboard"])
 
     def test_the_shared_layer_holds_what_two_pages_reach_and_the_card_says_so(self):
         from playwright.sync_api import sync_playwright
