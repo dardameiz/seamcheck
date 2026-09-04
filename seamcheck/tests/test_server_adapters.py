@@ -101,3 +101,33 @@ class ServerScanShape(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DataLayerWithoutRoutes(unittest.TestCase):
+    """A Django app with no ROOT_URLCONF still has a database.
+
+    `scan` returned an empty ServerScan the moment it could not find a URLconf, so
+    mezzanine - a Django CMS with 24 models - came back with nothing at all: no table,
+    no column, no query. The reasoning behind that early return is about routes, and it
+    was quietly deciding the data layer too.
+    """
+
+    def test_the_tables_are_read_even_with_no_urlconf(self):
+        root = _repo(**{
+            "app__models.py": (
+                "from django.db import models\n\n"
+                "class Page(models.Model):\n"
+                "    title = models.CharField(max_length=50)\n"
+            ),
+            "app__views.py": (
+                "from app.models import Page\n\n"
+                "def show():\n"
+                "    return Page.objects.filter(title='x')\n"
+            ),
+        })
+
+        scan = DjangoAdapter().scan(root, {}, null())
+
+        self.assertIn("app_page", {s.label for s in scan.symbols if s.kind == "db_table"})
+        self.assertIn("app_page.title",
+                      {s.label for s in scan.symbols if s.kind == "db_column_use"})

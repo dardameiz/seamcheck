@@ -315,7 +315,7 @@ UNREACHED_PAGE = "unreached"
 UNREACHED_GROUPS: tuple[tuple[str, str, frozenset[str]], ...] = (
     ("backend", "Reached by the framework, never by a browser page — routes, handlers, "
                 "models, signal receivers",
-     frozenset({"url", "view", "model", "admin_action", "signal_receiver",
+     frozenset({"url", "view", "admin_action", "signal_receiver",
                 "template_tag", "management_command"})),
     ("js", "JavaScript that no page's bundle imports",
      frozenset({"js_call", "fetch_target", "dom_selector", "multi_writer_element", "module"})),

@@ -16,7 +16,6 @@ What it cannot see is what no reader of text could - routes Django generates at 
 
 from __future__ import annotations
 
-import contextlib
 import os
 import pathlib
 
@@ -24,7 +23,7 @@ from seamcheck.adapters.base import ServerScan
 from seamcheck.adapters.discovery import root_urlconf
 from seamcheck.extractors.asgi_extractor import extract_asgi_routes
 from seamcheck.extractors.django_extractor import extract_django_urls_views, route_name_index
-from seamcheck.extractors.django_models_extractor import extract_django_models
+from seamcheck.extractors.django_orm_extractor import extract_django_orm
 from seamcheck.extractors.django_static_extractor import extract_urls_views_static
 from seamcheck.nodetools import report
 
@@ -71,9 +70,14 @@ class DjangoAdapter:
     def scan(self, repo_root: str, config: dict, progress) -> ServerScan:
         urlconf = config.get("urlconf_module") or root_urlconf(repo_root)
         if not urlconf:
-            # No URLconf means no routes, and no routes means every fetch would be reported
-            # unresolved. An empty scan says nothing rather than saying something false.
-            return ServerScan()
+            # No URLconf means no routes, and no routes means every fetch would be
+            # reported unresolved. Saying nothing about the routes beats saying something
+            # false about them - but the DATABASE is right there and needs no URLconf to
+            # read. Returning a bare ServerScan() decided that too, and mezzanine, a
+            # Django CMS with 24 models, scanned to nothing at all.
+            progress.step("models")
+            orm_symbols, orm_edges = extract_django_orm(repo_root)
+            return ServerScan(symbols=orm_symbols, edges=orm_edges)
 
         first_party = config.get("first_party_prefixes")
         progress.step("URLs and views")
@@ -113,13 +117,17 @@ class DjangoAdapter:
         if asgi_file and os.path.isfile(asgi_file):
             symbols = symbols + extract_asgi_routes(asgi_file)
 
+        # The tables, their columns, and every queryset that touches one.
+        #
+        # This replaces asking Django's app registry through django-extensions, which
+        # needed an optional dependency, a subprocess and a project that imports cleanly
+        # to return 65 model NAMES, every one `uncertain`, noted "no ORM-usage extractor
+        # yet". Reading the source gives the same models plus the half that was missing -
+        # tables, columns and queries - in a checkout that cannot be imported at all.
         progress.step("models")
-        app_labels = config.get("app_labels")
-        if app_labels:
-            # Same reason as the URLconf above: reading models asks Django's app
-            # registry, which only exists in a project that could be imported.
-            with contextlib.suppress(Exception):
-                symbols = symbols + extract_django_models(app_labels)
+        orm_symbols, orm_edges = extract_django_orm(repo_root)
+        symbols = symbols + orm_symbols
+        edges = edges + orm_edges
 
         from seamcheck.extractors.django_static_extractor import LAST_COVERAGE
 

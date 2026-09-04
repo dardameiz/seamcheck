@@ -361,7 +361,7 @@ class StoreLayers(SimpleTestCase):
             nodes.extend(extra)
             return PageMap(name, nodes, edges, title=title, where=where)
 
-        model = MapNode("model:Score", "Score", "model", "connected", file="m.py", line=3)
+        model = MapNode("db_table:score", "score", "db_table", "connected", file="m.py", line=3)
         arena_a = page("arena-main", "Arena", "/arena/", ["user:1:stats", "leaderboard:hourly"], [model])
         arena_b = page("arena-side", "Arena", "/arena/", ["user:1:stats"])
         home = page("home-main", "Home", "/", ["leaderboard:hourly"])
@@ -395,8 +395,8 @@ class StoreLayers(SimpleTestCase):
         # Every key once, including the one no page reaches.
         self.assertEqual(ids, ["redis:leaderboard:hourly", "redis:orphan:key", "redis:user:1:stats"])
         database = self._chunk(out, f"p{names.index('layer:database')}")
-        self.assertEqual([row[0] for row in database["nodes"]], ["model:Score"],
-                         "a Django model is the database")
+        self.assertEqual([row[0] for row in database["nodes"]], ["db_table:score"],
+                         "a Django table is the database")
 
     def test_a_layer_node_lists_the_ordinary_pages_that_hold_it(self):
         meta, out = self._render()

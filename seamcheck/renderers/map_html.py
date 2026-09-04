@@ -43,7 +43,6 @@ _COLUMNS = [
     # state: every Celery task, every Stripe event, every GraphQL field, every background
     # job and every model was being filed under "everything else the scan found" while
     # BANDS said otherwise. Adding the store band is what made it visible.
-    ("model", "Model"),
     ("url_reference", "Link"),
     ("signal_receiver", "Signal"),
     ("admin_action", "Admin action"),
@@ -1259,7 +1258,7 @@ const BANDS = [
    kinds: ["fetch_target", "json_field"]},
   {id: "server", label: "THE SERVER \u2014 WHAT RUNS WHEN THE REQUEST LANDS",
    short: "THE SERVER",
-   kinds: ["url", "view", "model", "signal_receiver", "admin_action", "template_tag",
+   kinds: ["url", "view", "signal_receiver", "admin_action", "template_tag",
            "url_reference", "management_command"]},
   // The second seam. A request crosses the network and lands on a route; a query crosses
   // another boundary and lands on a table. Same disease, next boundary down - and every
@@ -1499,7 +1498,7 @@ const SECTION_KINDS = {
   map: null,
   boundary: new Set(["module", "js_call", "fetch_target", "url", "view", "json_field"]),
   dom: new Set(["dom_attr", "dom_selector", "multi_writer_element"]),
-  backend: new Set(["url", "view", "model", "admin_action", "signal_receiver",
+  backend: new Set(["url", "view", "admin_action", "signal_receiver",
                     "template_tag", "management_command"]),
   css: new Set(["css_selector", "css_token_def", "css_token_use"]),
   integrations: new Set(["stripe_webhook", "stripe_event", "celery_task",
@@ -1536,8 +1535,7 @@ const LAYER_KINDS = {
   // database" is not a question anyone asks; "show me Redis" is, and the two answer to
   // completely different failure modes - a mistyped column returns a row without it, a
   // mistyped Redis key returns nothing at all and nobody notices.
-  // `model` is the database too: a Django project's Postgres is invisible without it.
-  database: new Set(["model", "db_table", "db_column", "db_function", "db_policy",
+  database: new Set(["db_table", "db_column", "db_function", "db_policy",
                      "db_table_use", "db_column_use", "db_function_use",
                      "edge_function", "edge_function_use", "storage_bucket",
                      "firestore_collection", "firestore_rule",
@@ -2266,7 +2264,7 @@ const HOP_WORD = {
 // The second line of a card, in a reader's words rather than the extractor's.
 const KIND_WORD = {
   page: "page", module: "source file", js_call: "fetch call",
-  fetch_target: "request", url: "route", view: "handler", model: "model",
+  fetch_target: "request", url: "route", view: "handler",
   dom_selector: "selector in js", dom_attr: "element in a template",
   multi_writer_element: "written by more than one file",
   dead_region: "code that never runs",
@@ -3075,7 +3073,7 @@ function layoutFor(p) {
 // one row is the difference between a cache read and a connection out of a pool of 45.
 const COST_LANES = [
   ["Redis", new Set(["redis_key_use", "redis_key", "redis_ttl"])],
-  ["Postgres", new Set(["db_table_use", "db_column_use", "db_function_use", "model",
+  ["Postgres", new Set(["db_table_use", "db_column_use", "db_function_use",
                         "db_table", "db_column"])],
   ["Celery", new Set(["celery_task", "celery_schedule", "job_enqueue", "job_schedule"])],
   ["HTTP out", new Set(["js_call", "fetch_target"])],
@@ -5369,8 +5367,7 @@ _SERVICE_LAYERS = (
     # A store is not on a page either: `user:{id}:stats` is touched from the arena, the
     # leaderboard and a worker, and the question "show me Redis" wants all of it, with
     # the key nothing touches - which sits in a not-reached bucket - on the same canvas.
-    # `model` belongs to the database: a Django project's Postgres is invisible without it.
-    ("database", "Database", ("model", "db_table", "db_column", "db_function", "db_policy",
+    ("database", "Database", ("db_table", "db_column", "db_function", "db_policy",
                               "db_table_use", "db_column_use", "db_function_use",
                               "edge_function", "edge_function_use", "storage_bucket",
                               "firestore_collection", "firestore_rule",

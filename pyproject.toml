@@ -54,8 +54,6 @@ dependencies = []
 # Only for scanning a Django project, and only when the project does not already provide
 # it - which it almost always does, since seamcheck runs inside its virtualenv.
 django = ["django>=4.2"]
-# Model extraction shells out to django-extensions' graph_models --json.
-models = ["django-extensions>=4.0"]
 # Exposes the scan to an agent over MCP.
 mcp = ["mcp>=1.0"]
 # Bundles a Node runtime so `pip install` alone is enough on a machine without one

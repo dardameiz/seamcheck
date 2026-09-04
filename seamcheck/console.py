@@ -25,7 +25,7 @@ from seamcheck.report import Report
 # listed four findings underneath, because every db_* kind fell outside both sets. Any
 # kind added to a band belongs here too.
 BACKEND_KINDS = (
-    "url", "view", "model", "signal_receiver", "admin_action", "template_tag",
+    "url", "view", "signal_receiver", "admin_action", "template_tag",
     "url_reference", "management_command",
 )
 FRONTEND_KINDS = (
@@ -177,9 +177,15 @@ def build_console(graph: Graph, report: Report) -> Console:
         ),
         Section(
             "backend", _backend_title(graph),
-            "Routes, handlers, models, and the entry points the framework calls without "
-            "an HTTP request: signals, admin actions, template tags.",
-            rows=_rows(graph, ("url", "view", "model", "signal_receiver", "admin_action", "template_tag")),
+            "Routes, handlers, and the entry points the framework calls without an HTTP "
+            "request: signals, admin actions, template tags.",
+            rows=_rows(graph, ("url", "view", "signal_receiver", "admin_action", "template_tag")),
+        ),
+        Section(
+            "data", "Data Layer",
+            "The tables, keys and columns this project stores things in, and every place "
+            "in the code that reads or writes one.",
+            rows=_rows(graph, STORE_KINDS),
         ),
         Section(
             "css", "CSS & Tokens",

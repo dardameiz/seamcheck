@@ -19,6 +19,63 @@ backend that answered `uncertain` everywhere would score 100% precision and be u
 
 ## Unreleased
 
+### The Postgres half of a Django project, which did not exist
+
+A Django scan knew 65 model NAMES on the reference project and nothing else - every one
+`uncertain`, noted "no ORM-usage extractor yet". No table, no column, no query. So the
+one question a data layer is for - *which table does this page read, and where* - could
+not be asked at all on the stack this tool is built for.
+
+It is read from the source now, so a checkout that cannot be imported gets the same
+answer as a project that can. Across the corpus: **1,817 tables and 164,331 queries that
+were not there before.**
+
+- **Added** — `db_table` / `db_column` for every model, and `db_table_use` /
+  `db_column_use` for every queryset that touches one. `Meta.db_table` and `Meta.app_label`
+  where set, Django's `<app>_<model>` otherwise; a ForeignKey stored as `<name>_id` and
+  answering to `user`, `user_id` and `pk`; proxy, abstract and multi-table inheritance;
+  `cls.objects` inside a model's own classmethod; the far end of every relation; and
+  django-modeltranslation's per-language columns.
+- **Added** — a **Data Layer** section in the terminal report. Tables, keys and columns
+  had no section at all: they appeared only if something was already wrong with them.
+- **Added** — `tables`, `queries` and `badcol` columns to the corpus gate. The lens
+  landed on 17 Django repositories and every total held steady, because every column
+  counted routes. **A lens no column watches is a lens that can regress silently** - and
+  the first run of those three columns reported 17,080 missing-column claims where the
+  reference project produced 5.
+- **Fixed** — **a Django app with no ROOT_URLCONF scanned to nothing at all.** `scan`
+  returned an empty result the moment it could not find a URLconf; the reasoning is about
+  routes and it was quietly deciding the database too. mezzanine, a CMS with 24 models,
+  came back empty. It reads the data layer either way now.
+- **Removed** — the model extractor that shelled out to django-extensions'
+  `graph_models`. It needed an optional dependency, a subprocess and a project that
+  imports cleanly to return names alone. `pip install 'seamcheck[models]'` is gone with
+  it; nothing optional is needed for the data layer now.
+
+**Every claim it makes is one Django would raise on.** The first run said 17,080 columns
+were missing across the corpus and 744 on the reference project; **every one was wrong**,
+in eleven distinct ways, each now a test:
+
+| what it read wrong | what Django actually does |
+|---|---|
+| `filter(user=…)` | a relation answers to its own name, not only `user_id` |
+| `filter(id=…)`, `filter(pk=…)` | every model gets an `id` it never declares |
+| `order_by("-created")` | the `-` is a direction, and `"?"` is a shuffle |
+| `aggregate(total=Sum(…))` | the alias is the name of the RESULT, not a column |
+| `get_or_create(defaults={…})` | `defaults` is how the call works |
+| `dates("created", "day")` | the second argument is the granularity |
+| `type: models.Field[…] = …` | an annotated assignment is still a field |
+| `FlexibleForeignKey(…)` | half the ecosystem ships its own relation fields |
+| `create(url=…)` on a @property | Django pops it and swallows the missing setter |
+| `apps.get_model(…)` in a test | that is the model at one migration, not this class |
+| a base class from a package | it may declare any number of columns |
+
+The last one is the rule under all of them: **a model this could not fully read never
+claims a missing column.** Across 34 repositories, 1,817 tables and 164,331 queries, one
+claim survives - a field renamed by a migration that a fixture command still passes, and
+it is real.
+
+
 From the 0.10.0 report: all 869 findings on two surfaces of the reference project
 re-adjudicated against this release, every REAL verified against the running page before
 anything was touched. The new `dead_region` lens deleted 161 lines that four hand passes

@@ -30,7 +30,7 @@ def _graph():
         symbols=[
             _symbol("url:a", "url"),
             _symbol("view:a", "view"),
-            _symbol("model:a", "model"),
+            _symbol("db_table:a", "db_table"),
             _symbol("fetch:/x/", "fetch_target", Status.UNRESOLVED),
             _symbol("dom_attr:z", "dom_attr", Status.UNUSED),
         ],
@@ -45,12 +45,16 @@ class ConsoleShapeTests(SimpleTestCase):
     def test_it_has_every_section_the_spec_names(self):
         keys = [s.key for s in self.console.sections]
 
-        for expected in ("changes", "boundary", "dom", "backend", "css", "findings"):
+        for expected in ("changes", "boundary", "dom", "backend", "data", "css",
+                         "findings"):
             self.assertIn(expected, keys)
 
     def test_backend_and_frontend_are_counted_separately(self):
-        self.assertEqual(sum(self.console.backend.values()), 3)
+        # `db_table` is a store kind, not a backend one - the database is its own region
+        # of the map, and counting it as backend would double-count it.
+        self.assertEqual(sum(self.console.backend.values()), 2)
         self.assertEqual(sum(self.console.frontend.values()), 2)
+        self.assertEqual(sum(self.console.store.values()), 1)
 
     def test_no_section_opens_onto_an_apology(self):
         # Integrations and File Health used to ship as nav items that said "not
@@ -64,10 +68,10 @@ class ConsoleShapeTests(SimpleTestCase):
 
         self.assertEqual([r.status for r in findings.rows], ["unresolved", "unused"])
 
-    def test_backend_internals_includes_models(self):
-        django = next(s for s in self.console.sections if s.key == "backend")
+    def test_the_database_has_its_own_section(self):
+        data = next(s for s in self.console.sections if s.key == "data")
 
-        self.assertIn("model", {r.kind for r in django.rows})
+        self.assertIn("db_table", {r.kind for r in data.rows})
 
 
 class BackendSectionTitleTests(SimpleTestCase):
