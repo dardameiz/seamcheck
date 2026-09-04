@@ -51,12 +51,23 @@ _READS = frozenset({
     "lpop", "rpop", "blpop", "brpop", "lindex", "rpoplpush",
     "smembers", "sismember", "scard", "zrange", "zrevrange", "zscore", "zcard",
     "lrange", "llen", "ttl", "pttl", "getrange", "sscan", "hscan", "type",
+    # Found by checking the Lua paths against the source: `HINCRBY` was a write and
+    # `HINCRBYFLOAT` on the next line was not a command at all. Same for the sorted-set
+    # ranges, which is most of what a leaderboard does.
+    "zrangebyscore", "zrevrangebyscore", "zrank", "zrevrank", "zcount", "zrandmember",
+    "hexists", "hlen", "hrandfield", "srandmember", "sinter", "sunion", "sdiff",
+    "bitcount", "getbit", "strlen", "pfcount", "lpos", "getex", "object", "zdiff",
 })
 _WRITES = frozenset({
     "set", "setex", "setnx", "psetex", "mset", "getset", "hset", "hmset", "hsetnx",
     "hincrby", "incr", "incrby", "decr", "decrby", "expire", "pexpire", "delete", "del",
     "unlink", "sadd", "srem", "zadd", "zrem", "zincrby", "lpush", "rpush",
     "append", "setbit", "publish",
+    "hincrbyfloat", "incrbyfloat", "zremrangebyscore", "zremrangebyrank",
+    "zremrangebylex", "hdel", "lrem", "ltrim", "lset", "linsert", "spop", "setrange",
+    "persist", "pfadd", "rename", "renamenx", "copy", "restore", "touch", "lpushx",
+    "rpushx", "smove", "sinterstore", "sunionstore", "sdiffstore", "zunionstore",
+    "zinterstore", "xadd", "geoadd",
 })
 # A Lua script: the keys it touches are named at the call, the commands it runs are not.
 # `evalsha(sha, 1, WS_CONNECTIONS_KEY)` is how the connection counter is incremented, and
@@ -65,7 +76,9 @@ _SCRIPTS = frozenset({"eval", "evalsha", "eval_ro", "evalsha_ro", "fcall", "fcal
 _ALL = _READS | _WRITES | _SCRIPTS
 # Writes that REMOVE or merely touch, and so can never need an expiry.
 _NOT_STORES = frozenset({"delete", "del", "unlink", "expire", "pexpire", "publish",
-                         "srem", "zrem", "lpop", "rpop"})
+                         "srem", "zrem", "lpop", "rpop", "hdel", "lrem", "ltrim", "spop",
+                         "persist", "zremrangebyscore", "zremrangebyrank",
+                         "zremrangebylex", "touch", "rename", "renamenx"})
 
 # Removing a key, as opposed to storing one. A group made ENTIRELY of these has a writer
 # the scan never saw - you cannot invalidate what nothing wrote.
@@ -129,6 +142,15 @@ def _normalise(pattern: str) -> str:
     out = re.sub(r"%[sdifr]", "*", out)                  # `%s`
     out = re.sub(r"\*+", "*", out)
     return out.strip()
+
+
+def _is_fragment(pattern: str) -> bool:
+    """`":sum"`, `"user:"` - half a name being concatenated, not a key.
+
+    Lua builds hash fields the same way keys are built: `prev_input .. ":sum"`. Reading
+    the suffix as a key produced rows labelled `:sum` whose ids collided with each other.
+    """
+    return pattern.startswith(":") or pattern.endswith(":")
 
 
 def _looks_like_key(pattern: str) -> bool:
@@ -250,24 +272,108 @@ def _pipeline_names(tree: ast.AST) -> dict[str, str]:
 
 
 _LUA_STRING = re.compile(r"""["']([A-Za-z0-9_:.\-{}*]{3,})["']""")
+# `local lb_key = "pps:leaderboard"` and `local user_key = "pps:user:" .. uid`, where the
+# concatenation is the same hole an f-string leaves.
+_LUA_LOCAL = re.compile(
+    r"""local\s+([A-Za-z_]\w*)\s*=\s*["']([^"'\n]+)["'](\s*\.\.\s*\S+)?""")
+# `redis.call("HGET", user_key, ...)` - the command and whatever holds the key.
+_LUA_CALL = re.compile(
+    r"""redis\.(?:call|pcall)\s*\(\s*["'](\w+)["']\s*,\s*([A-Za-z_]\w*|["'][^"'\n]+["'])""")
 
 
-def _lua_keys(tree: ast.AST) -> list[tuple[str, int]]:
-    """(key, line) for every key literal inside an embedded Lua script.
+def _script_runs(tree: ast.AST, owners: dict[int, str]) -> dict[str, list[tuple[int, str]]]:
+    """Constant holding a Lua body -> every (line, function) that runs it.
 
-    `local stats_key = "pps:stats:by_input"` sits in a Python string, and the HINCRBY
-    that uses it is Lua. Nothing outside the script writes the key, so the plain read
-    beside it read as a lookup nothing satisfies.
+    The body is a module-level constant, so without this every key it touches belongs to
+    nobody - and the map's function filter, which is how a reader asks "what does this
+    handler touch", could not reach one of those writes. The script belongs to whoever
+    runs it.
     """
-    found: list[tuple[str, int]] = []
+    found: dict[str, list[tuple[int, str]]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        name = (node.func.attr if isinstance(node.func, ast.Attribute)
+                else getattr(node.func, "id", ""))
+        if name not in _SCRIPTS and name not in ("register_script", "Script"):
+            continue
+        for argument in node.args[:1]:
+            if isinstance(argument, ast.Name):
+                found.setdefault(argument.id, []).append(
+                    (node.lineno, owners.get(node.lineno, "")))
+    return found
+
+
+def _lua_keys(tree: ast.AST, runs: dict[str, list[tuple[int, str]]] | None = None,
+              ) -> list[tuple[str, int, str, str]]:
+    """(key, line, command) for every key an embedded Lua script touches.
+
+    The script is a Python string and its commands are plain text in it:
+    `local lb_key = "pps:leaderboard"` then `redis.call("ZADD", lb_key, …)` says as much
+    about that key as any Python line does. 47 keys on the reference project were known
+    only as "passed to a script" while the script sat right there.
+
+    A key the script only receives as `KEYS[1]` stays unnamed - that one really is
+    decided by the caller.
+    """
+    # A docstring that EXPLAINS a script is not a script. Found by this tool scanning
+    # itself: the docstring above quotes a `local` and a `redis.call`, and the lens read
+    # its own explanation as a Lua body and reported `pps:leaderboard` as a key in this
+    # repository. Prose about code is not code.
+    prose = {
+        id(item.value)
+        for parent in ast.walk(tree)
+        if isinstance(parent, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                               ast.AsyncFunctionDef))
+        for item in parent.body[:1]
+        if isinstance(item, ast.Expr) and isinstance(item.value, ast.Constant)
+    }
+    held: dict[int, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    held[id(node.value)] = target.id
+    found: list[tuple[str, int, str, str]] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
             continue
-        if "redis.call" not in node.value:
+        if id(node) in prose:
             continue
-        for quoted in _LUA_STRING.findall(node.value):
-            if _looks_like_key(quoted):
-                found.append((quoted, node.lineno))
+        body = node.value
+        # Where this script is actually run, if anywhere. A script nobody runs stays
+        # where it is written - there is no better place to put it.
+        sites = (runs or {}).get(held.get(id(node), ""), [])
+        if "redis.call" not in body and "redis.pcall" not in body:
+            continue
+        locals_: dict[str, str] = {}
+        for name, literal, concatenated in _LUA_LOCAL.findall(body):
+            locals_[name] = literal + ("{}" if concatenated else "")
+        named: set[str] = set()
+        for match in _LUA_CALL.finditer(body):
+            command, holder = match.group(1), match.group(2)
+            key = locals_.get(holder) if holder[0] not in "\"'" else holder.strip("\"'")
+            if key and _looks_like_key(key) and not _is_fragment(key):
+                named.add(key)
+                # The whole script is one Python string, so every command in it shared
+                # the string's line number and every map row opened line 1 of it. A path
+                # that points at the wrong line is a path a reader cannot follow.
+                line = node.lineno + body.count("\n", 0, match.start())
+                for at, owner in sites or [(line, "")]:
+                    found.append((key, line if not sites else at, command.lower(), owner))
+        # A key the script DECLARES but never passes to a command: still evidence it is
+        # part of this script's keyspace, and nothing more.
+        #
+        # Declared, not merely quoted. `redis.call("HINCRBY", stats_key, "unknown:n", -1)`
+        # passes a hash FIELD as its third argument, and scooping every quoted string out
+        # of the script turned `unknown:n` and `unknown:sum` into keys of their own.
+        for match in _LUA_LOCAL.finditer(body):
+            declared = match.group(2) + ("{}" if match.group(3) else "")
+            if declared in named or not _looks_like_key(declared) or _is_fragment(declared):
+                continue
+            line = node.lineno + body.count("\n", 0, match.start())
+            for at, owner in sites or [(line, "")]:
+                found.append((declared, line if not sites else at, "eval", owner))
     return found
 
 
@@ -385,16 +491,74 @@ def _script_names(tree: ast.AST) -> set[str]:
     return found
 
 
+def _proxy_classes(tree: ast.AST) -> dict[str, str]:
+    """Classes that forward every attribute to a factory, mapped to that connection.
+
+    `class RedisClient: def __getattr__(self, n): return getattr(get_redis_client(), n)`
+    and then `redis_client = RedisClient()`. Two names for one connection - and the
+    "touched through more than one client" warning fired on 33 keys over that difference.
+    A proxy onto a DIFFERENT factory is a different client, which is the half worth
+    keeping.
+    """
+    found: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        for item in node.body:
+            if not isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if item.name not in ("__getattr__", "__getattribute__"):
+                continue
+            for inner in ast.walk(item):
+                if (isinstance(inner, ast.Call)
+                        and getattr(inner.func, "id", "") == "getattr" and inner.args):
+                    identity = _client_identity(inner.args[0])
+                    if identity:
+                        found[node.name] = identity
+    return found
+
+
+def _proxy_singletons(tree: ast.AST) -> dict[str, str]:
+    """Module-level `x = SomeProxy()`, by the name other modules import it under."""
+    proxies = _proxy_classes(tree)
+    found: dict[str, str] = {}
+    for node in getattr(tree, "body", []):
+        if (isinstance(node, ast.Assign) and isinstance(node.value, ast.Call)
+                and getattr(node.value.func, "id", "") in proxies):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    found[target.id] = proxies[node.value.func.id]
+    return found
+
+
+def _assignment_line(tree: ast.AST, name: str) -> int:
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == name for t in node.targets):
+            return node.lineno
+    return 0
+
+
 def _client_names(tree: ast.AST) -> dict[str, str]:
     """Locals holding a Redis client, mapped to the connection they hold."""
     found: dict[str, str] = {}
+    proxies = _proxy_classes(tree)
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Assign) and isinstance(node.value, ast.Call)
+                and getattr(node.value.func, "id", "") in proxies):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    found[target.id] = proxies[node.value.func.id]
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
             identity = _client_identity(node.value)
             if identity:
                 for target in node.targets:
                     if isinstance(target, ast.Name):
-                        found[target.id] = identity
+                        # setdefault: `redis_client = RedisClient()` reads as a factory
+                        # by name too, and the proxy above already knows which connection
+                        # that class forwards to, which is the more specific answer.
+                        found.setdefault(target.id, identity)
         elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
             identity = _client_identity(node.value)
             if identity:
@@ -406,9 +570,13 @@ def _client_names(tree: ast.AST) -> dict[str, str]:
         elif isinstance(node, ast.ImportFrom):
             # `from app.redis_client import redis_client as _r_ann`: the alias is not
             # client-shaped and the import is the only place its real name appears.
+            # Deferred with `?`, because the imported name is usually a singleton whose
+            # own connection is declared in the module it comes from - taking the name
+            # itself as the identity made `redis_client` and `get_redis_client` two
+            # connections again, on 49 keys.
             for alias in node.names:
                 if alias.asname and _RECEIVER.search(alias.name):
-                    found[alias.asname] = alias.name.lower()
+                    found[alias.asname] = f"?{alias.name}"
     return found
 
 
@@ -456,6 +624,8 @@ def _scan_python(root: str) -> list[_Hit]:
     # be complete until every file has been read.
     wrappers: dict[str, tuple[int, str]] = {}
     pending: list[tuple] = []
+    # Module-level client singletons, which are global names in practice.
+    singletons: dict[str, str] = {}
     for here, subdirectories, names in os.walk(root):
         subdirectories[:] = [
             d for d in subdirectories if d not in _PY_SKIP and not d.startswith(".")
@@ -473,11 +643,20 @@ def _scan_python(root: str) -> list[_Hit]:
             owners = owners_of(tree)
             pipelines = _pipeline_names(tree)
             clients = _client_names(tree)
+            singletons.update({
+                name: identity for name, identity in clients.items()
+                if not owners.get(_assignment_line(tree, name), "")
+            })
+            singletons.update(_proxy_singletons(tree))
             key_names = _key_variables(tree, owners)
             scripts = _script_names(tree)
-            for quoted, line in _lua_keys(tree):
-                hits.append(_Hit(_normalise(quoted), quoted, rel, line,
-                                 False, False, "", "eval", False, owners.get(line, "")))
+            for quoted, line, command, owner in _lua_keys(tree, _script_runs(tree, owners)):
+                hits.append(_Hit(
+                    _normalise(quoted), quoted, rel, line,
+                    command in _WRITES, command in ("setex", "psetex", "expire", "pexpire"),
+                    "", command if command in _ALL else "eval", False,
+                    owner or owners.get(line, ""),
+                ))
             wrappers.update(_wrappers_in(tree))
             for node in ast.walk(tree):
                 # `safe_set(r, "key", ...)` - a plain call, whose first argument is a
@@ -521,11 +700,15 @@ def _scan_python(root: str) -> list[_Hit]:
                     receiver = pipelines[receiver] or receiver
                 if receiver not in clients and not _RECEIVER.search(receiver or ""):
                     continue
-                # The connection it IS, not the name this file gave it - and nothing at
-                # all when this file never sees what made it. An unresolved name is an
-                # unknown connection, not a second one, and comparing one against a
-                # resolved factory warned on 33 keys for no reason.
-                receiver = clients.get(receiver, "")
+                # The connection it IS, not the name this file gave it. A name this file
+                # never sees the source of is asked about again once every file is read -
+                # a lazy proxy (`redis_client = RedisClient()`) is declared in one module
+                # and imported by forty - and is dropped if nothing answers. An unresolved
+                # name is an unknown connection, not a second one, and comparing one
+                # against a resolved factory warned on 33 keys for no reason.
+                receiver = clients.get(receiver) or f"?{receiver}"
+                if receiver.startswith("??"):
+                    receiver = receiver[1:]
                 if method in _SCRIPTS:
                     for element in _script_keys(node):
                         pattern = _py_pattern(element)
@@ -568,6 +751,14 @@ def _scan_python(root: str) -> list[_Hit]:
                     method in _WRITES, ttl, receiver, method, nx,
                     owners.get(node.lineno, ""),
                 ))
+
+    # The names no single file could answer for.
+    for hit in hits:
+        if hit.receiver.startswith("?"):
+            # Two hops at most: an alias for a singleton for a factory.
+            name = singletons.get(hit.receiver[1:], "")
+            hit.receiver = singletons.get(name.lstrip("?"), name) if name.startswith("?") \
+                else name
 
     for name, node, rel, owner, _client in pending:
         known = wrappers.get(name)
@@ -808,6 +999,19 @@ def extract_redis(root: str) -> tuple[list[Symbol], list[Edge]]:
                      "this key and its commands are not in this source, so what it does "
                      "with it cannot be read here.",
             ))
+            # ...and where. Skipping the per-site rows left these keys on the map with no
+            # path to any line at all - the reader could see the key and not one place it
+            # is touched, which is the opposite of what the map is for.
+            for hit in scripted:
+                use_id = f"redis_key_use:{key}:{hit.file}:{hit.line}"
+                symbols.append(Symbol(
+                    id=use_id, kind="redis_key_use", label=key,
+                    sub="runs a script over", file=hit.file, line=hit.line,
+                    status=Status.CONNECTED, snippet=hit.raw, chain=[key], owner=hit.owner,
+                    note="This line hands the key to a Lua script. What the script does "
+                         "with it is decided by the script, not here.",
+                ))
+                edges.append(Edge(use_id, f"redis_key:{key}", Status.CONNECTED))
             continue
         where = writers[0] if writers else readers[0]
 
@@ -923,14 +1127,31 @@ def extract_redis(root: str) -> tuple[list[Symbol], list[Edge]]:
         #
         # Evidence, never a claim: this says a line touches a key, which is not a verdict
         # about anything. The verdict stays on the key symbol, where both halves are known.
+        # One row per key per PLACE. A script with eight commands on one key, run from
+        # one line, produced eight rows sharing a single id - and the row a reader clicks
+        # is a place in the code, not a command inside a string. A write outranks a read
+        # outranks a bare script touch: if the site writes the key at all, that is what
+        # it does.
+        best: dict[tuple[str, int], _Hit] = {}
         for hit in group:
+            rank = 2 if hit.write else 1 if hit.method != "eval" else 0
+            at = (hit.file, hit.line)
+            standing = best.get(at)
+            if standing is None or rank > (
+                    2 if standing.write else 1 if standing.method != "eval" else 0):
+                best[at] = hit
+        for hit in best.values():
             use_id = f"redis_key_use:{key}:{hit.file}:{hit.line}"
             symbols.append(Symbol(
                 id=use_id, kind="redis_key_use", label=key,
-                sub="writes" if hit.write else "reads",
+                sub=("runs a script over" if hit.method == "eval"
+                     else "writes" if hit.write else "reads"),
                 file=hit.file, line=hit.line, status=Status.CONNECTED,
                 snippet=hit.raw, chain=[key], owner=hit.owner,
-                note=("This line " + ("writes" if hit.write else "reads") +
+                note=("This line hands the key to a Lua script; what the script does "
+                      "with it is decided by the script, not here."
+                      if hit.method == "eval" else
+                      "This line " + ("writes" if hit.write else "reads") +
                       " the key. Whether the two halves agree is decided on the key "
                       "itself, not here."),
             ))

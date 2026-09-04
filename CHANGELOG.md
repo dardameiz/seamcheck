@@ -19,6 +19,15 @@ backend that answered `uncertain` everywhere would score 100% precision and be u
 
 ## Unreleased
 
+### Open
+
+- **13,700 duplicate symbol ids**, all in the DOM lens: 11,199 `dom_selector` and 2,518
+  `dom_attr` rows on the reference project share an id with an identical twin - same
+  status, same note, same line. The map keys nodes by id so nothing is drawn wrong, but
+  every count that walks the symbol list is inflated by them and they are paid for in
+  bytes on every render. Found by checking the map's own wires; not yet fixed.
+
+
 ### The Redis half: 260 keys to 446, and 98 claims to 92
 
 The same pass over the other store. The lens read the calls whose key is written out at
@@ -65,6 +74,34 @@ Every one of these was a shape the source spells out and the lens did not read:
 - **Fixed** — a key whose namespace is decided at runtime is never claimed.
   `sk = sched_map.get(id)` then `f"{sk}:progress"`: there is no saying which key that is,
   let alone that nothing writes it.
+
+**Then the paths were checked on the map itself, which is where four more came from.**
+A row on the map is a place a reader clicks, and reading it as one turned up things no
+count would have:
+
+- **Fixed** — **the commands in a Lua script all pointed at line 1 of it.** The script is
+  one Python string, so every key it touched carried the string's line number, and a
+  write on line 40 opened the top of the file.
+- **Fixed** — **a script's keys belonged to nobody.** The body is a module-level constant,
+  so `PPSService.submit_result` touched nothing while the eight writes its own script
+  performs sat unattributed at module scope. The map's function filter - which is how a
+  reader asks *what does this handler touch* - could not reach one of them. A script
+  belongs to whoever runs it.
+- **Fixed** — **eight rows on one line, sharing one id.** A script with eight commands on
+  one key produced eight rows at the call site. One row per key per PLACE now, a write
+  outranking a read outranking a bare script touch.
+- **Fixed** — a script touch said it "reads". `evalsha(sha, 1, KEY)` names the key and
+  hides the command; the row says **runs a script over**, and a key touched ONLY by
+  scripts now gets its rows at all - it used to appear on the map with no path to any
+  line, which is the opposite of what the map is for.
+- **Fixed** — `":sum"` and `"unknown:n"` were keys. Lua builds hash fields the way keys
+  are built (`prev_input .. ":sum"`), and only a `local` declaration is a key now.
+- **Fixed** — `HINCRBYFLOAT` was not a command. It sat one line below `HINCRBY`, which
+  was, and the difference was visible only by reading the two rows side by side. The
+  sorted-set ranges went in with it - most of what a leaderboard does.
+- **Fixed** — **a docstring that explains Lua is not Lua**, caught by this tool scanning
+  itself: the docstring describing this very feature quotes a `local` and a `redis.call`,
+  and the lens read its own explanation as a script.
 
 **Five claims survive on the reference project, and all five are real** - reads of keys
 nothing in the repository writes, in any file type: a reward payout that collects an empty

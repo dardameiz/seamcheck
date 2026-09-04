@@ -626,8 +626,10 @@ class OtherSpellingsTests(SimpleTestCase):
             def show():
                 return get_redis_client().hgetall('pps:stats:by_input')
         """})
-        self.assertEqual(_keys(root)["pps:stats:by_input"][0], "uncertain")
-        self.assertIn("script", _note(root, "pps:stats:by_input").lower())
+        # `redis.call("HINCRBY", stats_key, ...)` is right there in the script, so this
+        # is a write, not a mystery - see LuaBodyTests for the commands themselves.
+        self.assertEqual(_keys(root)["pps:stats:by_input"][0], "connected")
+        self.assertEqual(_keys(root)["pps:stats:by_input"][1], "1 write / 1 read")
 
     def test_a_key_named_in_a_file_this_does_not_parse_is_not_claimed(self):
         # `celery:beat:crashloop` is set by a shell script that embeds Python. It IS
@@ -769,3 +771,261 @@ class OtherSpellingsTests(SimpleTestCase):
         """})
         self.assertEqual(_keys(root)["*:progress"][0], "uncertain")
         self.assertIn("decided at runtime", _note(root, "*:progress"))
+
+
+class ProxyClientTests(SimpleTestCase):
+    def test_a_lazy_proxy_is_the_client_it_forwards_to(self):
+        # `class RedisClient: def __getattr__(self, n): return getattr(get_redis_client(), n)`
+        # and `redis_client = RedisClient()`. Two names for one connection, and the
+        # "touched through more than one client" warning fired on 33 keys because of it.
+        rows = _keys(_project({
+            "app/redis_client.py": """
+                def get_redis_client():
+                    return _connect()
+
+                class RedisClient:
+                    def __getattr__(self, name):
+                        return getattr(get_redis_client(), name)
+
+                redis_client = RedisClient()
+            """,
+            "app/write.py": """
+                from app.redis_client import redis_client
+
+                def store(uid):
+                    redis_client.set(f"user:{uid}:stats", "1")
+            """,
+            "app/read.py": """
+                from app.redis_client import get_redis_client
+
+                def load(uid):
+                    r = get_redis_client()
+                    return r.get(f"user:{uid}:stats")
+            """,
+        }))
+        self.assertEqual(rows["user:*:stats"][0], "connected")
+
+    def test_a_proxy_onto_a_different_factory_is_a_different_client(self):
+        rows = _keys(_project({
+            "app/redis_client.py": """
+                class MonitoringRedisClient:
+                    def __getattr__(self, name):
+                        return getattr(get_monitoring_redis_client(), name)
+
+                monitoring_redis_client = MonitoringRedisClient()
+            """,
+            "app/write.py": """
+                from app.redis_client import monitoring_redis_client
+
+                def store(uid):
+                    monitoring_redis_client.set(f"user:{uid}:stats", "1")
+            """,
+            "app/read.py": """
+                from app.redis_client import get_redis_client
+
+                def load(uid):
+                    r = get_redis_client()
+                    return r.get(f"user:{uid}:stats")
+            """,
+        }))
+        self.assertEqual(rows["user:*:stats"][0], "uncertain")
+
+
+class LuaBodyTests(SimpleTestCase):
+    """The commands inside an embedded Lua script, which are plain text in the source.
+
+    47 keys on the reference project read "only ever passed to a Lua script" - true, and
+    the script is right there in a Python string. `local lb_key = "pps:leaderboard"` and
+    `redis.call("ZSCORE", lb_key, uid)` says as much about that key as any Python line.
+    """
+
+    SCRIPT = '''
+        from app.redis import get_redis_client
+
+        LUA = """
+        local user_key  = "pps:user:" .. uid
+        local lb_key    = "pps:leaderboard"
+        local stats_key = "pps:stats:by_input"
+
+        local best = redis.call("HGET", user_key, "best_pps")
+        redis.call("ZADD", lb_key, new_score, uid)
+        redis.call("HINCRBY", stats_key, ARGV[1], 1)
+        """
+
+        def run(r, uid):
+            return r.eval(LUA, 0)
+    '''
+
+    def test_a_read_inside_the_script_is_a_read(self):
+        rows = _keys(_project({"app/pps.py": self.SCRIPT}))
+        self.assertEqual(rows["pps:user:*"][1], "0 write / 1 read")
+
+    def test_a_write_inside_the_script_is_a_write(self):
+        rows = _keys(_project({"app/pps.py": self.SCRIPT}))
+        self.assertEqual(rows["pps:leaderboard"][1], "1 write / 0 read")
+        self.assertEqual(rows["pps:stats:by_input"][1], "1 write / 0 read")
+
+    def test_the_script_meets_the_python_that_reads_the_same_key(self):
+        rows = _keys(_project({
+            "app/pps.py": self.SCRIPT,
+            "app/views.py": """
+                from app.redis import get_redis_client
+
+                def board():
+                    return get_redis_client().zrevrange("pps:leaderboard", 0, 9)
+            """,
+        }))
+        self.assertEqual(rows["pps:leaderboard"][0], "connected")
+
+    def test_a_key_the_script_only_names_is_still_only_named(self):
+        # `KEYS[1]` is passed in from Python and the script's own text says nothing
+        # about which key that is.
+        rows = _keys(_project({"app/x.py": '''
+            LUA = """
+            redis.call("INCRBY", KEYS[1], 1)
+            local other = "cache:known:thing"
+            redis.call("DEL", other)
+            """
+        '''}))
+        self.assertEqual(rows["cache:known:thing"][1], "1 invalidate / 0 read")
+
+    def test_a_docstring_that_explains_lua_is_not_lua(self):
+        # Caught by this tool scanning itself: the docstring that describes this very
+        # feature quotes `local lb_key = "pps:leaderboard"` and a `redis.call`, and the
+        # lens read the explanation as a script. Prose about code is not code.
+        symbols, _ = extract_redis(_project({"app/x.py": '''
+            """Reading Lua bodies.
+
+            `local lb_key = "pps:leaderboard"` and then `redis.call("ZADD", lb_key, x)`
+            says as much about that key as any Python line does.
+            """
+
+            def helper():
+                """Also not Lua: redis.call("HGET", "cache:example:thing", f) explained."""
+        '''}))
+        self.assertEqual([s.label for s in symbols if s.kind == "redis_key"], [])
+
+    def test_a_lua_command_points_at_its_own_line(self):
+        # The whole script is one Python string, so every command in it shares the
+        # string's line number - and the map row for a write on line 40 of the script
+        # opened line 1 of it. A path that points at the wrong line is a path a reader
+        # cannot follow.
+        symbols, _ = extract_redis(_project({"app/pps.py": '''
+            LUA = """
+            local a = "cache:first:key"
+            local b = "cache:second:key"
+
+            redis.call("HGET", a, "x")
+            redis.call("ZADD", b, 1, "y")
+            """
+        '''}))
+        lines = {s.label: s.line for s in symbols if s.kind == "redis_key_use"}
+        self.assertLess(lines["cache:first:key"], lines["cache:second:key"])
+
+    def test_a_script_touch_does_not_say_it_reads(self):
+        # `evalsha(sha, 1, KEY)` names the key and hides the command. Rendering it as
+        # "reads" puts a claim on the map that the evidence does not support.
+        symbols, _ = extract_redis(_project({"app/g.py": """
+            from app.redis import get_redis_client
+
+            KEY = "ws:active_connections"
+
+            async def joined(ar, sha):
+                await ar.evalsha(sha, 1, KEY)
+        """}))
+        subs = {s.sub for s in symbols if s.kind == "redis_key_use"}
+        self.assertEqual(subs, {"runs a script over"})
+
+    def test_the_float_and_range_commands_are_commands(self):
+        # Checking the Lua paths against the source turned this up: `HINCRBY` was a
+        # write and `HINCRBYFLOAT` on the very next line was "runs a script over",
+        # because the table had one and not the other. Same for the sorted-set ranges,
+        # which is most of what a leaderboard does.
+        symbols, _ = extract_redis(_project({"app/pps.py": '''
+            LUA = """
+            redis.call("HINCRBYFLOAT", "cache:agg:sums", "x", 1.5)
+            redis.call("ZREMRANGEBYSCORE", "cache:window:hits", 0, 100)
+            local seen = redis.call("ZRANGEBYSCORE", "cache:window:hits", 0, 100)
+            local n = redis.call("HDEL", "cache:agg:sums", "y")
+            """
+        '''}))
+        rows = {s.label: s.sub for s in symbols if s.kind == "redis_key"}
+        self.assertEqual(rows["cache:agg:sums"], "2 write / 0 read")
+        self.assertEqual(rows["cache:window:hits"], "1 write / 1 read")
+
+    def test_a_script_belongs_to_the_function_that_runs_it(self):
+        # The Lua body is a module-level constant, so every key it touched was owned by
+        # nobody - and the function filter on the map, which is how a reader asks "what
+        # does this handler touch", could not reach a single one of those writes. The
+        # script belongs to whoever runs it.
+        symbols, _ = extract_redis(_project({"app/pps.py": '''
+            SUBMIT = """
+            redis.call("ZADD", "pps:leaderboard", 1, uid)
+            """
+
+            class PPSService:
+                def submit(self, r, uid):
+                    script = r.register_script(SUBMIT)
+                    return script(keys=[], args=[uid])
+        '''}))
+        owners = {s.owner for s in symbols
+                  if s.kind == "redis_key_use" and s.label == "pps:leaderboard"}
+        self.assertIn("PPSService.submit", owners)
+
+    def test_a_script_nobody_runs_stays_where_it_is_written(self):
+        symbols, _ = extract_redis(_project({"app/pps.py": '''
+            UNUSED_SCRIPT = """
+            redis.call("ZADD", "pps:leaderboard", 1, uid)
+            """
+        '''}))
+        self.assertEqual([s.label for s in symbols if s.kind == "redis_key_use"],
+                         ["pps:leaderboard"])
+
+    def test_one_row_per_key_per_call_site(self):
+        # A script with eight commands on one key, run from one line, produced eight
+        # rows sharing a single id - and the map row a reader clicks is a place in the
+        # code, not a command in a string. A write outranks a read: if the script writes
+        # the key at all, that is what the site does.
+        symbols, _ = extract_redis(_project({"app/pps.py": '''
+            SUBMIT = """
+            local n = redis.call("HGET", "pps:stats:by_input", "x")
+            redis.call("HINCRBY", "pps:stats:by_input", "a", 1)
+            redis.call("HINCRBYFLOAT", "pps:stats:by_input", "b", 1.5)
+            """
+
+            def submit(r):
+                return r.eval(SUBMIT, 0)
+        '''}))
+        rows = [s for s in symbols
+                if s.kind == "redis_key_use" and s.label == "pps:stats:by_input"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].sub, "writes")
+        self.assertEqual(len({s.id for s in symbols}), len(symbols))
+
+    def test_a_lua_field_suffix_is_not_a_key(self):
+        # `redis.call("HINCRBYFLOAT", stats_key, prev_input .. ":sum", x)` - `":sum"` is
+        # half a hash field being concatenated, and reading it as a key produced rows
+        # labelled `:sum` whose ids collided with each other.
+        symbols, _ = extract_redis(_project({"app/pps.py": '''
+            LUA = """
+            redis.call("HINCRBYFLOAT", "cache:agg:sums", prev .. ":sum", -best)
+            redis.call("HINCRBY", "cache:agg:sums", input .. ":n", 1)
+            """
+        '''}))
+        labels = {s.label for s in symbols if s.kind == "redis_key"}
+        self.assertEqual(labels, {"cache:agg:sums"})
+
+    def test_a_hash_field_argument_is_not_a_key(self):
+        # `redis.call("HINCRBY", stats_key, "unknown:n", -1)` - the third argument is a
+        # field inside the hash. Scooping every quoted string out of the script made
+        # `unknown:n` and `unknown:sum` into keys of their own.
+        symbols, _ = extract_redis(_project({"app/pps.py": '''
+            LUA = """
+            local stats_key = "cache:agg:sums"
+            local spare_key = "cache:agg:spare"
+            redis.call("HINCRBY", stats_key, "unknown:n", -1)
+            """
+        '''}))
+        labels = {s.label for s in symbols if s.kind == "redis_key"}
+        # The declared locals are keys; the field argument is not.
+        self.assertEqual(labels, {"cache:agg:sums", "cache:agg:spare"})
