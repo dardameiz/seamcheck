@@ -137,3 +137,47 @@ class HandlerReachesTheStoreTests(SimpleTestCase):
         )
 
         self.assertEqual(len(link_handlers_to_stores(graph, root)), 1)
+
+
+class MethodNamesTests(SimpleTestCase):
+    """The call graph names a method `Class.method`; a symbol's owner is looked up bare.
+
+    On the reference project `submit_push` - the hottest path in the game - reached
+    exactly ONE store row. The walk was fine: 74 functions deep. The lookup was not, so
+    only the four undotted names among them matched and every method was dropped.
+    """
+
+    def test_a_store_row_owned_by_a_method_is_reached(self):
+        # The reference project's shape exactly: a view delegating to a module-level
+        # helper, which calls a service method, which calls another method that does
+        # the Redis work.
+        root = _project({
+            "app/views.py": """
+                from app.service import PushService
+
+                def submit_push(request):
+                    return _unified(request)
+
+                def _unified(request):
+                    service = PushService()
+                    return service.process_batch(request)
+            """,
+            "app/service.py": """
+                class PushService:
+                    def process_batch(self, request):
+                        return self._write(request)
+
+                    def _write(self, request):
+                        r.set("user:1:stats", 1)
+            """,
+        })
+        graph = _graph(
+            _view("submit_push", "app/views.py", 4),
+            _use("redis_key_use", "user:*:stats", "app/service.py", 6,
+                 "PushService._write"),
+        )
+
+        edges = link_handlers_to_stores(graph, root)
+
+        self.assertEqual([e.to_id for e in edges],
+                         ["redis_key_use:user:*:stats:app/service.py:6"])

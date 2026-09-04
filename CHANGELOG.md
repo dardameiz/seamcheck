@@ -19,6 +19,15 @@ backend that answered `uncertain` everywhere would score 100% precision and be u
 
 ## Unreleased
 
+- **Fixed** — **the chain reached one store row on the busiest handler in the reference
+  project.** `submit_push` walked 74 functions deep and matched four of them: the call
+  graph names a method `Class.method` and a symbol's owner was looked up bare, so every
+  method was dropped and only the undotted names survived. `submit_push` reaches **87**
+  store rows now — 73 Redis keys, 6 tables, 8 columns — and the project's handler-to-store
+  edges went from 1,017 to **2,958**. Found by asking the map whether a push really
+  reaches the store, which is the question the band exists to answer.
+
+
 ### A key only ever deleted is a finding now, because the reasons not to say so are gone
 
 *"Only ever invalidated here"* was `uncertain`, on the reasoning that **deleting a key is

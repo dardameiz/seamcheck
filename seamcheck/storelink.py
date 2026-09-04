@@ -54,7 +54,12 @@ def link_handlers_to_stores(graph: Graph, root: str) -> list[Edge]:
         for _ in range(_MAX_DEPTH):
             following: list[str] = []
             for name in frontier:
-                reached.extend(uses_by_owner.get(name, []))
+                # The call graph names a method `Class.method` and a symbol's owner is
+                # indexed bare, so every method was dropped: `submit_push` on the
+                # reference project walked 74 functions deep and matched the four
+                # undotted names among them, reaching ONE store row on the hottest path
+                # in the game.
+                reached.extend(uses_by_owner.get(name.rpartition(".")[2], []))
                 for callee in calls.get(name, ()):
                     if callee not in seen:
                         seen.add(callee)
