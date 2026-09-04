@@ -19,6 +19,31 @@ backend that answered `uncertain` everywhere would score 100% precision and be u
 
 ## Unreleased
 
+### A key only ever deleted is a finding now, because the reasons not to say so are gone
+
+*"Only ever invalidated here"* was `uncertain`, on the reasoning that **deleting a key is
+evidence that something writes it**, so the writer must be somewhere the scan could not
+follow. That was right while the writer usually WAS: the async cache API was unreadable, a
+key built into a local was unreadable, a key handed to a helper was unreadable.
+
+All three are read now, and the reasoning has inverted — the hedge was hiding the finding.
+On the reference project `api:user_stats:{uid}` appears **ten times and every one is a
+delete**: the endpoint moved to the `swr:user_stats:*` keyspace and the invalidations were
+left behind, so ten round-trips on the purchase, push and gift paths clear a key nothing
+writes. A key named in a file the scan reads no code from is still not claimed.
+
+- **Fixed** — **`adelete` was in the invalidation set and in no command table**, so it was
+  never a command at all: every async delete in the project was invisible while the sync
+  ones were read. The set that decides what a delete MEANS is not the set that decides
+  whether a call is Redis at all.
+- **Added** — `self.CACHE_KEY` / `cls.CACHE_KEY` / `Service.CACHE_KEY`: a constant on the
+  class body, which is where a service keeps the name of its own cache. Only a bare name
+  was understood, so those reads were invisible and the key read as delete-only.
+
+**On the reference project: 461 keys, 302 connected, 2,995 uses — and `uncertain` down
+from 90 to 48**, because a verdict it can now reach is not an unknown.
+
+
 ### The half of the cache API the lens could not see
 
 `adelete` was in the invalidation set and **`aget` and `aset` were in nothing at all**.

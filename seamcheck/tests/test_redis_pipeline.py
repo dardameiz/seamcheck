@@ -1162,3 +1162,99 @@ class KeyPassedToAHelperTests(SimpleTestCase):
         """}))
         self.assertEqual(rows["cache:one:*"][1], "1 write / 0 read")
         self.assertEqual(rows["cache:two:*"][1], "1 write / 0 read")
+
+
+class ClassConstantKeyTests(SimpleTestCase):
+    def test_a_key_held_on_the_class_is_still_that_key(self):
+        # `CACHE_KEY = "level_rewards:config"` in the class body, read as
+        # `cache.get(self.CACHE_KEY)`. The lookup only understood a bare name, so the
+        # read was invisible and the key read as one that is only ever deleted.
+        rows = _keys(_project({"app/service.py": """
+            from django.core.cache import cache
+
+            class LevelRewardService:
+                CACHE_KEY = "level_rewards:config"
+
+                def get(self):
+                    found = cache.get(self.CACHE_KEY)
+                    if found is None:
+                        found = build()
+                        cache.set(self.CACHE_KEY, found, 300)
+                    return found
+
+                @classmethod
+                def bust(cls):
+                    cache.delete(cls.CACHE_KEY)
+        """}))
+        # Two writes: the `set` and the `delete`. An invalidation counts as a write
+        # here - it only reads as "invalidate" when EVERY writer is one.
+        self.assertEqual(rows["level_rewards:config"], ("connected", "2 write / 1 read"))
+
+
+class InvalidationWithNoWriterTests(SimpleTestCase):
+    """A key only ever deleted, once the reasons not to say so are gone.
+
+    This used to be `uncertain`, on the reasoning that *"deleting a key is evidence that
+    something writes it, so the writer is somewhere this scan cannot follow"*. That was
+    the right call while the writer usually WAS somewhere it could not follow: the async
+    cache API was unreadable, a key built into a local was unreadable, and a key handed
+    to a helper was unreadable.
+
+    All three are readable now, and the reasoning has inverted. On the reference project
+    `api:user_stats:{uid}` appears fourteen times and **every one is a delete** - the
+    endpoint moved to the `swr:user_stats:*` keyspace and the invalidations were left
+    behind, so fourteen round-trips on the purchase and push paths clear a key nothing
+    writes. Hedging on that hides it.
+    """
+
+    def test_a_key_only_ever_deleted_is_a_finding(self):
+        root = _project({
+            "app/views.py": """
+                from django.core.cache import cache
+
+                async def buy(uid):
+                    await cache.adelete(f"api:user_stats:{uid}")
+
+                async def gift(uid):
+                    await cache.adelete(f"api:user_stats:{uid}")
+            """,
+        })
+        rows = _keys(root)
+        self.assertEqual(rows["api:user_stats:*"][0], "unused")
+        self.assertEqual(rows["api:user_stats:*"][1], "2 invalidate / 0 read")
+        self.assertIn("nothing in this repository writes", _note(root, "api:user_stats:*"))
+
+    def test_a_key_that_is_written_somewhere_is_not(self):
+        rows = _keys(_project({
+            "app/views.py": """
+                from django.core.cache import cache
+
+                async def buy(uid):
+                    await cache.adelete(f"api:user_stats:{uid}")
+            """,
+            "app/api.py": """
+                from django.core.cache import cache
+
+                async def stats(uid):
+                    found = await cache.aget(f"api:user_stats:{uid}")
+                    if found is None:
+                        await cache.aset(f"api:user_stats:{uid}", 1, 30)
+                    return found
+            """,
+        }))
+        self.assertEqual(rows["api:user_stats:*"][0], "connected")
+
+    def test_a_key_named_in_a_file_this_cannot_read_is_still_not_claimed(self):
+        root = _project({
+            "app/views.py": """
+                from django.core.cache import cache
+
+                def bust():
+                    cache.delete("cache:warm:index")
+            """,
+            "warm.sh": """
+                #!/bin/bash
+                redis-cli SET cache:warm:index 1
+            """,
+        })
+        self.assertEqual(_keys(root)["cache:warm:index"][0], "uncertain")

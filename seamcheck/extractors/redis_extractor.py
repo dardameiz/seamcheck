@@ -74,6 +74,11 @@ _WRITES = frozenset({
     "rpushx", "smove", "sinterstore", "sunionstore", "sdiffstore", "zunionstore",
     "zinterstore", "xadd", "geoadd",
     "aset", "aset_many", "aadd", "add", "aincr", "adecr", "atouch",
+    # `adelete` was in the INVALIDATIONS set and in no command table, so it was never a
+    # command at all: every async delete in the project was invisible while the sync ones
+    # were read. The set that decides what a delete MEANS is not the set that decides
+    # whether a call is Redis.
+    "adelete", "adelete_many", "delete_many", "clear", "aclear", "aexpire",
 })
 # A Lua script: the keys it touches are named at the call, the commands it runs are not.
 # `evalsha(sha, 1, WS_CONNECTIONS_KEY)` is how the connection counter is incremented, and
@@ -820,6 +825,16 @@ def _scan_python(root: str) -> list[_Hit]:
                     continue
                 pattern = _py_pattern(node.args[0], key_names,
                                       owners.get(node.lineno, ""), node.lineno)
+                # `self.CACHE_KEY` / `cls.CACHE_KEY` / `Service.CACHE_KEY`: a constant on
+                # the class body, which is where a service keeps the name of its own
+                # cache. Only a bare name was understood, so those reads were invisible
+                # and the key read as one that is only ever deleted.
+                held = node.args[0]
+                if not pattern and isinstance(held, ast.Attribute) \
+                        and isinstance(held.value, ast.Name):
+                    pattern = _key_named(key_names, "", held.attr, node.lineno) \
+                        or _key_named(key_names, owners.get(node.lineno, ""), held.attr,
+                                      node.lineno)
                 if not pattern and isinstance(node.args[0], ast.Name):
                     # The key was built into a local a line or two above.
                     # The enclosing def first, then the module: a key held in a constant
@@ -1153,12 +1168,15 @@ def extract_redis(root: str) -> tuple[list[Symbol], list[Edge]]:
             # rows left untouched, not because they were checked and dismissed, but
             # because the category could not be trusted. Deleting is evidence, so this
             # declines to call it dead and says which evidence is missing.
-            status = Status.UNCERTAIN
-            note = ("Only ever invalidated here - deleted or expired, never stored and "
-                    "never read. Deleting a key is evidence that something writes it, so "
-                    "the writer is somewhere this scan cannot follow: usually a cache "
-                    "helper that builds the key from its arguments, where the literal "
-                    "never appears. Not claimed dead for that reason.")
+            status = Status.UNUSED
+            note = ("Only ever invalidated - deleted or expired, never stored and never "
+                    "read, and nothing in this repository writes it. This was hedged for "
+                    "a long time on the reasoning that a delete proves a writer exists "
+                    "somewhere the scan could not follow. The three places it could not "
+                    "follow - the async cache API, a key built into a local, a key handed "
+                    "to a helper - are all read now, so the hedge was hiding the finding: "
+                    "an invalidation left behind after the cache it cleared moved or went "
+                    "away. Every delete of it is a round-trip that clears nothing.")
         else:
             status = Status.UNUSED
             note = "Written here and read nowhere in this repo."
