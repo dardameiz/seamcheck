@@ -1627,3 +1627,193 @@ class TheFunctionFilter(SimpleTestCase):
         self.assertIn("module:static/js/orders.js", after)
         # Who calls it: the reverse of the same map, named under the canvas.
         self.assertIn("submit_push", called_by)
+
+
+class TracingAWireTests(SimpleTestCase):
+    """Which wire connects what, and which way it runs.
+
+    Reported from use: "on the full map it is not visible which the wire is connecting".
+    The only way to trace one was to CLICK a card, which isolates its whole chain - so
+    scanning a dense page meant committing to a click per guess, and nothing at all
+    responded to the pointer.
+
+    And direction was drawn correctly and rendered unreadably: an SVG marker defaults to
+    `markerUnits="strokeWidth"`, so the arrowhead is multiplied by the wire's thickness -
+    which is already the edge-COUNT channel, thickening with log10(n). The common case, a
+    single edge at 1.1px, therefore got the smallest head on the canvas, while a merged
+    bundle got a giant one. On the reference project's store page 30 of 106 wires run
+    both ways and not one of them could be seen doing it.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        try:
+            from playwright.sync_api import sync_playwright  # noqa: F401
+        except ImportError:
+            raise unittest.SkipTest("playwright is not installed (the observe extra)") from None
+
+    def _url(self) -> str:
+        from seamcheck.mapdata import build_map
+        from seamcheck.renderers.map_html import render_document
+
+        graph = _fixture_graph()
+        pages = {"orders-main": {s.id for s in graph.symbols}}
+        document = render_document(build_map(graph, pages, git_sha="0" * 12),
+                                   console=_console_for(graph))
+        path = pathlib.Path(tempfile.mkdtemp()) / "map.html"
+        path.write_text(document.single_file(), encoding="utf-8")
+        return path.as_uri()
+
+    def _on_canvas(self, script: str):
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch()
+            except Exception as error:  # pragma: no cover - no browser downloaded
+                raise unittest.SkipTest(f"no chromium: {error}") from None
+            page = browser.new_page()
+            errors: list[str] = []
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.goto(self._url(), wait_until="load")
+            _open_lens(page, "map")
+            page.wait_for_selector("#cv .ed")
+            page.wait_for_timeout(200)
+            result = page.evaluate(script)
+            browser.close()
+        self.assertEqual(errors, [], "the canvas must not throw")
+        return result
+
+    def test_an_arrowhead_is_the_same_size_whatever_the_wire_weighs(self):
+        sizes = self._on_canvas("""() => [...document.querySelectorAll('#cv marker')]
+            .map(m => m.getAttribute('markerUnits'))""")
+        self.assertTrue(sizes, "the canvas must define arrowhead markers")
+        self.assertEqual(set(sizes), {"userSpaceOnUse"},
+                         "a head scaled by stroke-width is scaled by the EDGE COUNT")
+
+    def test_every_wire_says_which_two_cards_it_joins(self):
+        # Without this the pointer has nothing to match a wire against, so tracing one
+        # cannot be done at all.
+        ends = self._on_canvas("""() => [...document.querySelectorAll('#cv .ed')]
+            .map(e => [e.dataset.a, e.dataset.b])""")
+        self.assertTrue(ends)
+        for a, b in ends:
+            self.assertTrue(a and b, "every wire carries both of its endpoints")
+
+    def test_hovering_a_card_lights_its_own_wires_and_dims_the_rest(self):
+        state = self._on_canvas("""() => {
+            const card = document.querySelector('#cv .nd[data-p]');
+            card.dispatchEvent(new PointerEvent('pointerenter', {bubbles: true}));
+            const wires = [...document.querySelectorAll('#cv .ed')];
+            const mine = wires.filter(w => w.dataset.a === card.dataset.p
+                                        || w.dataset.b === card.dataset.p);
+            return {
+                tracing: document.getElementById('cv').classList.contains('tracing'),
+                mine: mine.length,
+                hot: wires.filter(w => w.classList.contains('hot')).length,
+                minehot: mine.every(w => w.classList.contains('hot')),
+            };
+        }""")
+        self.assertTrue(state["tracing"], "the canvas enters a tracing state")
+        self.assertGreater(state["mine"], 0, "the hovered card must have wires to light")
+        self.assertTrue(state["minehot"], "every wire of the hovered card is lit")
+        self.assertEqual(state["hot"], state["mine"], "and nothing else is")
+
+    def test_leaving_the_card_puts_everything_back(self):
+        state = self._on_canvas("""() => {
+            const card = document.querySelector('#cv .nd[data-p]');
+            card.dispatchEvent(new PointerEvent('pointerenter', {bubbles: true}));
+            card.dispatchEvent(new PointerEvent('pointerleave', {bubbles: true}));
+            return {
+                tracing: document.getElementById('cv').classList.contains('tracing'),
+                hot: document.querySelectorAll('#cv .ed.hot').length,
+            };
+        }""")
+        self.assertFalse(state["tracing"])
+        self.assertEqual(state["hot"], 0)
+
+    def test_hovering_does_not_redraw_the_canvas(self):
+        # A redraw per pointer move on a ten-thousand-node page is a frozen tab. The
+        # highlight is class toggling on wires that are already there.
+        same = self._on_canvas("""() => {
+            const svg = document.getElementById('cv');
+            const before = svg.querySelector('#vp');
+            svg.querySelector('.nd[data-p]')
+               .dispatchEvent(new PointerEvent('pointerenter', {bubbles: true}));
+            return svg.querySelector('#vp') === before;
+        }""")
+        self.assertTrue(same, "hover must not rebuild the canvas")
+
+    def test_changing_the_page_does_not_carry_the_isolated_node_with_it(self):
+        # Found while checking the wires: with a node isolated, picking another page drew
+        # "Nothing to draw here. Try another page." on a page holding 3,273 nodes. The
+        # isolated node is not ON the new page, so its chain there is empty - and an
+        # empty canvas is indistinguishable from a broken one.
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch()
+            except Exception as error:  # pragma: no cover - no browser downloaded
+                raise unittest.SkipTest(f"no chromium: {error}") from None
+            page = browser.new_page()
+            errors: list[str] = []
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.goto(self._url(), wait_until="load")
+            _open_lens(page, "map")
+            page.wait_for_selector("#cv .nd[data-id]")
+            page.click("#cv .nd[data-id]")
+            page.wait_for_selector("#iso")
+            page.click("#iso")
+            page.wait_for_timeout(200)
+            isolated = page.evaluate("() => document.querySelectorAll('#cv .nd').length")
+            page.evaluate("""() => {
+                const sel = document.getElementById('pg');
+                sel.selectedIndex = (sel.selectedIndex + 1) % sel.options.length;
+                sel.dispatchEvent(new Event('change', {bubbles: true}));
+            }""")
+            page.wait_for_timeout(400)
+            after = page.evaluate("""() => ({
+                nodes: document.querySelectorAll('#cv .nd').length,
+                empty: !document.getElementById('nothing').hidden,
+            })""")
+            browser.close()
+
+        self.assertEqual(errors, [])
+        self.assertGreater(isolated, 0, "isolating must draw the chain it was asked for")
+        self.assertGreater(after["nodes"], 0, "the next page must draw its own nodes")
+        self.assertFalse(after["empty"], "and must not report itself empty")
+
+    def test_a_redraw_does_not_leave_the_highlight_stuck(self):
+        # `trace()` returns early when the place has not changed, and a redraw replaces
+        # every wire in the DOM - so the state variable outlived the elements it
+        # described, and hovering the SAME card after a redraw lit nothing at all while
+        # the canvas stayed dimmed. Caught on the real map, not in a unit test: the
+        # first pointer worked and the second did not.
+        state = self._on_canvas("""() => {
+            const svg = document.getElementById('cv');
+            const wired = new Set([...svg.querySelectorAll('.ed')]
+                .flatMap(e => [e.dataset.a, e.dataset.b]));
+            const card = [...svg.querySelectorAll('.nd[data-p]')]
+                .find(n => wired.has(n.dataset.p));
+            const place = card.dataset.p;
+            card.dispatchEvent(new PointerEvent('pointerover', {bubbles: true}));
+            const first = svg.querySelectorAll('.ed.hot').length;
+            // Whatever the reader does next that redraws. The section picker is the
+            // plainest one: it calls draw() and replaces every wire in the DOM.
+            const sel = document.getElementById('pg');
+            sel.dispatchEvent(new Event('change', {bubbles: true}));
+            const again = [...svg.querySelectorAll('.nd[data-p]')]
+                .find(n => n.dataset.p === place);
+            if (again) again.dispatchEvent(new PointerEvent('pointerover', {bubbles: true}));
+            const hot = svg.querySelectorAll('.ed.hot').length;
+            return {first: first, second: hot, stillThere: !!again,
+                    dimmedWithNothingLit: svg.classList.contains('tracing') && hot === 0};
+        }""")
+        self.assertGreater(state["first"], 0)
+        self.assertTrue(state["stillThere"], "the card must survive the redraw")
+        self.assertGreater(state["second"], 0,
+                           "hovering the same card after a redraw must light it again")
+        self.assertFalse(state["dimmedWithNothingLit"],
+                         "and a redraw must never leave the canvas dimmed for nothing")

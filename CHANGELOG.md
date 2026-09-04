@@ -19,6 +19,43 @@ backend that answered `uncertain` everywhere would score 100% precision and be u
 
 ## Unreleased
 
+### Reading the wires
+
+Reported from use: *"on the full map it is not visible which the wire is connecting"*, and
+*"different colours for bi-directional and one-directional?"*
+
+- **Added** — **hover a card and its own wires come forward**, everything else drops back
+  far enough to read as background. Its own wires, not its chain: a chain on hover lights
+  half the canvas and is exactly as unreadable as the thing being fixed. Until now the
+  only way to trace a wire was to CLICK a card and isolate it, so reading a dense page
+  meant committing to a click per guess and the pointer did nothing at all. Class
+  toggling on wires already drawn — a redraw per pointer move on a ten-thousand-node page
+  is a frozen tab.
+- **Fixed** — **an arrowhead was scaled by the wire's thickness, and thickness is the
+  edge-COUNT channel.** An SVG marker defaults to `markerUnits="strokeWidth"`, so the
+  common case — one edge at 1.1px — got the smallest head on the canvas while a merged
+  bundle got a giant one. Direction was drawn correctly on every wire and rendered
+  unreadably on the ones that needed it: on the reference project's store page **30 of
+  106 wires run both ways** and not one could be seen doing it. Fixed size now, in canvas
+  units, whatever the wire weighs.
+- **Fixed** — **picking another page carried the isolated node with it.** Its chain on
+  the new page is empty, so a page holding 3,273 nodes drew *"Nothing to draw here. Try
+  another page."* An isolated empty canvas is indistinguishable from a broken one.
+- **Fixed** — a redraw left the highlight stuck. `tracing` is module state and the
+  dimming is a class on the `<svg>`, which survives `innerHTML` — so after any redraw the
+  canvas stayed dimmed with nothing lit, and hovering the same card returned early
+  because the place had not changed. Found on the real map, where the first pointer
+  worked and the second did nothing.
+
+**On colouring direction: no, and not as a matter of taste.** Every channel already
+carries meaning — **colour** is the status (connected / unresolved / unused / uncertain),
+which is the whole claim vocabulary; **width** is how many edges the wire stands for;
+**opacity** is focus. A red one-way and a red two-way wire would make *"is this red
+because it is broken, or because it is one-way?"* a question the reader has to ask, which
+is the ambiguity this map exists to remove. Direction keeps the one channel that is its
+own — the arrowhead — and that channel now works.
+
+
 ### The chain reaches the store
 
 - **Added** — the data layer is in the **mandatory gate**. It had no fixture at all: the

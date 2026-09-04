@@ -673,6 +673,13 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
    thing the eye lands on. */
 .ed.lit { stroke-width:2.4; stroke-opacity:1; }
 .ed.faded { stroke-opacity:.05; }
+/* Tracing: the pointer is on a card, and the question is what THAT card reaches. Its own
+   wires come forward; the rest go back far enough to read as background without
+   disappearing, so the shape of the page is still there behind the answer. */
+#cv.tracing .ed { stroke-opacity:.07; }
+#cv.tracing .ed.hot { stroke-opacity:1; stroke-width:2.4; }
+#cv.tracing .nd { opacity:.32; }
+#cv.tracing .nd.hot { opacity:1; }
 .col { font-size:9.5px; fill:var(--muted); text-transform:uppercase; letter-spacing:.1em;
        font-family:var(--mono); }
 
@@ -1743,6 +1750,12 @@ function syncPickers() {
 
 function pickPage(i) {
   current = i; focus = null; view = {x:0, y:0, k:1};
+  // A lit node belongs to the page it was lit on. Carried across, its chain on the new
+  // page is empty - and an isolated empty canvas says "Nothing to draw here. Try another
+  // page." on a page holding three thousand nodes, which reads as a broken map rather
+  // than as stale state. The reader asked for a different page; the selection was about
+  // the old one.
+  if (lit) { lit = null; isolate = false; closeSheet(); }
   // On a store layer the pick narrows the layer; it is also remembered as the page to
   // land on when the layer comes off.
   if (PAGED_LAYERS.has(layer)) { pageOnLayer = i; _layout.key = null; }
@@ -2287,17 +2300,40 @@ function readPack() {
   NODE_R = parseFloat(cs.getPropertyValue("--r-node")) || 5;
   WIRE_STYLE = (cs.getPropertyValue("--wire-style") || "curve").trim() || "curve";
 }
+// An arrowhead is the ONLY channel direction has. Colour is the status - connected,
+// unresolved, unused, uncertain - which is the whole claim vocabulary; width is how many
+// edges the wire stands for; opacity is focus. Nothing is left to give direction except
+// the head, so the head has to be readable.
+//
+// And it was not. A marker defaults to `markerUnits="strokeWidth"`, which multiplies it
+// by the wire's thickness - and thickness is the edge-COUNT channel, thickening with
+// log10(n). So the common case, one edge at 1.1px, got the smallest head on the canvas
+// while a merged bundle got a giant one: direction was drawn correctly on every wire and
+// rendered unreadably on the ones that needed it. On the reference project's store page
+// 30 of 106 wires run both ways and not one could be seen doing it.
+//
+// userSpaceOnUse: one size, in canvas units, whatever the wire weighs.
 const MARKERS = '<defs>' + [
   ["connected", "var(--ok)"], ["unresolved", "var(--crit)"],
   ["unused", "var(--warn)"], ["uncertain", "var(--dim)"], ["dim", "var(--dim)"],
-].flatMap(([name, colour]) => [["", 5], ["-lit", 7]].map(([suffix, size]) =>
+].flatMap(([name, colour]) => [["", 9], ["-lit", 13]].map(([suffix, size]) =>
   `<marker id="ar-${name}${suffix}" viewBox="0 0 10 10" refX="9" refY="5"` +
+  ` markerUnits="userSpaceOnUse"` +
   ` markerWidth="${size}" markerHeight="${size}" orient="auto-start-reverse">` +
   `<path d="M0,1 L9,5 L0,9 z" fill="${colour}"/></marker>` +
   `<marker id="tl-${name}${suffix}" viewBox="0 0 10 10" refX="1" refY="5"` +
+  ` markerUnits="userSpaceOnUse"` +
   ` markerWidth="${size}" markerHeight="${size}" orient="auto-start-reverse">` +
   `<path d="M10,1 L1,5 L10,9 z" fill="${colour}"/></marker>`
 )).join("") + '</defs>';
+
+// Where a card sits, as one string. A wire is merged per PAIR OF CARDS, so this is the
+// only handle both a wire and a card can be matched by - and matching them is what lets
+// the pointer trace one without redrawing anything.
+function placeKey(q) {
+  return q.x + "," + q.y;
+}
+
 
 function wirePath(ax, ay, bx, by, straight) {
   // Under isolation the reader has asked to follow ONE path, so the line stops being
@@ -3107,6 +3143,13 @@ let _drawWaiting = -1;
 function draw() {
   const p = currentPage();
   if (!p) return;
+  // The trace describes wires that are about to be replaced. `tracing` is module state
+  // and the dimming is a class on the svg, which survives innerHTML - so a redraw left
+  // the canvas dimmed with nothing lit, and hovering the SAME card again returned early
+  // because the place had not changed. Caught on the real map: the first pointer worked
+  // and the second did nothing.
+  tracing = null;
+  svg.classList.remove("tracing");
   if (!p.nodes) {
     // The page's rows are still text in the document. Decode them, then draw for real;
     // every caller of draw() gets this for free and none of them has to wait.
@@ -3338,7 +3381,10 @@ function draw() {
     const key = [a.x, a.y, b.x, b.y, st, twoWay ? 1 : 0].join("\u0000");
     const w = wires.get(key);
     if (w) { w.n += 1; w.dim = w.dim && dim; w.onChain = w.onChain || onChain; return; }
-    wires.set(key, {a, b, st, twoWay, dim, onChain, n: 1});
+    // Keyed by POSITION, which is what a wire is merged by: several nodes parked on one
+    // aggregate card share a place, and hovering any of them is hovering that card.
+    wires.set(key, {a, b, st, twoWay, dim, onChain, n: 1,
+                    pa: placeKey(a), pb: placeKey(b)});
   });
   wires.forEach(w => {
     const colour = S[w.st] || "var(--dim)";
@@ -3347,6 +3393,7 @@ function draw() {
     const thick = w.n > 1 && !w.onChain ? ` style="stroke-width:${(1.1 + Math.log10(w.n)).toFixed(1)}"` : "";
     out.push(`<path class="ed${w.dim ? " faded" : ""}${w.onChain ? " lit" : ""}"${thick}
       stroke="${colour}" marker-end="${head}"${tail}${w.n > 1 ? ` data-n="${w.n}"` : ""}
+      data-a="${w.pa}" data-b="${w.pb}"
       d="${wirePath(w.a.x + (w.a.w || CARD_W), w.a.y + (w.a.h || CARD_H) / 2,
                     w.b.x, w.b.y + (w.b.h || CARD_H) / 2, w.onChain)}"/>`);
   });
@@ -3384,7 +3431,7 @@ function draw() {
       const to = Math.min(g.from + EXPAND_PAGE, g.total), last = to >= g.total;
       const tap = last ? "tap for the first" : "tap for the next";
       out.push(`<g class="nd agg more" data-kind="${esc(g.kind)}" data-key="${esc(g.key)}"
-                  data-total="${g.total}" data-more="1">
+                  data-total="${g.total}" data-more="1" data-p="${placeKey(g)}">
         <rect x="${g.x}" y="${g.y}" width="${g.w}" height="${g.h}" rx="${NODE_R}"
               fill="var(--panel)" stroke="var(--ink)" stroke-width="2" stroke-dasharray="6 4"/>
         <title>${esc(g.count.toLocaleString())} not in this window — ${tap} ${EXPAND_PAGE}</title>
@@ -3400,7 +3447,8 @@ function draw() {
     const state = g.isOpen ? "open · tap to close"
       : (g.open ? g.open.toLocaleString() + " to look at · tap to open" : "tap to open");
     out.push(`<g class="nd agg st-${esc(g.status)}${g.isOpen ? " opened" : ""}"
-                data-kind="${esc(g.kind)}" data-key="${esc(g.key)}">
+                data-kind="${esc(g.kind)}" data-key="${esc(g.key)}"
+                data-p="${placeKey(g)}">
       <rect x="${g.x}" y="${g.y}" width="${g.w}" height="${g.h}" rx="${NODE_R}"
             fill="${g.isOpen ? "transparent" : (F[g.status] || "var(--panel)")}"
             stroke="${S[g.status] || "var(--dim)"}"
@@ -3440,7 +3488,8 @@ function draw() {
     // before the label is even read. A true circle cannot hold "live.js / javascript
     // file", so the corner radius goes to half the height and the text stays legible.
     const pill = isolate && n.kind === "module";
-    out.push(`<g class="nd${shown ? "" : " faded"}${n.id === lit ? " lit" : ""}" data-id="${n.id}">
+    out.push(`<g class="nd${shown ? "" : " faded"}${n.id === lit ? " lit" : ""}"
+                 data-id="${n.id}" data-p="${placeKey(q)}">
       <rect x="${q.x}" y="${q.y}" width="${q.w}" height="${q.h}" rx="${pill ? q.h / 2 : NODE_R}"
             fill="${alone ? (F[n.status] || "var(--panel)") : "var(--panel)"}"
             stroke="${stroke}" stroke-width="${ch ? 3 : 1.5}"/>
@@ -3473,6 +3522,57 @@ function applyView() {
   const nolabels = view.k < 0.24;
   if (svg.classList.contains("nolabels") !== nolabels) svg.classList.toggle("nolabels", nolabels);
 }
+
+// TRACING. Reported from use: "on the full map it is not visible which the wire is
+// connecting". The only way to follow one was to CLICK a card, which isolates its whole
+// chain - so reading a dense page meant committing to a click per guess, and the pointer
+// did nothing at all.
+//
+// Hovering a card now lights the wires that touch THAT card and pulls the rest back.
+// Its own wires, not its chain: a chain on hover lights half the canvas and is exactly
+// as unreadable as the thing being fixed. Class toggling on wires that are already
+// drawn - a redraw per pointer move on a ten-thousand-node page is a frozen tab.
+//
+// Off while isolating: that reader has already asked for one path, and a second
+// highlight fighting the first is worse than neither.
+let tracing = null;
+
+function trace(place) {
+  if (tracing === place) return;
+  tracing = place;
+  svg.classList.toggle("tracing", Boolean(place));
+  svg.querySelectorAll(".ed.hot").forEach(w => w.classList.remove("hot"));
+  svg.querySelectorAll(".nd.hot").forEach(n => n.classList.remove("hot"));
+  if (!place) return;
+  const ends = new Set();
+  svg.querySelectorAll(".ed").forEach(w => {
+    if (w.dataset.a !== place && w.dataset.b !== place) return;
+    w.classList.add("hot");
+    ends.add(w.dataset.a);
+    ends.add(w.dataset.b);
+  });
+  svg.querySelectorAll(".nd[data-p]").forEach(n => {
+    if (ends.has(n.dataset.p) || n.dataset.p === place) n.classList.add("hot");
+  });
+}
+
+svg.addEventListener("pointerover", e => {
+  if (isolate) return;
+  const card = e.target.closest && e.target.closest(".nd[data-p]");
+  trace(card ? card.dataset.p : null);
+});
+svg.addEventListener("pointerout", e => {
+  if (e.relatedTarget && svg.contains(e.relatedTarget)
+      && e.relatedTarget.closest && e.relatedTarget.closest(".nd[data-p]")) return;
+  trace(null);
+});
+// A pointer that leaves the canvas entirely, and the synthetic events a test sends.
+svg.addEventListener("pointerleave", () => trace(null));
+svg.addEventListener("pointerenter", e => {
+  if (isolate) return;
+  const card = e.target.closest && e.target.closest(".nd[data-p]");
+  if (card) trace(card.dataset.p);
+}, true);
 
 // Delegated, not per-node: draw() replaces svg.innerHTML, and panning redraws on every
 // mousemove, so a handler bound to a node is destroyed between mousedown and mouseup and
