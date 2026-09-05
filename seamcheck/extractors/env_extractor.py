@@ -242,12 +242,18 @@ def extract_env(root: str) -> tuple[list[Symbol], list[Edge]]:
             edges.append(Edge(from_id=symbol_id, to_id=f"env_var:{key}", status=Status.CONNECTED))
 
     if read and not comprehensive:
-        first_file, first_line = next(iter(sorted(read.values())))
+        # This symbol stands for a whole set of keys, so its file:line is the first read
+        # site in the project - and the snippet is THAT read, spelled the same way as
+        # every per-key row. A symbol with no snippet is a claim with nothing behind it:
+        # the card, the console row and the terminal all print the evidence line, and an
+        # empty one reads as the scan having lost it rather than as there being none.
+        first_key, (first_file, first_line) = min(
+            read.items(), key=lambda item: (item[1], item[0]))
         symbols.append(Symbol(
             id="env_read:<not comparable>", kind="env_read",
             label=f"{len(read) - covered} of {len(read)} configuration keys not declared here",
             sub="nothing to check against", file=first_file, line=first_line,
-            status=Status.UNCERTAIN, snippet="", chain=[],
+            status=Status.UNCERTAIN, snippet=f"env.{first_key}", chain=[],
             note=(
                 f"This code reads {len(read)} configuration keys and the files that could "
                 f"declare them ({searched}) cover {covered}. That is not an inventory of "
