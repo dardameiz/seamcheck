@@ -19,6 +19,25 @@ backend that answered `uncertain` everywhere would score 100% precision and be u
 
 ## Unreleased
 
+### Bulk invalidation, which is how half the deletes in a real project are written
+
+- **Added** — **a command handed a LIST of keys touches every one of them**: inline
+  (`cache.delete_many([...])`), by name, splatted (`r.delete(*keys_to_clear)`), and built
+  up by `.append(...)` in a loop. The literals were right there and the command was right
+  there, and nothing joined them because the argument is a list rather than a key.
+- **Added** — **a loop over a key list**: `for key in keys_to_clear: r.exists(key)`. The
+  loop variable stands for every key in the list, one at a time.
+- **Fixed** — a concrete key could never be reconciled with the pattern that writes it.
+  Only wildcards were matched against other keys, so `pps:board:i:mouse` could not be
+  answered by `pps:board:i:*`. And the "a bare `*` may not vouch" rule was too blunt:
+  `user:*:*` spells out one segment and is what a GDPR wipe scans, `pps:board:i:*` spells
+  out three and simply IS that board. The difference is how much of the key the pattern
+  actually names.
+
+On the reference project: **501 keys** (was 469), **317 connected**, **3,294 uses** (was
+3,052).
+
+
 ### A band's languages are containers now, not a label in the corner
 
 Reported from use: *"each section actually holds multiple languages, multiple backends,

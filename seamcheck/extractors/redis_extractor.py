@@ -201,7 +201,8 @@ class _Hit:
 
 
 # ── Python ────────────────────────────────────────────────────────────────
-def _py_pattern(node, known=None, owner: str = "", line: int = 0) -> str | None:
+def _py_pattern(node, known=None, owner: str = "", line: int = 0,
+                builders=None) -> str | None:
     """The key a Python expression names, with its interpolations left as holes.
 
     A hole that is itself a key keeps its shape: `base = f"challenges:schedule:django_{id}"`
@@ -222,11 +223,15 @@ def _py_pattern(node, known=None, owner: str = "", line: int = 0) -> str | None:
             parts.append(composed if composed else "{}")
         return "".join(parts)
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
-        return _py_pattern(node.left)
+        return _py_pattern(node.left, known, owner, line, builders)
     if isinstance(node, ast.Call):
         func = node.func
         if isinstance(func, ast.Attribute) and func.attr == "format":
-            return _py_pattern(func.value)
+            return _py_pattern(func.value, known, owner, line, builders)
+        # `achievements_version_key(user_id)` - a function that exists to return a key.
+        name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", "")
+        if builders and name in builders:
+            return builders[name]
     return None
 
 
@@ -403,7 +408,59 @@ def _script_keys(node: ast.Call) -> list[ast.AST]:
     return []
 
 
-def _key_variables(tree: ast.AST, owners: dict[int, str]) -> dict[tuple[str, str], str]:
+def _key_lists(tree: ast.AST, owners: dict[int, str], builders=None,
+               ) -> dict[tuple[str, str], list[str]]:
+    """(enclosing def, variable) -> the key patterns a LIST holds.
+
+    ```
+    keys_to_clear = ["push_arena:is_hourly_mode", "push_arena:reset_timezone"]
+    r.delete(*keys_to_clear)
+    ```
+
+    and the same shape built by `.append(...)` in a loop. The literals are right there
+    and the command is right there, and nothing joined them because the argument is a
+    list rather than a key - which is how every bulk invalidation in the reference
+    project is written.
+    """
+    found: dict[tuple[str, str], list[str]] = {}
+
+    def add(where, node):
+        pattern = _py_pattern(node, builders=builders)
+        if pattern and _looks_like_key(pattern):
+            found.setdefault(where, []).append(pattern)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and isinstance(node.value, (ast.List, ast.Tuple)):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    for element in node.value.elts:
+                        add((owners.get(node.lineno, ""), target.id), element)
+        # `keys.append(f"navbar:{rid}")` inside a loop.
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr in ("append", "add") and len(node.args) == 1
+                and isinstance(node.func.value, ast.Name)):
+            add((owners.get(node.lineno, ""), node.func.value.id), node.args[0])
+    # `for key in keys_to_clear: r.exists(key)` - the loop variable stands for every key
+    # in the list, one at a time. The other half of how bulk work is written.
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.For, ast.AsyncFor)):
+            continue
+        if not isinstance(node.target, ast.Name):
+            continue
+        where = (owners.get(node.lineno, ""), node.target.id)
+        if isinstance(node.iter, (ast.List, ast.Tuple)):
+            for element in node.iter.elts:
+                add(where, element)
+        elif isinstance(node.iter, ast.Name):
+            held = (found.get((owners.get(node.lineno, ""), node.iter.id))
+                    or found.get(("", node.iter.id)))
+            if held:
+                found.setdefault(where, []).extend(held)
+    return found
+
+
+def _key_variables(tree: ast.AST, owners: dict[int, str], builders=None,
+                   ) -> dict[tuple[str, str], str]:
     """(enclosing def, variable) -> the key pattern assigned to it.
 
     `cache_key = f"api:user_stats:{uid}"` and then `cache.set(cache_key, ...)` is the
@@ -427,7 +484,7 @@ def _key_variables(tree: ast.AST, owners: dict[int, str]) -> dict[tuple[str, str
         # No `_looks_like_key` here: `schedule_id = f"django_{obj.id}"` is not a key -
         # no namespace, no colon - and it is what the key is built AROUND. Filtering it
         # out left the hole as `*`, and one keyspace was read under two spellings.
-        pattern = _py_pattern(value)
+        pattern = _py_pattern(value, builders=builders)
         if not pattern:
             continue
         for target in targets:
@@ -645,6 +702,33 @@ def nx_of(node: ast.Call, method: str) -> bool:
     return method in ("setnx", "add", "aadd") or any(k.arg == "nx" for k in node.keywords)
 
 
+def _key_builders(tree: ast.AST) -> dict[str, str]:
+    """Functions whose whole job is to return a key: name -> the pattern they return.
+
+    ```
+    def achievements_version_key(user_id):
+        return f'user:{user_id}:achievements_ver'
+    ```
+
+    The literal appears once, in the builder, and never at a call site - so a read
+    elsewhere that DOES spell it out came back "read here and written nowhere" about a
+    counter incremented on every achievement change. One `return` of a key shape, and
+    nothing else returned, or it is not a builder.
+    """
+    found: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        returns = [inner for inner in ast.walk(node)
+                   if isinstance(inner, ast.Return) and inner.value is not None]
+        if len(returns) != 1:
+            continue
+        pattern = _py_pattern(returns[0].value)
+        if pattern and _looks_like_key(pattern):
+            found[node.name] = pattern
+    return found
+
+
 def _signatures(tree: ast.AST) -> dict[str, list[str]]:
     """Function name -> its parameter names, by simple name."""
     found: dict[str, list[str]] = {}
@@ -658,6 +742,7 @@ def _signatures(tree: ast.AST) -> dict[str, list[str]]:
 def _keys_into_parameters(
     trees: list[tuple[str, ast.AST, dict[int, str], dict]],
     signatures: dict[str, list[str]],
+    builders: dict[str, str] | None = None,
 ) -> dict[tuple[str, str], set[str]]:
     """(function, parameter) -> the key patterns callers hand it.
 
@@ -691,7 +776,7 @@ def _keys_into_parameters(
                 if position >= len(params):
                     break
                 pattern = _py_pattern(argument, key_names,
-                                      owners.get(node.lineno, ""), node.lineno)
+                                      owners.get(node.lineno, ""), node.lineno, builders)
                 if not pattern and isinstance(argument, ast.Name):
                     pattern = _key_named(key_names, owners.get(node.lineno, ""),
                                          argument.id, node.lineno)
@@ -701,7 +786,7 @@ def _keys_into_parameters(
                 if not word.arg or word.arg not in params:
                     continue
                 pattern = _py_pattern(word.value, key_names,
-                                      owners.get(node.lineno, ""), node.lineno)
+                                      owners.get(node.lineno, ""), node.lineno, builders)
                 if pattern and _looks_like_key(pattern):
                     found.setdefault((name, word.arg), set()).add(pattern)
     return found
@@ -719,8 +804,9 @@ def _scan_python(root: str) -> list[_Hit]:
     # Parsed once. A key built in one function and written inside the helper it is handed
     # to cannot be resolved until every call site has been read, so the trees are kept
     # rather than re-parsed.
-    parsed: list[tuple[str, ast.AST, dict[int, str], dict]] = []
+    trees: list[tuple[str, ast.AST, dict[int, str]]] = []
     signatures: dict[str, list[str]] = {}
+    builders: dict[str, str] = {}
     for here, subdirectories, names in os.walk(root):
         subdirectories[:] = [
             d for d in subdirectories if d not in _PY_SKIP and not d.startswith(".")
@@ -735,11 +821,17 @@ def _scan_python(root: str) -> list[_Hit]:
             except (OSError, SyntaxError, ValueError):
                 continue
             rel = os.path.relpath(path, root)
-            owners = owners_of(tree)
-            parsed.append((rel, tree, owners, _key_variables(tree, owners)))
+            trees.append((rel, tree, owners_of(tree)))
             signatures.update(_signatures(tree))
+            builders.update(_key_builders(tree))
 
-    parameter_keys = _keys_into_parameters(parsed, signatures)
+    # A builder is a project-wide name, so nothing that depends on one can be resolved
+    # until every file has been read.
+    parsed = [(rel, tree, owners, _key_variables(tree, owners, builders))
+              for rel, tree, owners in trees]
+    key_lists = {rel: _key_lists(tree, owners, builders)
+                 for rel, tree, owners in trees}
+    parameter_keys = _keys_into_parameters(parsed, signatures, builders)
 
     for rel, tree, owners, key_names in parsed:
             pipelines = _pipeline_names(tree)
@@ -750,6 +842,7 @@ def _scan_python(root: str) -> list[_Hit]:
             })
             singletons.update(_proxy_singletons(tree))
             scripts = _script_names(tree)
+            lists_here = key_lists.get(rel, {})
             for quoted, line, command, owner in _lua_keys(tree, _script_runs(tree, owners)):
                 hits.append(_Hit(
                     _normalise(quoted), quoted, rel, line,
@@ -823,8 +916,31 @@ def _scan_python(root: str) -> list[_Hit]:
                                 owners.get(node.lineno, ""),
                             ))
                     continue
+                # A command handed a LIST of keys touches every one of them: inline,
+                # by name, or splatted. `r.delete(*keys_to_clear)` and
+                # `cache.delete_many([...])` are how bulk invalidation is written.
+                held = node.args[0]
+                inner = held.value if isinstance(held, ast.Starred) else held
+                listed: list[str] = []
+                if isinstance(inner, (ast.List, ast.Tuple)):
+                    listed = [q for q in
+                              (_py_pattern(e, key_names, owners.get(node.lineno, ""),
+                                           node.lineno, builders) for e in inner.elts)
+                              if q and _looks_like_key(q)]
+                elif isinstance(inner, ast.Name):
+                    where = owners.get(node.lineno, "")
+                    listed = (lists_here.get((where, inner.id))
+                              or lists_here.get(("", inner.id)) or [])
+                if listed:
+                    for one in dict.fromkeys(listed):
+                        hits.append(_Hit(
+                            _normalise(one), one, rel, node.lineno,
+                            method in _WRITES, ttl_of(node, method), receiver, method,
+                            nx_of(node, method), owners.get(node.lineno, ""),
+                        ))
+                    continue
                 pattern = _py_pattern(node.args[0], key_names,
-                                      owners.get(node.lineno, ""), node.lineno)
+                                      owners.get(node.lineno, ""), node.lineno, builders)
                 # `self.CACHE_KEY` / `cls.CACHE_KEY` / `Service.CACHE_KEY`: a constant on
                 # the class body, which is where a service keeps the name of its own
                 # cache. Only a bare name was understood, so those reads were invisible
@@ -1076,11 +1192,15 @@ def extract_redis(root: str) -> tuple[list[Symbol], list[Edge]]:
                 continue
             if "*" not in a and "*" not in b:
                 return False
-            # A bare `*` where this key has a name is the OTHER key being a namespace
-            # sweep - `user:*:*` is what a GDPR wipe scans, not something that writes
-            # `user:{id}:current_streak`. Letting it vouch cleared four real findings.
+            # A bare `*` where this key has a name: is the OTHER key a namespace SWEEP,
+            # or is it that keyspace? `user:*:*` spells out one segment and is what a
+            # GDPR wipe scans - letting it vouch cleared four real findings.
+            # `pps:board:i:*` spells out three and simply IS the board. The difference is
+            # how much of the key the pattern actually names.
             if b == "*" and "*" not in a:
-                return False
+                spelt = sum(1 for part in right if part and "*" not in part)
+                if spelt < 3:
+                    return False
             shape_a = re.compile("^" + ".*".join(re.escape(p) for p in a.split("*")) + "$")
             shape_b = re.compile("^" + ".*".join(re.escape(p) for p in b.split("*")) + "$")
             if not (shape_a.match(b) or shape_b.match(a)):
@@ -1091,8 +1211,12 @@ def extract_redis(root: str) -> tuple[list[Symbol], list[Edge]]:
     for key in by_key:
         # A pattern with no namespace of its own - `*:progress` - would match every key
         # that happens to end in the same word. That is a connection built from a shared
-        # noun, not from evidence, so a pattern has to begin with something real.
-        if "*" not in key or len(key.split("*")[0]) < 4:
+        # noun, not from evidence, so a key has to begin with something real.
+        #
+        # Concrete keys are candidates too: `pps:board:i:mouse` is one of the names
+        # `pps:board:i:*` covers, and only wildcards were ever matched, so a concrete key
+        # could never be reconciled with the pattern that writes it.
+        if len(key.split("*")[0]) < 4:
             continue
         # `overlaps(key, other)`, not the other way round: the question is whether the
         # OTHER key is specific enough to be evidence for this one.

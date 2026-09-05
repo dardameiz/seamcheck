@@ -711,6 +711,27 @@ class OtherSpellingsTests(SimpleTestCase):
         self.assertEqual(rows["*:progress"][0], "uncertain")
         self.assertNotIn("unrelated", _note(root, "*:progress"))
 
+    def test_a_specific_pattern_does_vouch_for_the_names_under_it(self):
+        # `pps:board:i:*` carries three literal segments - it IS that keyspace, and
+        # `pps:board:i:mouse` is one of its names. A sweep like `user:*:*` carries one
+        # and is not evidence about anything; the difference is how much of the key the
+        # pattern actually spells out.
+        rows = _keys(_project({
+            "app/write.py": """
+                from app.redis import get_redis_client
+
+                def seed(r, kind, score):
+                    r.zadd(f"pps:board:i:{kind}", {"1": score})
+            """,
+            "app/read.py": """
+                from app.redis import get_redis_client
+
+                def board(r):
+                    return r.zrevrange("pps:board:i:mouse", 0, 9)
+            """,
+        }))
+        self.assertEqual(rows["pps:board:i:mouse"][0], "connected")
+
     def test_a_namespace_prefix_does_not_vouch_for_everything_under_it(self):
         # `user:*` and `user:*:current_streak` are not the same key, and letting the
         # first stand as evidence for the second silently cleared four real findings -
@@ -1258,3 +1279,150 @@ class InvalidationWithNoWriterTests(SimpleTestCase):
             """,
         })
         self.assertEqual(_keys(root)["cache:warm:index"][0], "uncertain")
+
+
+class KeyBuilderFunctionTests(SimpleTestCase):
+    def test_a_function_that_returns_a_key_names_that_key(self):
+        # ```
+        # def achievements_version_key(user_id):
+        #     return f'user:{user_id}:achievements_ver'
+        # ...
+        # key = achievements_version_key(user_id)
+        # cache.incr(key)
+        # ```
+        # The literal appears once, in the builder, and never at a call site. The read
+        # elsewhere spells it out, so the key came back "read here and written nowhere"
+        # about a counter that is incremented on every achievement change.
+        rows = _keys(_project({
+            "app/cache.py": """
+                from django.core.cache import cache
+
+                def achievements_version_key(user_id):
+                    return f'user:{user_id}:achievements_ver'
+
+                def bump(user_id):
+                    key = achievements_version_key(user_id)
+                    cache.incr(key)
+            """,
+            "app/views.py": """
+                from django.core.cache import cache
+
+                async def show(user_id):
+                    return await cache.aget(f'user:{user_id}:achievements_ver') or '0'
+            """,
+        }))
+        self.assertEqual(rows["user:*:achievements_ver"][0], "connected")
+
+    def test_the_builder_may_be_called_straight_into_the_command(self):
+        rows = _keys(_project({"app/cache.py": """
+            from django.core.cache import cache
+
+            def version_key(user_id):
+                return f'user:{user_id}:ach_ver'
+
+            def bump(user_id):
+                cache.set(version_key(user_id), 1, 86400)
+
+            def read(user_id):
+                return cache.get(version_key(user_id))
+        """}))
+        self.assertEqual(rows["user:*:ach_ver"], ("connected", "1 write / 1 read"))
+
+    def test_a_function_that_returns_something_else_is_not_a_builder(self):
+        rows = _keys(_project({"app/cache.py": """
+            from django.core.cache import cache
+
+            def label(user_id):
+                return f'Player {user_id}'
+
+            def go(user_id):
+                cache.set(label(user_id), 1, 60)
+        """}))
+        self.assertEqual(rows, {})
+
+
+class ListOfKeysTests(SimpleTestCase):
+    """A command handed a LIST of keys touches every one of them.
+
+    ```
+    keys_to_clear = ["push_arena:is_hourly_mode", "push_arena:reset_timezone"]
+    r.delete(*keys_to_clear)
+    ```
+
+    and `cache.delete_many([...])`, and `keys.append(f"...")` then `delete_many(keys)`.
+    The literals are right there and the command is right there, and nothing joined them
+    because the argument is a list rather than a key. This is how every bulk
+    invalidation in the reference project is written.
+    """
+
+    def test_a_splatted_list_of_literals_is_a_touch_of_each(self):
+        rows = _keys(_project({"app/signals.py": """
+            from app.redis import get_redis_client
+
+            def on_mode_change(instance):
+                r = get_redis_client()
+                keys_to_clear = [
+                    "push_arena:is_hourly_mode",
+                    "push_arena:reset_timezone",
+                ]
+                r.delete(*keys_to_clear)
+        """}))
+        self.assertEqual(rows["push_arena:is_hourly_mode"][1], "1 invalidate / 0 read")
+        self.assertEqual(rows["push_arena:reset_timezone"][1], "1 invalidate / 0 read")
+
+    def test_delete_many_takes_its_list_inline(self):
+        rows = _keys(_project({"app/caches.py": """
+            from django.core.cache import cache
+
+            def bust(user_id):
+                cache.delete_many([
+                    f'cache:avatar:{user_id}',
+                    f'lobby_sidebar:{user_id}',
+                ])
+        """}))
+        self.assertIn("cache:avatar:*", rows)
+        self.assertIn("lobby_sidebar:*", rows)
+
+    def test_a_list_built_by_append_is_followed(self):
+        rows = _keys(_project({"app/lobby.py": """
+            from django.core.cache import cache
+
+            def share(recipients):
+                keys_to_drop = []
+                for rid in recipients:
+                    keys_to_drop.append(f'navbar:{rid}')
+                    keys_to_drop.append(f'api:current_pbits:{rid}')
+                cache.delete_many(keys_to_drop)
+        """}))
+        self.assertIn("navbar:*", rows)
+        self.assertIn("api:current_pbits:*", rows)
+
+    def test_a_list_of_things_that_are_not_keys_is_not_a_touch(self):
+        rows = _keys(_project({"app/x.py": """
+            from app.redis import get_redis_client
+
+            def go():
+                names = ["alice", "bob"]
+                get_redis_client().delete(*names)
+        """}))
+        self.assertEqual(rows, {})
+
+    def test_a_loop_over_a_key_list_touches_every_one(self):
+        # `for key in keys_to_clear: r.exists(key)` - the loop variable stands for every
+        # key in the list, one at a time, which is the other half of how bulk work is
+        # written here.
+        rows = _keys(_project({"app/cmd.py": """
+            from app.redis import get_redis_client
+
+            def clear():
+                r = get_redis_client()
+                keys_to_clear = [
+                    "push_arena:is_hourly_mode",
+                    "push_arena:reset_timezone",
+                ]
+                for key in keys_to_clear:
+                    if r.exists(key):
+                        r.delete(key)
+        """}))
+        self.assertIn("push_arena:is_hourly_mode", rows)
+        self.assertIn("push_arena:reset_timezone", rows)
