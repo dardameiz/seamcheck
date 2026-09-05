@@ -60,6 +60,8 @@ _COLUMNS = [
     ("db_column_use", "Selects column"),
     ("db_function_use", "Calls rpc()"),
     ("redis_key", "Redis key"),
+    ("redis_invalidation", "Clears nothing"),
+    ("redis_cleanup", "Erasure delete"),
     ("redis_key_use", "Touches key"),
     ("redis_ttl", "No expiry"),
     ("firestore_rule", "Rule"),
@@ -1291,7 +1293,8 @@ const BANDS = [
    short: "THE STORE",
    kinds: ["db_table", "db_column", "db_function", "db_policy",
            "db_table_use", "db_column_use", "db_function_use",
-           "redis_key", "redis_key_use", "redis_ttl",
+           "redis_key", "redis_invalidation", "redis_cleanup", "redis_key_use",
+           "redis_ttl",
            "firestore_rule", "firestore_collection",
            "cloud_function", "cloud_function_use",
            "storage_bucket", "edge_function", "edge_function_use"],
@@ -1567,7 +1570,8 @@ const LAYER_KINDS = {
                      "edge_function", "edge_function_use", "storage_bucket",
                      "firestore_collection", "firestore_rule",
                      "cloud_function", "cloud_function_use"]),
-  redis: new Set(["redis_key", "redis_key_use", "redis_ttl"]),
+  redis: new Set(["redis_key", "redis_invalidation", "redis_cleanup", "redis_key_use",
+                  "redis_ttl"]),
   graphql: new Set(["graphql_field", "graphql_selection"]),
 };
 // A layer only offers itself when the scan actually found that service.
@@ -1602,7 +1606,8 @@ let pageOnLayer = null;
 // Redis keys are grouped by their first segment - `user:*`, `leaderboard:*` - rather than
 // by kind. Two thousand keys under one "redis key" card is a number; forty under
 // `user:*` is a namespace a reader can open.
-const SEGMENTED_KINDS = new Set(["redis_key", "redis_key_use", "redis_ttl"]);
+const SEGMENTED_KINDS = new Set(["redis_key", "redis_invalidation", "redis_cleanup",
+                                 "redis_key_use", "redis_ttl"]);
 function segmentOf(label) {
   const cut = (label || "").indexOf(":");
   return cut > 0 ? label.slice(0, cut) : "";
@@ -3219,7 +3224,8 @@ function layoutFor(p) {
 // Postgres write is the whole diagnosis, and at thirty thousand concurrent players that
 // one row is the difference between a cache read and a connection out of a pool of 45.
 const COST_LANES = [
-  ["Redis", new Set(["redis_key_use", "redis_key", "redis_ttl"])],
+  ["Redis", new Set(["redis_key_use", "redis_key", "redis_invalidation",
+                     "redis_cleanup", "redis_ttl"])],
   ["Postgres", new Set(["db_table_use", "db_column_use", "db_function_use",
                         "db_table", "db_column"])],
   ["Celery", new Set(["celery_task", "celery_schedule", "job_enqueue", "job_schedule"])],
@@ -5596,7 +5602,8 @@ _SERVICE_LAYERS = (
                               "edge_function", "edge_function_use", "storage_bucket",
                               "firestore_collection", "firestore_rule",
                               "cloud_function", "cloud_function_use")),
-    ("redis", "Redis", ("redis_key", "redis_key_use", "redis_ttl")),
+    ("redis", "Redis", ("redis_key", "redis_invalidation", "redis_cleanup",
+                        "redis_key_use", "redis_ttl")),
 )
 # The layers whose nodes ARE on pages, and so can say which. A webhook is reached by
 # Stripe and lists none; a key is reached by whichever pages' handlers touch it; the
