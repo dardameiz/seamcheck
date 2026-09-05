@@ -1129,3 +1129,46 @@ delete-only key can survive so long: the suite is actively defending it.
 
 Related, and cheap: the same rule flags a test that asserts on a key which no product code
 touches at all — a test guarding a feature that has already been deleted.
+
+## Correction: F28 is WRONG, and backwards. Please do not implement it as written
+
+F28 said an accessor helper's key-shaped arguments should all count as read sites, using this:
+
+```python
+hash_get_or_string(r, f"user:{id}:stats", "total_avatars", f"user:{id}:obtained_avatars")
+```
+
+I checked the helper's body afterwards. It does not read the fourth argument:
+
+```python
+def hash_get_or_string(r, hash_key, field, string_key=None, default=None, cast=None):
+    """Read from hash only. String fallback removed (Phase 3 migration).
+
+    The string_key parameter is retained for call-site compatibility but ignored.
+    """
+```
+
+**The parameter is dead at 78 product call sites**, carrying ~23 distinct legacy key names —
+`user:{id}:pbits` ×11, `:avatar` ×5, `:country` ×4, `:hour_streak` ×7, and so on.
+
+So the rule I gave you would have taught the scanner to see a **phantom reader** on every one of
+them, and phantom readers are worse than phantom deletes: a phantom delete makes you look at
+something harmless, a phantom reader makes a genuinely dead key look alive and drops it out of
+the findings entirely. It would have *hidden* real work — including two live bugs I only found
+afterwards by reading the project's own OPEN log (an admin column and a cold-rebuild path both
+reading keys nothing writes).
+
+**The rule that is actually right, and it is a better feature than F28 was:**
+
+> A key-shaped literal passed into a parameter the callee never reads is a **phantom reader**.
+> Resolve the helper's body once; if a parameter is unused, every key passed to it is *not* a
+> read site — and the call sites are themselves a finding worth reporting.
+
+That second half is the valuable part. This codebase's own audit log already carries the finding
+(`PB-REDIS-PHASE3-DEADWRITE`: "delete the ignored parameter from all 124 call sites so the next
+reader is not misled into thinking a fallback exists") — and *the next reader was misled*, by me,
+within the hour. A scanner that resolves one function signature catches what a careful human
+reading the same line did not.
+
+F24 (INCR's return value), F25 (variable/builder/constant), F26 (Lua string) and F27 (SCAN
+prefix) all still stand — I verified each against the helper bodies. F28 does not.
