@@ -19,6 +19,21 @@ backend that answered `uncertain` everywhere would score 100% precision and be u
 
 ## Unreleased
 
+### The map asked Google for type every time somebody opened it
+
+- **Fixed** — the map is one self-contained file and the promise it is sold on is that
+  opening it fetches nothing. It fetched a Google Fonts stylesheet for seven families.
+  A report is built against a private codebase and opened from inside a company network,
+  so that request told a third party the file was opened, from where, and when — and a
+  page that arrives with its webfonts on one machine and without them on another is two
+  different documents. **Every pack now names faces the reader's machine already has**,
+  each keeping its genre: a geometric humanist for Aurora, a neo-grotesque for Blueprint,
+  monospace throughout Phosphor, an old-style serif for Signal's headings, the plain UI
+  face for Slate.
+- **Fixed** — `env_read:<not comparable>`, the one symbol raised when a project's
+  `.env.example` covers too little of what the code reads to judge any key by, shipped
+  with an empty evidence line. It carries the first read site now, like every other row.
+
 ### A sweep is not a read
 
 - **Added** — `scan(cursor, match="user:*:hourly_patterns")`. The key is not the first
