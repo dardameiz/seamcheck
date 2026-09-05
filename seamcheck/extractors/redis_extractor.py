@@ -1138,12 +1138,16 @@ def _clients_into_parameters(
             continue
         name = (node.func.id if isinstance(node.func, ast.Name)
                 else getattr(node.func, "attr", ""))
-        params = next(iter(signatures.get(name, ())), None)
-        if not params:
+        every = signatures.get(name)
+        if not every:
             continue
         where = owners.get(node.lineno, "")
-        handed = [(params[i], a) for i, a in enumerate(node.args) if i < len(params)]
-        handed += [(w.arg, w.value) for w in node.keywords if w.arg in params]
+        # Every signature this name has, for the same reason the key hop tries them all:
+        # one name can be two functions, and picking one of them misreads the other.
+        handed = [(params[i], a) for params in every
+                  for i, a in enumerate(node.args) if i < len(params)]
+        handed += [(w.arg, w.value) for w in node.keywords
+                   if any(w.arg in params for params in every)]
         for param, argument in handed:
             identity = resolve(argument, where)
             if identity is None:

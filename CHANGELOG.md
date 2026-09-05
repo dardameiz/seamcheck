@@ -17,7 +17,20 @@ Coverage and precision have **different denominators** and neither is meaningful
 backend that answered `uncertain` everywhere would score 100% precision and be useless.
 `uncertain` is not counted as a claim in precision, because it is not a claim.
 
-## Unreleased
+## 0.11.0 — 2026-09-05
+
+Measured: coverage 89% across 47 projects and 358,845 symbols (Flask 93%, Django 91%,
+Express 69%, FastAPI 58%, NestJS 49%, Next.js 46%) · precision 54% on 133 hand-labelled
+claims · recall 6/6 · corpus 34/34 scanned with no crash and no lost routes.
+
+Against 0.10.0 the coverage figure is **not comparable**, and saying so is the point: the
+denominator tripled. A Django project's Postgres half used to be 65 model names; it is now
+332,177 symbols — tables, columns and the querysets that touch them — so 84% → 91% means
+there is far more of a project in the map, judged at about the same rate. Precision is
+flat (55% → 54%), which is what a release spent on ONE lens looks like: the Redis claims
+that changed were mostly not in the labelled set, and a claim that stops being made simply
+leaves the count.
+
 
 ### The map asked Google for type every time somebody opened it
 
@@ -34,19 +47,96 @@ backend that answered `uncertain` everywhere would score 100% precision and be u
   `.env.example` covers too little of what the code reads to judge any key by, shipped
   with an empty evidence line. It carries the first read site now, like every other row.
 
-### A sweep is not a read
+### A delete nobody writes is not a write nobody reads
+
+They shared one red, **43 : 17** on the reference project — and every fix that mattered
+came from the 17. The two are opposite findings:
+
+- **A write with no reader is usually correct.** Telemetry counters and audit trails
+  exist to be read by a human with `redis-cli` after an incident. No scan will ever see
+  that reader, so those stay red permanently, and rightly.
+- **A delete with no writer is almost always a bug, and it is invisible by
+  construction.** `DEL` on a missing key returns 0, raises nothing, logs nothing, and the
+  surrounding code reads as working invalidation. That is exactly how a stale-cache
+  defect survived a full test suite: the suite compared the API against the DOM, and a
+  stale cache makes both surfaces agree. Two views of one number can only prove they came
+  from the same place.
+
+- **Added** — `redis_invalidation`, *"Invalidations that clear nothing"*, ranked first.
+- **Added** — `redis_cleanup`, *"Erasure and teardown deletes (correct, and dead)"* — a
+  GDPR wipe, a logout, a harness reset. Finding nothing is what those are FOR, so the
+  claim is true and unactionable forever. One ordinary delete among the erasure ones and
+  the whole key goes back to actionable.
+- **Added** — the limits beside the count, not only in the footer: code is not the
+  keyspace, and Celery, subscribers, WebSocket handlers and webhooks are untraced entry
+  points — which is where Redis is reached from.
+
+**If you read the graph JSON and filter by kind, add both names.** A delete-only key is
+no longer a `redis_key` node.
+
+The split paid for itself the day it shipped: working the new list on the reference
+project turned up a live cache bug — a delete keyed `{date}:{period}` against a cache
+keyed by unix timestamp below a 1-hour rotation, so on the environment where an admin is
+most likely to add a store item, "appears immediately" silently did not hold.
+
+### A sweep is what its consumer makes it
 
 - **Added** — `scan(cursor, match="user:*:hourly_patterns")`. The key is not the first
   argument, it is the **match pattern** — the cursor sits where a key normally would, so
-  nothing in the call looked like a key at all, and a live analytics sweep read as a
-  keyspace nobody visits.
-- **...and a scan is evidence, never a read.** Counting sweeps as reads immediately
-  invented eight *"read here and written nowhere"* claims, every one of them a cleanup
-  script, a GDPR wipe or a reset helper enumerating keys **to delete**. A scan says the
-  keyspace is visited; whether the next line reads the values or removes them is that
-  line's business. So it stops a key being called dead and never claims a read.
+  nothing in the call looked like a key at all.
+- **Fixed** — and what a sweep MEANS is decided by what consumes the names it returns.
+  `scan → hgetall` is a read of every key it matches; `scan → delete` is a wipe and only
+  evidence that the keyspace is visited. Counting every scan as a read invented eight
+  *"read here and written nowhere"* claims, all of them cleanup scripts; counting every
+  scan as a sweep called a live analytics keyspace write-only. Followed through
+  `.extend()`, `list(...)` and a comprehension, because
+  `[k.decode() … for k in scan_iter(…)]` is what these lines actually look like.
+- **Added** — a `*` spans separators in Redis, so a sweep that is read through reaches
+  deeper than its own segment count: `analytics:seo:*` really does read
+  `analytics:seo:ref:{host}:{day}`. Two guards keep that from becoming a shrug — the
+  pattern must name two segments of its own, and the sweep must end in a read.
+- **Fixed** — the pattern itself is no longer a claim. Nothing stores `analytics:seo:*`.
 
-Found by a reader checking all 117 claims on the reference project by hand.
+### A guard's return value is the read
+
+- **Added** — an `INCR`/`HINCRBY`/`DECR` whose result is bound to a name, awaited, or
+  unpacked from a `pipeline.execute()` that is actually drained. A rate limiter never
+  reads its counter back; it uses what the write returned, so every working limiter in a
+  project reported as a write nobody reads. A pipeline whose result is thrown away stays
+  a write. The command list is the ones whose answer is the STATE — not `rpush`, whose
+  answer is a length: a dead key that looks alive costs more than the red it removes.
+- **Added** — a Lua `redis.call("SET", key, v, "NX", …)` is the same guard as
+  `set(key, v, nx=True)` in Python — `if not redis.call(…)` is the read — so the atomic
+  guards on a project's hottest path are no longer written-and-never-read.
+
+### Three more ways a key never appears at the call site
+
+- **Fixed** — **two functions of one name.** `safe_get(r, key, default=None)` is a
+  project's Redis wrapper; a helper nested inside an export is also called
+  `safe_get(key, default=None)`, and keeping only the last signature filed every key
+  under the parameter named `default` — so the wrapper's own `r.get(key)` found nothing
+  and a cache in constant use read as written-and-never-read. Every signature is kept and
+  each is tried.
+- **Added** — `PREFIX + str(user.pk)`, an f-string spelled the older way. Assignments are
+  read twice now, so the second pass sees the constant the first one learned.
+- **Added** — `eval(SCRIPT, 1, _cold_slots_key(name))`: a script handed its key by a
+  builder. Only literals were read there, so the keyspace of the scripts that run on the
+  hottest path was invisible.
+- **Fixed** — a Lua local keeps its whole name. Taking the first quoted piece and calling
+  the rest one hole turned `'dedup:' .. user_id .. ':' .. request_id` into `dedup:{}`.
+
+### Code the project itself calls disposable is not evidence about the project
+
+- **Added** — directories named by the repo's own `.gitignore` are not read. A demo
+  seeder and a folder called `management_commands_archived` produced nine findings that
+  were all true and none about the product. Simple entries only — a bare name or a
+  trailing slash; a glob, a path or a negation is left alone, because reimplementing
+  gitignore is not the point.
+
+All of the above came from a reader adjudicating **every** Redis claim on the reference
+project by hand, twice: 117 claims read one at a time, then the 92 that survived. Claims
+on that project went **92 → 62** with no code deleted for it, and the two that were
+provably wrong are now connected.
 
 
 ### One row per id — 6,817 of the reference project's rows were duplicates
