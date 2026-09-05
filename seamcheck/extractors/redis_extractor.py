@@ -258,7 +258,7 @@ def _py_receiver(func: ast.Attribute) -> str:
 _PIPELINE_FACTORIES = ("pipeline", "multi")
 
 
-def _pipeline_names(tree: ast.AST) -> dict[str, str]:
+def _pipeline_names(tree: ast.AST, owners: dict[int, str]) -> dict[tuple[str, str], str]:
     """Locals holding a pipeline, mapped to the CLIENT they were made from.
 
     `pipe = r.pipeline()` and `with r.pipeline() as pipe:`. By assignment rather than by
@@ -271,7 +271,7 @@ def _pipeline_names(tree: ast.AST) -> dict[str, str]:
     "touched through more than one client" check fire on every key that a pipeline and
     its own client both touch, which is most of them.
     """
-    found: dict[str, str] = {}
+    found: dict[tuple[str, str], str] = {}
 
     def source(node) -> str | None:
         if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
@@ -279,17 +279,23 @@ def _pipeline_names(tree: ast.AST) -> dict[str, str]:
             return _py_receiver(node.func) or ""
         return None
 
+    # Scoped to the function. `pipe = main_r.pipeline()` in one handler and
+    # `pipe = mon_r.pipeline()` in the next are two pipelines on two connections; one
+    # table for the whole file gave every `pipe` the last one's client, and a read of
+    # the main store came back as a read of the monitoring one - which is the
+    # wrong-instance warning, invented.
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
             client = source(node.value)
             if client is not None:
                 for target in node.targets:
                     if isinstance(target, ast.Name):
-                        found[target.id] = client
+                        found[(owners.get(node.lineno, ""), target.id)] = client
         elif isinstance(node, ast.withitem):
             client = source(node.context_expr)
             if client is not None and isinstance(node.optional_vars, ast.Name):
-                found[node.optional_vars.id] = client
+                found[(owners.get(node.context_expr.lineno, ""),
+                       node.optional_vars.id)] = client
     return found
 
 
@@ -298,9 +304,33 @@ _LUA_STRING = re.compile(r"""["']([A-Za-z0-9_:.\-{}*]{3,})["']""")
 # concatenation is the same hole an f-string leaves.
 _LUA_LOCAL = re.compile(
     r"""local\s+([A-Za-z_]\w*)\s*=\s*["']([^"'\n]+)["'](\s*\.\.\s*\S+)?""")
-# `redis.call("HGET", user_key, ...)` - the command and whatever holds the key.
+# `redis.call("HGET", user_key, ...)` - the command and whatever holds the key. The key
+# may be spelled INLINE: `redis.call("ZADD", "pps:board:i:" .. input_type .. ":t:" ..
+# technique, score, uid)`. Reading only the first quoted piece saw `pps:board:i:` - a
+# fragment, dropped - and a sorted set the script maintains on every run was reported as
+# written only by a seed command, and read by nobody.
 _LUA_CALL = re.compile(
-    r"""redis\.(?:call|pcall)\s*\(\s*["'](\w+)["']\s*,\s*([A-Za-z_]\w*|["'][^"'\n]+["'])""")
+    r"""redis\.(?:call|pcall)\s*\(\s*["'](\w+)["']\s*,\s*"""
+    r"""((?:[A-Za-z_][\w.]*(?:\[[^\]]*\])?|["'][^"'\n]+["'])"""
+    r"""(?:\s*\.\.\s*(?:[A-Za-z_][\w.]*(?:\[[^\]]*\])?|["'][^"'\n]+["']))*)""")
+_LUA_PIECE = re.compile(r"""["']([^"'\n]*)["']|([A-Za-z_][\w.]*(?:\[[^\]]*\])?)""")
+
+
+def _lua_expression(text: str, locals_: dict[str, str]) -> str:
+    """The key a Lua concatenation names, with every non-literal piece left as a hole.
+
+    `"pps:board:i:" .. input_type .. ":t:" .. technique` is `pps:board:i:{}:t:{}` - the
+    same shape an f-string leaves. A bare name is looked up among the script's locals,
+    so `redis.call("HGET", user_key, …)` still resolves through `local user_key = …`.
+    """
+    parts: list[str] = []
+    for literal, name in _LUA_PIECE.findall(text):
+        if name:
+            held = locals_.get(name)
+            parts.append(held if held else "{}")
+        else:
+            parts.append(literal)
+    return "".join(parts)
 
 
 def _script_runs(tree: ast.AST, owners: dict[int, str]) -> dict[str, list[tuple[int, str]]]:
@@ -374,7 +404,12 @@ def _lua_keys(tree: ast.AST, runs: dict[str, list[tuple[int, str]]] | None = Non
         named: set[str] = set()
         for match in _LUA_CALL.finditer(body):
             command, holder = match.group(1), match.group(2)
-            key = locals_.get(holder) if holder[0] not in "\"'" else holder.strip("\"'")
+            key = _lua_expression(holder, locals_)
+            # A name the script never declared - `KEYS[1]`, a parameter - is the
+            # caller's key, not this script's. Only a hole with a literal around it
+            # is a shape worth reporting.
+            if key == "{}":
+                key = ""
             if key and _looks_like_key(key) and not _is_fragment(key):
                 named.add(key)
                 # The whole script is one Python string, so every command in it shared
@@ -441,6 +476,17 @@ def _key_lists(tree: ast.AST, owners: dict[int, str], builders=None,
                 if isinstance(target, ast.Name):
                     for element in node.value.elts:
                         add((owners.get(node.lineno, ""), target.id), element)
+        # `redis_key = cps_board_key(cps_input, cps_technique)` - a builder that returns
+        # one of several keys, so the name stands for every one of them.
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
+            called = (node.value.func.id if isinstance(node.value.func, ast.Name)
+                      else getattr(node.value.func, "attr", ""))
+            made = (builders or {}).get(called)
+            if isinstance(made, _OneOf):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        found.setdefault(
+                            (owners.get(node.lineno, ""), target.id), []).extend(made)
         # `keys.append(f"navbar:{rid}")` inside a loop.
         if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                 and node.func.attr in ("append", "add") and len(node.args) == 1
@@ -462,6 +508,111 @@ def _key_lists(tree: ast.AST, owners: dict[int, str], builders=None,
                     or found.get(("", node.iter.id)))
             if held:
                 found.setdefault(where, []).extend(held)
+    return found
+
+
+def _scan_pattern(node: ast.Call) -> str:
+    """The MATCH pattern a scan-shaped call sweeps, or ""."""
+    if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+        return ""
+    method = node.func.attr
+    if method not in _SCANNERS:
+        return ""
+    for word in node.keywords:
+        if word.arg in ("match", "pattern"):
+            return _py_pattern(word.value) or ""
+    # `scan_iter("user:*")` / `keys("user:*")` - the pattern is positional. `scan(0, …)`
+    # takes the cursor there, and a cursor is not a pattern.
+    if method != "scan" and node.args:
+        return _py_pattern(node.args[0]) or ""
+    return ""
+
+
+def _swept_lists(tree: ast.AST, owners: dict[int, str]) -> dict[tuple[str, str], list[str]]:
+    """(enclosing def, variable) -> the keyspace a scan handed it.
+
+    ```
+    cursor, keys = r.scan(cursor, match="user:*:hourly_patterns")
+    hourly_keys.extend(keys)
+    for k in hourly_keys:
+        pipe.hgetall(k)                      # a READ of user:*:hourly_patterns
+    ```
+
+    A scan enumerates a keyspace; what the caller does with the names decides whether
+    the keyspace was read. Counting the scan itself as a read invented eight lookups
+    from wipe scripts; counting it as nothing called a keyspace that is aggregated on
+    every admin page load "written and never read". The read is the HGETALL, and the
+    name it is given can be followed to it.
+
+    Followed through unpacking, `.extend()`/`.append()`, `list(...)`, plain assignment
+    and `for` - the shapes a cursor loop takes. Only the names: whether the command at
+    the end reads or deletes is that command's business, and the caller decides.
+    """
+    found: dict[tuple[str, str], list[str]] = {}
+
+    def hold(where, patterns):
+        if patterns and _looks_like_key(patterns[0]):
+            found.setdefault(where, []).extend(
+                q for q in patterns if q not in found.get(where, []))
+
+    def unwrap(value):
+        # `list(r.scan_iter(...))`, `set(keys)`, `sorted(keys)`.
+        if (isinstance(value, ast.Call) and isinstance(value.func, ast.Name)
+                and value.func.id in ("list", "set", "sorted", "tuple") and value.args):
+            return value.args[0]
+        return value
+
+    for node in ast.walk(tree):
+        where = owners.get(getattr(node, "lineno", 0), "")
+        if isinstance(node, ast.Assign):
+            value = unwrap(node.value)
+            pattern = _scan_pattern(value)
+            if not pattern:
+                continue
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    hold((where, target.id), [pattern])
+                elif isinstance(target, ast.Tuple) and target.elts \
+                        and isinstance(target.elts[-1], ast.Name):
+                    # `cursor, keys = r.scan(...)` - the keys are the last element.
+                    hold((where, target.elts[-1].id), [pattern])
+        elif (isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension))
+                and isinstance(node.target, ast.Name)):
+            # `[r.hgetall(k) for k in r.scan_iter(...)]` has no line of its own; the
+            # comprehension sits on the line of the expression that holds it.
+            where = owners.get(getattr(node.iter, "lineno", 0), "") or where
+            pattern = _scan_pattern(unwrap(node.iter))
+            if pattern:
+                hold((where, node.target.id), [pattern])
+    if not found:
+        return found
+    # The names the scanned names flow into. Bounded: a cursor loop is three or four
+    # hops, and the fixpoint is cheap on a file that has any scan at all.
+    for _ in range(4):
+        before = sum(len(v) for v in found.values())
+        for node in ast.walk(tree):
+            where = owners.get(getattr(node, "lineno", 0), "")
+            if isinstance(node, ast.Assign) and isinstance(unwrap(node.value), ast.Name):
+                held = found.get((where, unwrap(node.value).id))
+                for target in node.targets:
+                    if held and isinstance(target, ast.Name):
+                        hold((where, target.id), held)
+            elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr in ("extend", "append", "add", "update")
+                    and len(node.args) == 1 and isinstance(node.func.value, ast.Name)
+                    and isinstance(node.args[0], ast.Name)):
+                held = found.get((where, node.args[0].id))
+                if held:
+                    hold((where, node.func.value.id), held)
+            elif (isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension))
+                    and isinstance(node.target, ast.Name)
+                    and isinstance(unwrap(node.iter), ast.Name)):
+                where = owners.get(getattr(node.iter, "lineno", 0), "") or where
+                held = found.get((where, unwrap(node.iter).id))
+                if held:
+                    hold((where, node.target.id), held)
+        if sum(len(v) for v in found.values()) == before:
+            break
     return found
 
 
@@ -496,7 +647,7 @@ def _key_variables(tree: ast.AST, owners: dict[int, str], builders=None,
             called = (value.func.id if isinstance(value.func, ast.Name)
                       else getattr(value.func, "attr", ""))
             made = (builders or {}).get(called) or []
-            if len(made) == len(targets[0].elts):
+            if len(made) == len(targets[0].elts) and not isinstance(made, _OneOf):
                 for name_node, one in zip(targets[0].elts, made, strict=True):
                     if isinstance(name_node, ast.Name):
                         found.setdefault(
@@ -628,47 +779,48 @@ def _proxy_singletons(tree: ast.AST) -> dict[str, str]:
     return found
 
 
-def _assignment_line(tree: ast.AST, name: str) -> int:
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign) and any(
-                isinstance(t, ast.Name) and t.id == name for t in node.targets):
-            return node.lineno
-    return 0
+def _client_names(tree: ast.AST, owners: dict[int, str]) -> dict[tuple[str, str], str]:
+    """(enclosing def, local) holding a Redis client -> the connection it holds.
 
-
-def _client_names(tree: ast.AST) -> dict[str, str]:
-    """Locals holding a Redis client, mapped to the connection they hold."""
-    found: dict[str, str] = {}
+    Scoped to the function, with "" for the module. `r = get_monitoring_redis_client()`
+    in one view and `r = get_redis_client()` in the next are two connections; one table
+    per file gave the whole file the first, and a key written on the main store and read
+    on the main store was warned about as touched through two clients.
+    """
+    found: dict[tuple[str, str], str] = {}
     proxies = _proxy_classes(tree)
     for node in ast.walk(tree):
         if (isinstance(node, ast.Assign) and isinstance(node.value, ast.Call)
                 and getattr(node.value.func, "id", "") in proxies):
             for target in node.targets:
                 if isinstance(target, ast.Name):
-                    found[target.id] = proxies[node.value.func.id]
+                    found[(owners.get(node.lineno, ""), target.id)] = \
+                        proxies[node.value.func.id]
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
+            where = owners.get(node.lineno, "")
             identity = _client_identity(node.value)
             if identity == _ANY_CLIENT:
                 identity = ""
                 for target in node.targets:
                     if isinstance(target, ast.Name):
-                        found.setdefault(target.id, "")
+                        found.setdefault((where, target.id), "")
             elif identity:
                 for target in node.targets:
                     if isinstance(target, ast.Name):
                         # setdefault: `redis_client = RedisClient()` reads as a factory
                         # by name too, and the proxy above already knows which connection
                         # that class forwards to, which is the more specific answer.
-                        found.setdefault(target.id, identity)
+                        found.setdefault((where, target.id), identity)
         elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
             identity = _client_identity(node.value)
             if identity:
-                found[node.target.id] = identity
+                found[(owners.get(node.lineno, ""), node.target.id)] = identity
         elif isinstance(node, ast.withitem) and isinstance(node.optional_vars, ast.Name):
             identity = _client_identity(node.context_expr)
             if identity:
-                found[node.optional_vars.id] = identity
+                found[(owners.get(node.context_expr.lineno, ""),
+                       node.optional_vars.id)] = identity
         elif isinstance(node, ast.ImportFrom):
             # `from app.redis_client import redis_client as _r_ann`: the alias is not
             # client-shaped and the import is the only place its real name appears.
@@ -678,7 +830,7 @@ def _client_names(tree: ast.AST) -> dict[str, str]:
             # connections again, on 49 keys.
             for alias in node.names:
                 if alias.asname and _RECEIVER.search(alias.name):
-                    found[alias.asname] = f"?{alias.name}"
+                    found[("", alias.asname)] = f"?{alias.name}"
     return found
 
 
@@ -736,6 +888,11 @@ def nx_of(node: ast.Call, method: str) -> bool:
     return method in ("setnx", "add", "aadd") or any(k.arg == "nx" for k in node.keywords)
 
 
+class _OneOf(list):
+    """A builder's keys when it returns ONE of them, chosen by branch - as opposed to a
+    pair the caller unpacks. Same list, different meaning at the assignment."""
+
+
 def _key_builders(tree: ast.AST) -> dict[str, list[str]]:
     """Functions whose whole job is to return a key: name -> the pattern they return.
 
@@ -746,16 +903,53 @@ def _key_builders(tree: ast.AST) -> dict[str, list[str]]:
 
     The literal appears once, in the builder, and never at a call site - so a read
     elsewhere that DOES spell it out came back "read here and written nowhere" about a
-    counter incremented on every achievement change. One `return` of a key shape, and
-    nothing else returned, or it is not a builder.
+    counter incremented on every achievement change.
+
+    One return of a key shape, or one per branch:
+
+    ```
+    def cps_board_key(input_filter=None, technique_filter=None):
+        if i and t:
+            return f'pps:board:i:{i}:t:{t}'
+        if i:
+            return f'pps:board:i:{i}'
+        return LEADERBOARD_KEYS['pps']
+    ```
+
+    A caller of that holds ONE of three keys, and a read through it reads all three. A
+    return that resolves to nothing - a dictionary lookup, a name - is tolerated; a
+    return that resolves to something that is not a key is not, because then the
+    function is not a builder.
     """
-    found: dict[str, str] = {}
+    found: dict[str, list[str]] = {}
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         returns = [inner for inner in ast.walk(node)
                    if isinstance(inner, ast.Return) and inner.value is not None]
-        if len(returns) != 1:
+        if not returns:
+            continue
+        if len(returns) > 1:
+            branches: list[str] = []
+            for one in returns:
+                if isinstance(one.value, (ast.Tuple, ast.List)):
+                    branches = []
+                    break
+                pattern = _py_pattern(one.value)
+                if pattern is None:
+                    # `return 42` resolves fine and is not a key; `return None` is the
+                    # no-key branch a builder is allowed to have.
+                    if (isinstance(one.value, ast.Constant)
+                            and one.value.value is not None):
+                        branches = []
+                        break
+                    continue
+                if not _looks_like_key(pattern):
+                    branches = []
+                    break
+                branches.append(pattern)
+            if branches:
+                found[node.name] = _OneOf(dict.fromkeys(branches))
             continue
         value = returns[0].value
         if isinstance(value, (ast.Tuple, ast.List)):
@@ -806,6 +1000,70 @@ def _client_factories(tree: ast.AST) -> dict[str, str]:
     return found
 
 
+def _scoped(table: dict, name: str, where: str):
+    """The enclosing function's binding of `name`, else the module's, else None."""
+    if (where, name) in table:
+        return table[(where, name)]
+    return table.get(("", name))
+
+
+def _clients_into_parameters(
+    tree: ast.AST, owners: dict[int, str],
+    clients: dict[tuple[str, str], str], pipelines: dict[tuple[str, str], str],
+) -> dict[tuple[str, str], str]:
+    """(function, parameter) -> the connection its callers hand it.
+
+    A helper that takes the pipeline as an argument -
+
+        def _build_end_commands(pipe, endpoint, bucket):
+            pipe.incr(f"analytics:req:total:{endpoint}")
+
+        pipe = r.pipeline(); _build_end_commands(pipe, ...)
+
+    - never assigns `pipe`, so scoping the client table to the function left every
+    write in it with no receiver at all, and four keys the middleware writes on every
+    request were reported as never written. The caller knows the connection; carry it
+    across the call, the way the key builders already travel into a wrapper's parameter.
+    Callers that disagree leave the parameter an unknown connection, not a second one.
+    """
+    signatures = _signatures(tree)
+    found: dict[tuple[str, str], str] = {}
+
+    def resolve(argument, where) -> str | None:
+        if not isinstance(argument, ast.Name):
+            return None
+        name = argument.id
+        piped = _scoped(pipelines, name, where)
+        if piped is not None:
+            name = piped or name
+        known = _scoped(clients, name, where)
+        if known is not None:
+            return known
+        return f"?{name}" if _RECEIVER.search(name) else None
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        name = (node.func.id if isinstance(node.func, ast.Name)
+                else getattr(node.func, "attr", ""))
+        params = signatures.get(name)
+        if not params:
+            continue
+        where = owners.get(node.lineno, "")
+        handed = [(params[i], a) for i, a in enumerate(node.args) if i < len(params)]
+        handed += [(w.arg, w.value) for w in node.keywords if w.arg in params]
+        for param, argument in handed:
+            identity = resolve(argument, where)
+            if identity is None:
+                continue
+            seen = found.get((name, param))
+            if seen is None or seen == identity:
+                found[(name, param)] = identity
+            else:
+                found[(name, param)] = ""
+    return found
+
+
 def _signatures(tree: ast.AST) -> dict[str, list[str]]:
     """Function name -> its parameter names, by simple name."""
     found: dict[str, list[str]] = {}
@@ -817,7 +1075,7 @@ def _signatures(tree: ast.AST) -> dict[str, list[str]]:
 
 
 def _keys_into_parameters(
-    trees: list[tuple[str, ast.AST, dict[int, str], dict]],
+    trees: list[tuple[str, ast.AST, dict[int, str], dict, dict]],
     signatures: dict[str, list[str]],
     builders: dict[str, str] | None = None,
 ) -> dict[tuple[str, str], set[str]]:
@@ -840,32 +1098,63 @@ def _keys_into_parameters(
     two writes.
     """
     found: dict[tuple[str, str], set[str]] = {}
-    for _rel, tree, owners, key_names in trees:
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            name = (node.func.id if isinstance(node.func, ast.Name)
-                    else getattr(node.func, "attr", ""))
-            params = signatures.get(name)
-            if not params:
-                continue
-            for position, argument in enumerate(node.args):
-                if position >= len(params):
-                    break
-                pattern = _py_pattern(argument, key_names,
-                                      owners.get(node.lineno, ""), node.lineno, builders)
-                if not pattern and isinstance(argument, ast.Name):
-                    pattern = _key_named(key_names, owners.get(node.lineno, ""),
-                                         argument.id, node.lineno)
-                if pattern and _looks_like_key(pattern):
-                    found.setdefault((name, params[position]), set()).add(pattern)
-            for word in node.keywords:
-                if not word.arg or word.arg not in params:
+
+    def patterns_of(argument, key_names, listed, owner, line) -> list[str]:
+        one = _py_pattern(argument, key_names, owner, line, builders)
+        if one:
+            return [one]
+        if isinstance(argument, ast.Call):
+            called = (argument.func.id if isinstance(argument.func, ast.Name)
+                      else getattr(argument.func, "attr", ""))
+            made = (builders or {}).get(called)
+            if isinstance(made, _OneOf):
+                return list(made)
+        if isinstance(argument, ast.Name):
+            named = _key_named(key_names, owner, argument.id, line)
+            if named:
+                return [named]
+            # `redis_key = cps_board_key(...)` then `get_entries(redis_key, ...)` - a
+            # name standing for one of several keys.
+            held = listed.get((owner, argument.id)) or listed.get(("", argument.id))
+            if held:
+                return list(held)
+            # ...or a parameter of THIS function, handed straight on:
+            # `def get_entries(redis_key, …): return safe_zrevrange(r, redis_key, …)`.
+            # What the caller gave this function, this function gives the next one.
+            # The fixpoint below is what makes the second hop see the first.
+            here = owner.rpartition(".")[2]
+            if argument.id in signatures.get(here, ()):
+                return sorted(found.get((here, argument.id), ()))
+        return []
+
+    # Two passes: the second sees what the first handed to a parameter, so a key can
+    # travel caller -> helper -> wrapper. Deeper chains are rarer than they are costly.
+    for _ in range(2):
+        before = sum(len(v) for v in found.values())
+        for _rel, tree, owners, key_names, listed in trees:
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
                     continue
-                pattern = _py_pattern(word.value, key_names,
-                                      owners.get(node.lineno, ""), node.lineno, builders)
-                if pattern and _looks_like_key(pattern):
-                    found.setdefault((name, word.arg), set()).add(pattern)
+                name = (node.func.id if isinstance(node.func, ast.Name)
+                        else getattr(node.func, "attr", ""))
+                params = signatures.get(name)
+                if not params:
+                    continue
+                owner, line = owners.get(node.lineno, ""), node.lineno
+                for position, argument in enumerate(node.args):
+                    if position >= len(params):
+                        break
+                    for pattern in patterns_of(argument, key_names, listed, owner, line):
+                        if _looks_like_key(pattern):
+                            found.setdefault((name, params[position]), set()).add(pattern)
+                for word in node.keywords:
+                    if not word.arg or word.arg not in params:
+                        continue
+                    for pattern in patterns_of(word.value, key_names, listed, owner, line):
+                        if _looks_like_key(pattern):
+                            found.setdefault((name, word.arg), set()).add(pattern)
+        if sum(len(v) for v in found.values()) == before:
+            break
     return found
 
 
@@ -909,22 +1198,24 @@ def _scan_python(root: str) -> list[_Hit]:
     # until every file has been read.
     _CLIENT_FACTORIES.clear()
     _CLIENT_FACTORIES.update(factories)
-    parsed = [(rel, tree, owners, _key_variables(tree, owners, builders))
-              for rel, tree, owners in trees]
     key_lists = {rel: _key_lists(tree, owners, builders)
                  for rel, tree, owners in trees}
+    parsed = [(rel, tree, owners, _key_variables(tree, owners, builders), key_lists[rel])
+              for rel, tree, owners in trees]
     parameter_keys = _keys_into_parameters(parsed, signatures, builders)
 
-    for rel, tree, owners, key_names in parsed:
-            pipelines = _pipeline_names(tree)
-            clients = _client_names(tree)
+    for rel, tree, owners, key_names, _listed in parsed:
+            pipelines = _pipeline_names(tree, owners)
+            clients = _client_names(tree, owners)
             singletons.update({
-                name: identity for name, identity in clients.items()
-                if not owners.get(_assignment_line(tree, name), "")
+                name: identity for (where, name), identity in clients.items() if not where
             })
+
+            passed_clients = _clients_into_parameters(tree, owners, clients, pipelines)
             singletons.update(_proxy_singletons(tree))
             scripts = _script_names(tree)
             lists_here = key_lists.get(rel, {})
+            swept_here = _swept_lists(tree, owners)
             for quoted, line, command, owner in _lua_keys(tree, _script_runs(tree, owners)):
                 hits.append(_Hit(
                     _normalise(quoted), quoted, rel, line,
@@ -986,11 +1277,17 @@ def _scan_python(root: str) -> list[_Hit]:
                 if method not in _ALL or not node.args:
                     continue
                 receiver = _py_receiver(node.func)
-                if receiver in pipelines:
+                where = owners.get(node.lineno, "")
+                piped = _scoped(pipelines, receiver, where)
+                if piped is not None:
                     # Reported as the client it came from, so a pipelined write and a
                     # direct read are one client, which is what they are.
-                    receiver = pipelines[receiver] or receiver
-                if receiver not in clients and not _RECEIVER.search(receiver or ""):
+                    receiver = piped or receiver
+                known = _scoped(clients, receiver, where)
+                if known is None:
+                    # A parameter: the connection is whatever the callers pass in.
+                    known = passed_clients.get((where.rpartition(".")[2], receiver))
+                if known is None and not _RECEIVER.search(receiver or ""):
                     continue
                 # The connection it IS, not the name this file gave it. A name this file
                 # never sees the source of is asked about again once every file is read -
@@ -998,7 +1295,7 @@ def _scan_python(root: str) -> list[_Hit]:
                 # and imported by forty - and is dropped if nothing answers. An unresolved
                 # name is an unknown connection, not a second one, and comparing one
                 # against a resolved factory warned on 33 keys for no reason.
-                receiver = clients.get(receiver) or f"?{receiver}"
+                receiver = known or f"?{receiver}"
                 if receiver.startswith("??"):
                     receiver = receiver[1:]
                 if method in _SCRIPTS:
@@ -1030,6 +1327,12 @@ def _scan_python(root: str) -> list[_Hit]:
                     where = owners.get(node.lineno, "")
                     listed = (lists_here.get((where, inner.id))
                               or lists_here.get(("", inner.id)) or [])
+                    # A name that came out of a scan. Fed to a read, that is the read of
+                    # the keyspace the scan swept; fed to a delete, it is the sweep the
+                    # scan already stands for, and stays evidence rather than a claim -
+                    # or every wipe script reports the keys it wipes as invalidated.
+                    if not listed and method not in _WRITES:
+                        listed = swept_here.get((where, inner.id)) or []
                 if listed:
                     for one in dict.fromkeys(listed):
                         hits.append(_Hit(
@@ -1444,6 +1747,14 @@ def extract_redis(root: str) -> tuple[list[Symbol], list[Edge]]:
             h for h in group if language(h) == language(group[0])
         ]
         clients = {h.receiver for h in same_language if h.receiver}
+        # A read replica is the primary's own copy: a write on the primary and a read on
+        # the replica are the same store, one to two seconds apart. Only READS go there -
+        # a replica refuses writes - so a replica-only client can never be the half that
+        # holds the stale value. Dropped from the comparison, never from the evidence.
+        if len(clients) > 1:
+            replicas = {name for name in clients if "replica" in name.lower()}
+            if not any(h.write and h.receiver in replicas for h in same_language):
+                clients = clients - replicas
         # `get_redis_client` and `get_redis_client#0` are one factory, and whether the
         # bare call means db 0 is not in the source. An unstated database is not a
         # different one - the same mistake as reading `ar` and `r` as two connections.

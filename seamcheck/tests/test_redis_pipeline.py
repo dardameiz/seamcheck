@@ -215,9 +215,11 @@ class ClientIdentityTests(SimpleTestCase):
         rows = _keys(_project(self.ASYNC_AND_SYNC))
         self.assertEqual(rows["user:*:stats"][0], "connected")
 
-    def test_a_different_factory_is_still_worth_saying(self):
-        # `r_replica` is a read replica: a real second instance, and a write here with a
-        # read there is the bug the warning exists for.
+    def test_a_read_replica_is_the_primary_seen_from_the_side(self):
+        # `r_replica` is a read replica: the primary's own copy, one to two seconds
+        # behind, and it refuses writes. A write on the primary with a read on the
+        # replica is replication doing its job, not the two-stores bug - the warning
+        # is for a write on one store and a delete on ANOTHER.
         rows = _keys(_project({
             "app/write.py": """
                 from app.redis import get_redis_client
@@ -232,6 +234,27 @@ class ClientIdentityTests(SimpleTestCase):
                 def load(uid):
                     r_replica = get_replica_client()
                     return r_replica.get(f"user:{uid}:stats")
+            """,
+        }))
+        self.assertEqual(rows["user:*:stats"][0], "connected")
+
+    def test_a_write_through_a_replica_client_is_still_two_stores(self):
+        # The exemption is for what a replica IS - read-only. A client named replica
+        # that WRITES is not one, and then the two factories are two connections again.
+        rows = _keys(_project({
+            "app/write.py": """
+                from app.redis import get_replica_client
+
+                def store(uid):
+                    r_replica = get_replica_client()
+                    r_replica.set(f"user:{uid}:stats", "1")
+            """,
+            "app/read.py": """
+                from app.redis import get_redis_client
+
+                def load(uid):
+                    r = get_redis_client()
+                    return r.get(f"user:{uid}:stats")
             """,
         }))
         self.assertEqual(rows["user:*:stats"][0], "uncertain")
@@ -285,18 +308,18 @@ class ClientIdentityTests(SimpleTestCase):
                     await ar.set(f"user:{uid}:stats", "1")
             """,
             "app/read.py": """
-                from app.redis import get_replica_client
+                from app.redis import get_reporting_client
 
                 def load(uid):
-                    with get_replica_client() as replica:
-                        return replica.get(f"user:{uid}:stats")
+                    with get_reporting_client() as reporting:
+                        return reporting.get(f"user:{uid}:stats")
             """,
         })
         rows = _keys(root)
         # Two real connections, traced through two shapes neither of which is a plain
         # assignment of a plain call.
         self.assertEqual(rows["user:*:stats"][0], "uncertain")
-        self.assertIn("get_replica_client", _note(root, "user:*:stats"))
+        self.assertIn("get_reporting_client", _note(root, "user:*:stats"))
 
 
 class KeyInAVariableTests(SimpleTestCase):
@@ -1581,3 +1604,325 @@ class ScanMatchTests(SimpleTestCase):
             """,
         }))
         self.assertIn("user:*:easter_eggs", rows)
+
+
+class LuaInlineConcatenationTests(SimpleTestCase):
+    """A key concatenated straight into the `redis.call` argument.
+
+    `redis.call("ZADD", "pps:board:i:" .. input_type .. ":t:" .. technique, ...)` is the
+    common Lua shape when the key is not worth a local. The lens read only whole locals,
+    so this write was invisible and the index the score submit maintains was called
+    written-nowhere while a page read it every request.
+    """
+
+    def test_a_key_built_with_dot_dot_inside_the_call_is_that_key(self):
+        rows = _keys(_project({
+            "app/pps.py": """
+                from app.redis import get_redis_client
+
+                SUBMIT = '''
+                redis.call("ZADD", "pps:board:i:" .. input_type .. ":t:" .. technique, score, uid)
+                '''
+
+                def submit():
+                    return get_redis_client().eval(SUBMIT, 0)
+            """,
+            "app/views.py": """
+                from app.redis import get_redis_client
+
+                def board(input_type, technique):
+                    return get_redis_client().zrevrange(
+                        f"pps:board:i:{input_type}:t:{technique}", 0, 9)
+            """,
+        }))
+        self.assertEqual(rows["pps:board:i:*:t:*"][0], "connected")
+
+    def test_a_local_used_inside_the_concatenation_is_followed(self):
+        rows = _keys(_project({
+            "app/pps.py": """
+                from app.redis import get_redis_client
+
+                SUBMIT = '''
+                local prefix = "pps:board:i:"
+                redis.call("ZADD", prefix .. input_type, score, uid)
+                '''
+
+                def submit():
+                    return get_redis_client().eval(SUBMIT, 0)
+            """,
+        }))
+        self.assertIn("pps:board:i:*", rows)
+
+
+class OneOfBuilderThroughAHelperTests(SimpleTestCase):
+    """A builder that returns one of several keys, handed on to a helper.
+
+    `cps_board_key(input_type, technique)` returns the global board, the per-input
+    board, or the per-input-per-technique board; the caller puts the result in
+    `redis_key` and hands it to `get_leaderboard_entries(redis_key)`, which hands it to
+    `safe_zrevrange(r, key)`. Three hops, none of them a literal at the command.
+    """
+
+    PROJECT = {
+        "app/keys.py": """
+            def board_key(input_type=None, technique=None):
+                if input_type and technique:
+                    return f"pps:board:i:{input_type}:t:{technique}"
+                if input_type:
+                    return f"pps:board:i:{input_type}"
+                return "pps:leaderboard"
+        """,
+        "app/helpers.py": """
+            def safe_zrevrange(r, key, start, stop):
+                try:
+                    return r.zrevrange(key, start, stop)
+                except Exception:
+                    r.delete(key)
+                    return []
+        """,
+        "app/views.py": """
+            from app.redis import get_redis_client
+            from app.keys import board_key
+            from app.helpers import safe_zrevrange
+
+            def entries(redis_key, limit):
+                return safe_zrevrange(get_redis_client(), redis_key, 0, limit)
+
+            def board(request):
+                redis_key = board_key(request.GET.get("i"), request.GET.get("t"))
+                return entries(redis_key, 10)
+        """,
+        "app/write.py": """
+            from app.redis import get_redis_client
+
+            def record(i, t, uid, score):
+                r = get_redis_client()
+                r.zadd("pps:leaderboard", {uid: score})
+                r.zadd(f"pps:board:i:{i}", {uid: score})
+                r.zadd(f"pps:board:i:{i}:t:{t}", {uid: score})
+        """,
+    }
+
+    def test_every_branch_of_the_builder_reaches_the_command(self):
+        rows = _keys(_project(self.PROJECT))
+        for key in ("pps:leaderboard", "pps:board:i:*", "pps:board:i:*:t:*"):
+            self.assertEqual(rows[key][0], "connected", key)
+
+    def test_a_builder_with_a_non_key_branch_is_not_a_builder(self):
+        rows = _keys(_project({
+            "app/keys.py": """
+                def maybe_key(flag):
+                    if flag:
+                        return "pps:leaderboard"
+                    return 42
+            """,
+            "app/views.py": """
+                from app.redis import get_redis_client
+                from app.keys import maybe_key
+
+                def board(flag):
+                    return get_redis_client().zcard(maybe_key(flag))
+            """,
+        }))
+        self.assertNotIn("pps:leaderboard", rows)
+
+
+class ScanConsumerTests(SimpleTestCase):
+    """What a scan feeds decides whether it read the keyspace.
+
+    A scan enumerates. `for k in keys: pipe.hgetall(k)` afterwards is a read of every
+    key it found; `for k in keys: r.delete(k)` is a wipe. Both start with the same
+    `scan(match=...)`, so the classification has to look at what consumes the result.
+    """
+
+    def test_a_scan_that_feeds_hgetall_is_a_read(self):
+        rows = _keys(_project({
+            "app/write.py": """
+                from app.redis import get_async_redis_client
+
+                async def record(uid, hour):
+                    ar = get_async_redis_client()
+                    pipe = ar.pipeline()
+                    pipe.hincrby(f"user:{uid}:hourly_patterns", hour, 1)
+                    await pipe.execute()
+            """,
+            "app/analytics.py": """
+                from app.redis import get_redis_client
+
+                def hourly_patterns():
+                    main_r = get_redis_client()
+                    cursor, keys = main_r.scan(0, match='user:*:hourly_patterns', count=200)
+                    pipe = main_r.pipeline()
+                    for k in keys:
+                        pipe.hgetall(k)
+                    return pipe.execute()
+            """,
+        }))
+        self.assertEqual(rows["user:*:hourly_patterns"][0], "connected")
+        self.assertEqual(rows["user:*:hourly_patterns"][1], "1 write / 1 read")
+
+    def test_a_scan_that_feeds_delete_is_still_only_a_sweep(self):
+        rows = _keys(_project({
+            "app/write.py": """
+                from app.redis import get_redis_client
+
+                def record(uid, hour):
+                    get_redis_client().hincrby(f"user:{uid}:hourly_patterns", hour, 1)
+            """,
+            "app/wipe.py": """
+                from app.redis import get_redis_client
+
+                def wipe():
+                    r = get_redis_client()
+                    cursor, keys = r.scan(0, match='user:*:hourly_patterns', count=200)
+                    for k in keys:
+                        r.delete(k)
+            """,
+        }))
+        self.assertNotEqual(rows["user:*:hourly_patterns"][0], "connected")
+
+    def test_the_scan_result_is_followed_through_a_list_it_is_added_to(self):
+        rows = _keys(_project({
+            "app/write.py": """
+                from app.redis import get_redis_client
+
+                def record(uid, hour):
+                    get_redis_client().hincrby(f"user:{uid}:hourly_patterns", hour, 1)
+            """,
+            "app/analytics.py": """
+                from app.redis import get_redis_client
+
+                def hourly_patterns():
+                    r = get_redis_client()
+                    found = []
+                    cursor = 0
+                    while True:
+                        cursor, keys = r.scan(cursor, match='user:*:hourly_patterns')
+                        found.extend(keys)
+                        if cursor == 0:
+                            break
+                    return [r.hgetall(k) for k in found]
+            """,
+        }))
+        self.assertEqual(rows["user:*:hourly_patterns"][0], "connected")
+
+
+class ClientScopeTests(SimpleTestCase):
+    """Which client a name means is decided inside the function, not across the file.
+
+    admin_analytics_views.py opens `r = get_monitoring_redis_client()` in one view and
+    `r = get_redis_client()` in the next, and `pipe = ...pipeline()` in six. One table
+    per file gave every `pipe` the last pipeline's client, so a read of the main store
+    was reported as a read of the monitoring store, and a key written and read on the
+    same connection got the two-clients warning.
+    """
+
+    def test_the_same_name_in_two_functions_is_two_clients(self):
+        root = _project({
+            "app/write.py": """
+                from app.redis import get_async_redis_client
+
+                async def record(uid):
+                    ar = get_async_redis_client()
+                    await ar.hset(f"user:{uid}:stats", "pushes", 1)
+            """,
+            "app/admin.py": """
+                from app.redis import get_redis_client, get_monitoring_redis_client
+
+                def stats(uid):
+                    main_r = get_redis_client()
+                    pipe = main_r.pipeline()
+                    pipe.hgetall(f"user:{uid}:stats")
+                    return pipe.execute()
+
+                def errors():
+                    mon_r = get_monitoring_redis_client()
+                    pipe = mon_r.pipeline()
+                    pipe.get("analytics:errors")
+                    return pipe.execute()
+            """,
+        })
+        rows = _keys(root)
+        self.assertEqual(rows["user:*:stats"][0], "connected")
+        self.assertNotIn("more than one client", _note(root, "user:*:stats"))
+
+    def test_a_module_level_client_still_serves_every_function(self):
+        rows = _keys(_project({
+            "app/views.py": """
+                from app.redis import get_redis_client
+                r = get_redis_client()
+
+                def record(uid):
+                    r.hset(f"user:{uid}:stats", "pushes", 1)
+
+                def show(uid):
+                    return r.hgetall(f"user:{uid}:stats")
+            """,
+        }))
+        self.assertEqual(rows["user:*:stats"][0], "connected")
+
+
+class ClientHandedToAParameterTests(SimpleTestCase):
+    """A helper that takes the pipeline as a parameter writes through the caller's client.
+
+    `_build_end_commands(pipe, endpoint, ...)` never assigns `pipe`; the middleware makes
+    it from the monitoring client and passes it in. Scoping the client table to the
+    function left those writes with no receiver, and four analytics counters written on
+    every request were reported as written nowhere.
+    """
+
+    PROJECT = {
+        "app/middleware.py": """
+            from app.redis import get_monitoring_redis_client
+
+            def _build_end_commands(pipe, endpoint, bucket):
+                pipe.incr(f"analytics:req:total:{endpoint}")
+                pipe.incr(f"analytics:req:min:{endpoint}:{bucket}")
+
+            def record(endpoint, bucket):
+                r = get_monitoring_redis_client()
+                pipe = r.pipeline(transaction=False)
+                _build_end_commands(pipe, endpoint, bucket)
+                pipe.execute()
+        """,
+        "app/admin.py": """
+            from app.redis import get_monitoring_redis_client
+
+            def totals(endpoint, bucket):
+                r = get_monitoring_redis_client()
+                return r.get(f"analytics:req:total:{endpoint}"), \\
+                    r.get(f"analytics:req:min:{endpoint}:{bucket}")
+        """,
+    }
+
+    def test_the_write_inside_the_helper_counts(self):
+        rows = _keys(_project(self.PROJECT))
+        self.assertEqual(rows["analytics:req:total:*"][0], "connected")
+        self.assertEqual(rows["analytics:req:min:*:*"][0], "connected")
+
+    def test_it_is_the_callers_client_not_a_second_one(self):
+        root = _project(self.PROJECT)
+        self.assertNotIn("more than one client", _note(root, "analytics:req:total:*"))
+
+    def test_an_async_client_passed_in_by_name_counts_too(self):
+        rows = _keys(_project({
+            "app/handler.py": """
+                from app.redis import get_async_monitoring_redis_client
+
+                async def _analytics_end(ar_mon, ep, bucket):
+                    pipe = ar_mon.pipeline(transaction=False)
+                    pipe.incr(f"analytics:req:total:{ep}")
+                    await pipe.execute()
+
+                async def handle(ep, bucket):
+                    ar_mon = get_async_monitoring_redis_client()
+                    await _analytics_end(ar_mon, ep, bucket)
+            """,
+            "app/admin.py": """
+                from app.redis import get_monitoring_redis_client
+
+                def totals(ep):
+                    return get_monitoring_redis_client().get(f"analytics:req:total:{ep}")
+            """,
+        }))
+        self.assertEqual(rows["analytics:req:total:*"][0], "connected")
