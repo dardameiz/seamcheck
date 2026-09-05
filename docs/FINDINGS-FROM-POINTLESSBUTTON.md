@@ -1017,3 +1017,45 @@ untraced" is a far more useful line than "92".
 **Precision on the class that matters — delete-only — was 11/17 actionable (65%).** That is far
 better than the 10-15% baseline the DOM lenses run at, and it is the argument for splitting the
 types rather than tuning one threshold.
+
+## Same day · the asks landed, verified from the consumer side
+
+Re-scanned pointlessbutton a few hours later and the number moved 95 → 33 red. Almost none of
+that was us fixing code — it was the scanner learning to see keys it had been calling dead.
+Confirmed by reading the nodes, not the count:
+
+| key | before | after | which fix |
+|---|---|---|---|
+| `appeal_rate:*` | `1 write / 0 read` | `connected · 2 write / 1 read` | F24, INCR return is the read |
+| `unlimited:rate:*` | red | `connected · 5 write / 2 read` | F24 via pipeline unpack |
+| `user:*:obtained_avatars` | red | `connected · 8 write / 4 read` | F28, legacy-fallback accessor |
+| `user:*:daily_reset_fired:*` | red | resolved | F26, assembled in a Lua string |
+| the 22 from one test reset list | 22 rows | 3 | the aggregate-symbol fix |
+
+**`seamcheck report` now leads with "Invalidations that clear nothing" (26)** and separates
+**"Erasure and teardown deletes (correct, and dead)" (7)**. That is ask #1 and ask #3, and the
+framing line — *"a delete of a key nothing writes clears nothing, returns 0, and raises nothing,
+so it reads as working invalidation forever"* — is the whole point in one sentence. The limits
+caveat on the Redis section (ask #6) is there too.
+
+**One caution from adjudicating the new output.** We briefly thought delete-only keys had been
+*suppressed*, because the graph JSON no longer carries a `redis_key` node for them — they exist
+as `redis_key_use` with status `connected`, and a consumer counting red nodes in the JSON sees
+them vanish. They are correctly present in `report`. Worth making the JSON say what the report
+says, since anything automated reads the JSON: a delete-only key wants a node with a status a
+script can filter on, not just a report section. Otherwise the highest-value class is the one
+least visible to tooling.
+
+**Still open: ask #4 (scope).** 10 of the 32 remaining "Redis keys" rows are `OTHER/seed_demo.py`,
+`OTHER/cold_prep.py`, `OTHER/hourly_user_probe.py`, `OTHER/management_commands_archived/` and
+`docs/audits/_legacy/`. `OTHER/` is in this repo's `.gitignore`. That is ~31% of what is left in
+that section, for a `.gitignore` read.
+
+**And the split immediately paid for itself.** Working the new "invalidations that clear nothing"
+list turned up a live bug in the store: `_clear_store_rotation_caches` deletes
+`store_rotation:test:{date}:{period}`, but below a 1-hour rotation interval the cache is keyed
+`store_rotation:test:{unix_timestamp}` — a shape no `{date}:{period}` delete can match. Sub-hour
+intervals are what the preprod environment runs, so on the environment where an admin is most
+likely to add a store item, the "appears immediately" guarantee silently did not hold. Verified
+against the pre-fix tree at 60s, 120s, 300s and 1800s: the stale cache survived every time.
+Nothing errored and nothing logged, because deleting an absent key is a success.
