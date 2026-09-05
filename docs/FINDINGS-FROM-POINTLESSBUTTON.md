@@ -839,3 +839,181 @@ Two things to take from it:
 below the matched block. Syntax checks passed. **If seamcheck ever gains an "apply fix" mode, a
 removal must be followed by a render, not a parse.** Dead-code removal is the change that looks
 safest and is not — everything about it says nothing depended on this.
+
+---
+
+# Update · 0.10.0 · the REDIS layer, adjudicated key by key (117 claims → 92 red)
+
+The Redis layer got the treatment the DOM lenses got: **every product red read at its actual line
+before any verdict**, because both obvious methods are wrong in opposite directions — a shape-grep
+(`user:[^"']*:stats`) cannot see a key assembled in Lua, and a fragment-grep matches a hash *field*
+that happens to share the key's last segment. Both were run and disagreements resolved by reading.
+
+**Of 63 product reds: 8 real and fixed · 8 real and logged OPEN · 20 deliberate keeps · 27 false.**
+
+## T8 — the layer found a production-class bug that a full test suite had walked past
+
+This is the headline, and it is worth more than the noise costs.
+
+Five call sites deleted `user:{id}:stats_cache`. **Nothing has written that key** since the per-user
+stats cache moved to stale-while-revalidate (`swr:user_stats:{uid}`). Four of them happened to also
+call the correct helper and worked *by accident*. The fifth — the accelerated-period rollover — did
+not, so in testing mode every simulated hour boundary invalidated nothing and the stats endpoint
+served the pre-rollover blob until the TTL expired. Testing mode is how every timed regression
+scenario runs, so the harness could disbelieve a reset that genuinely happened.
+
+**Why no test caught it, which is the transferable part:** the existing boundary check compared the
+**API against the DOM**. When the cache is stale, both surfaces read the same stale copy and agree.
+Two views of one number can only ever prove they came from the same place. The scan found it by
+asking a different question — *who writes this key?* — and the answer was nobody.
+
+Three more phantoms fell out of the same question, each a key whose last writer was removed by a
+feature demolition: `hof_rewards:{uid}`, `leaderboard:cumulative:{cat}:baselines`, and a login-time
+`user:{id}:username` SETEX that put PII in Redis for an hour for no reader.
+
+## F24 — the INCR return value IS the read · 6 keys
+
+The single most common false red, and fully mechanical. A rate limiter never reads its counter
+back; it uses what the write returned.
+
+```python
+count = await ar.incr(f"appeal_rate:{ip}")   # reported "0 read". This IS the read.
+if count > 3: return 429
+```
+
+Also positionally out of a pipeline, which is the harder half:
+
+```python
+p.incr(f"user:{uid}:high_pps_count"); p.expire(...)
+mismatch_count, _ = p.execute()              # ← the read, by tuple position
+```
+
+**Rule:** an `INCR`/`INCRBY`/`HINCRBY` whose result is bound to a name — directly, awaited, or
+unpacked from `pipeline.execute()` — is a read as well as a write. Affected here:
+`appeal_rate:*`, `unlimited:rate:*`, `user:*:high_pps_count`, `user:*:ws_time_hb_daily:*`,
+`ws:push_rate:*`, `challenges:zero_joined:*`.
+
+## F25 — F19's "read behind a variable", now measured: 8 keys, and three shapes
+
+[F19](#f19--the-rediscache-lens-counts-an-invalidation-as-the-keys-definition--88-false) named this
+cause. Here is what it costs a year later, and the three distinct shapes, in rising difficulty:
+
+1. **Assigned one line above the use** — `cache_key = f'challenges:leaderboard_cache:{sid}:{limit}'`
+   then `safe_get(self.r, cache_key)`. Single hop, same function.
+2. **Returned by a key-builder function** — `def _rate_key(uid): return f'user:{uid}:cooldown_reset_count'`.
+   The key never appears at a call site at all.
+3. **Held in a module constant** — `_SETUP_COMPLETE_CACHE_PREFIX = 'user:setup_complete:'`, or
+   returned by a helper (`swr:cold:slots` comes back from a function whose whole body is that
+   string).
+
+Shape 1 alone would close most of it.
+
+## F26 — the key is assembled inside a Lua string · 2 keys
+
+Neither of these spellings exists anywhere in Python source:
+
+```python
+# lua_scripts.py — concatenation across quote boundaries
+local daily_fired_lock = "user:" .. user_id .. ":daily_reset_fired:" .. daily_scope
+# redis_atomic_operations.py — built entirely inside register_script(...)
+local key = 'dedup:' .. user_id .. ':' .. request_id
+```
+
+`user:*:daily_reset_fired:*` is *both* written and read this way — the value comes back to Python as
+`result[7]`. **Rule:** parse Lua inside `register_script(...)` / `SCRIPT LOAD` string literals;
+`..` concatenation is the give-away. This project runs ten such scripts on its hottest path, so the
+blind spot sits exactly where the traffic is.
+
+## F27 — the reader is a SCAN over a prefix, not a lookup · 3 keys
+
+`analytics:seo:ref:{host}:{day}` reads write-only until you find, in a different app,
+`r.scan_iter('analytics:seo:*', count=500)` powering the admin dashboard. **Rule:** a
+`scan_iter`/`SCAN MATCH` pattern is a read of every key it matches.
+
+## F28 — the reader is a legacy-fallback accessor · 3 keys
+
+```python
+hash_get_or_string(r, f"user:{id}:stats", "total_avatars", f"user:{id}:obtained_avatars")
+```
+
+Reads the hash field, falling back to the standalone key. The third argument is a genuine reader
+that no `get(` pattern matches. **Rule:** treat a project's own accessor helpers as read sites for
+every key-shaped argument. (Discoverable: these helpers are the functions that take a key-shaped
+f-string in more than one argument position.)
+
+## The ask list from this surface, ranked
+
+### 1. Split `delete-only` from `write-only`. They share one red and the ratio is 43 : 17
+
+Straight from each node's own `sub` field, on the 60 product reds:
+`N write / 0 read` **43** · `N invalidate / 0 read` **17** · `0 write / 1 read` **1**.
+
+**Every fix that mattered this session came from the 17.** The asymmetry is not stylistic:
+
+- **A write with no reader is usually correct.** `telemetry:*`, `admin:config_actions`,
+  `audit:item_deletion:*` exist to be read by a human with `redis-cli` after an incident. No scan
+  will ever see that reader. Permanently, correctly red.
+- **A delete with no writer is almost always a bug, and it is invisible by construction.** `DEL` on
+  a missing key returns 0, raises nothing, logs nothing, and the surrounding code reads as working
+  invalidation. That is precisely how T8 survived a full suite.
+
+Two finding types with different default severity would do more for this codebase than any new
+analysis. Right now the important signal is buried under the boring one at 2.5 : 1.
+
+### 2. Collapse a defensive reset block into ONE finding · 22 of 92 reds (24%)
+
+All 22 test-side reds come from a single contiguous list at `pointless/views/test_auth.py:275` — a
+harness reset that clears many keys defensively. One deliberate decision, reported twenty-two times.
+**Rule:** when N keys are touched *only* by one contiguous delete/reset block in one function, emit
+one finding naming the block, with the keys as its rows.
+
+### 3. Cleanup/erasure context is legitimate and can never be actioned · 6 keys
+
+Six of the seventeen delete-only keys are GDPR erasure (`gdpr_service.py:2302–2347`) or logout/leave
+cleanup. Deleting a key an old account might still hold **is the point** — the code is correct, the
+key is genuinely dead, and the finding is unactionable forever. **Rule:** a delete inside a function
+whose name or docstring matches `erase|anonymize|gdpr|cleanup|reset|leave|logout|teardown` is a
+distinct low-severity type. Don't suppress it; don't rank it beside a phantom bust on a hot path.
+
+### 4. Scope: read `.gitignore`, skip archived paths · 9 reds
+
+`OTHER/seed_demo.py`, `OTHER/cold_prep.py`, `OTHER/trace_thread_sensitive.py`,
+`OTHER/management_commands_archived/`, `docs/audits/_legacy/`. In this repo `OTHER/` is gitignored
+by convention and the other two are dead by name. ~10% of the noise for a `.gitignore` read — and it
+is the same rule that already stops the map from "confirming" findings about itself.
+
+### 5. Report SITES, not keys
+
+Eight real sites were removed and the count moved **95 → 92**, because a key only leaves the list
+when *every* site touching it is gone. `user:*:username` still shows `3 invalidate / 0 read` — the
+defect (the login SETEX) is gone, three legitimate deletes remain. Anyone reading the headline would
+conclude almost nothing happened. "8 sites resolved across 5 keys" is the true unit of work.
+
+### 6. State the limits next to the count
+
+Asked "is all Redis clean now?", the honest answer needed four caveats, each of which the tool knows
+and the report does not say:
+
+1. **Code is not the keyspace.** Four environments here run independent Redis instances; keys
+   written by code that no longer exists still sit in preprod and prod. `0 red` would say nothing
+   about them.
+2. **Untraced entry points** — Celery, Redis subscribers, WS handlers, Stripe webhooks. The scan
+   prints this globally; it belongs *beside the Redis count*, since Redis is exactly where those
+   four reach.
+3. **53 keys are `uncertain`** — not evidence of health.
+4. **The count cannot reach zero on correct code**, per asks 1 and 3.
+
+"17 delete-only, 6 of them erasure context; 43 write-only; 53 uncertain; Celery/WS/webhook paths
+untraced" is a far more useful line than "92".
+
+## Score for this surface, after acting on it
+
+| Finding kind | Product reds | Outcome |
+|---|---:|---|
+| delete-only (`N invalidate / 0 read`) | 17 | **8 sites fixed across 5 keys**, incl. the T8 defect; 6 are legitimate erasure context |
+| write-only (`N write / 0 read`) | 43 | 8 logged OPEN as real (need a product decision, not a delete); ~20 deliberate audit/telemetry |
+| read-only (`0 write / 1 read`) | 1 | fixed earlier the same week (a snapshot reading a streak key nothing wrote, so every band was empty) |
+
+**Precision on the class that matters — delete-only — was 11/17 actionable (65%).** That is far
+better than the 10-15% baseline the DOM lenses run at, and it is the argument for splitting the
+types rather than tuning one threshold.
