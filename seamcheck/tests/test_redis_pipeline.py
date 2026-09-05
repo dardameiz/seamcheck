@@ -2099,3 +2099,79 @@ class CounterReturnValueTests(SimpleTestCase):
                 return depth
         """}))
         self.assertEqual(keys["user:*:pending_rewards"][0], "unused")
+
+
+class KeyBehindANameTests(SimpleTestCase):
+    """The key never appears at the call site - which is where the scan was looking."""
+
+    def test_two_functions_of_one_name_do_not_lose_each_others_keys(self):
+        # `safe_get(r, key, default=None)` is the project's Redis wrapper. A helper
+        # nested inside an export is also called `safe_get(key, default=None)`, and it
+        # was read second: the key went in under the parameter named `default`, the
+        # wrapper's own `r.get(key)` found nothing under `key`, and a cache in constant
+        # use reported as written and never read.
+        keys = _keys(_project({
+            # Both definitions in one file, the decoy second, so it always wins the
+            # name - across files the order is the filesystem's and proves nothing.
+            "helpers.py": """
+                def safe_get(r, key, default=None):
+                    try:
+                        return r.get(key)
+                    except Exception:
+                        return default
+
+                def export(payload):
+                    def safe_get(key, default=None):
+                        return payload.get(key, default)
+                    return safe_get('name')
+            """,
+            "core.py": """
+                from helpers import safe_get
+
+                class Board:
+                    def top(self, schedule_id, limit):
+                        cache_key = f'challenges:leaderboard_cache:{schedule_id}:{limit}'
+                        return safe_get(self.r, cache_key)
+
+                    def fill(self, schedule_id, limit, rows):
+                        self.r.set(
+                            f'challenges:leaderboard_cache:{schedule_id}:{limit}', rows)
+            """,
+        }))
+        self.assertEqual(keys["challenges:leaderboard_cache:*:*"][0], "connected")
+
+    def test_a_constant_prefix_plus_an_id_is_a_key(self):
+        # The older spelling of an f-string. One name plus a hole - and with no names to
+        # hand, two holes and no key at all.
+        keys = _keys(_project({"middleware.py": """
+            from django.core.cache import cache
+
+            _SETUP_COMPLETE_CACHE_PREFIX = 'user:setup_complete:'
+
+            def check(user):
+                cache_key = _SETUP_COMPLETE_CACHE_PREFIX + str(user.pk)
+                done = cache.get(cache_key)
+                if done is None:
+                    cache.set(cache_key, True, 300)
+                return done
+        """}))
+        self.assertEqual(keys["user:setup_complete:*"][0], "connected")
+
+    def test_a_script_can_be_handed_its_key_by_a_builder(self):
+        # `eval(SCRIPT, 1, _cold_slots_key(name))` - the key of the admission gate that
+        # bounds every cold rebuild, and it was read as a key nothing ever names.
+        keys = _keys(_project({"swr.py": """
+            _COLD_SLOT_LUA = "local n = redis.call('ZCARD', KEYS[1]) return n"
+
+            def _cold_slots_key(name):
+                return "swr:cold:slots"
+
+            async def acquire(client, name, token, now):
+                ok = await client.eval(_COLD_SLOT_LUA, 1, _cold_slots_key(name), now)
+                return token if ok else None
+
+            async def release(client, name, token):
+                await client.zrem(_cold_slots_key(name), token)
+        """}))
+        # A key a script is given is that script's keyspace: evidence, never a claim.
+        self.assertEqual(keys["swr:cold:slots"][0], "uncertain")

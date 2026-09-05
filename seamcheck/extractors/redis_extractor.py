@@ -250,6 +250,19 @@ def _py_pattern(node, known=None, owner: str = "", line: int = 0,
         return "".join(parts)
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
         return _py_pattern(node.left, known, owner, line, builders)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        # `_SETUP_COMPLETE_CACHE_PREFIX + str(request.user.pk)`. The prefix is a module
+        # constant and the rest is a hole - the same shape as an f-string, spelled the
+        # older way, and it was the whole key of a middleware cache that reported as
+        # deleted-and-never-written.
+        halves = []
+        for side in (node.left, node.right):
+            if isinstance(side, ast.Name) and known is not None:
+                halves.append(_key_named(known, owner, side.id, line) or "{}")
+                continue
+            halves.append(_py_pattern(side, known, owner, line, builders) or "{}")
+        joined = "".join(halves)
+        return joined if joined.strip("{}") else None
     if isinstance(node, ast.Call):
         func = node.func
         if isinstance(func, ast.Attribute) and func.attr == "format":
@@ -654,7 +667,12 @@ def _key_variables(tree: ast.AST, owners: dict[int, str], builders=None,
     meaning two things left both error counters reported as read by nobody.
     """
     found: dict[tuple[str, str], list[tuple[int, str]]] = {}
-    for node in ast.walk(tree):
+    # Twice: the second pass can see what the first learned, so a key assembled from a
+    # constant assigned earlier in the file resolves. `_SETUP_COMPLETE_CACHE_PREFIX +
+    # str(user.pk)` is one name plus a hole, and with no names to hand it is two holes
+    # and no key at all.
+    for attempt in range(2):
+      for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
             targets, value = node.targets, node.value
         elif isinstance(node, ast.AnnAssign) and node.value is not None:
@@ -673,18 +691,21 @@ def _key_variables(tree: ast.AST, owners: dict[int, str], builders=None,
             if len(made) == len(targets[0].elts) and not isinstance(made, _OneOf):
                 for name_node, one in zip(targets[0].elts, made, strict=True):
                     if isinstance(name_node, ast.Name):
-                        found.setdefault(
-                            (owners.get(node.lineno, ""), name_node.id), []
-                        ).append((node.lineno, one))
+                        held = found.setdefault(
+                            (owners.get(node.lineno, ""), name_node.id), [])
+                        if (node.lineno, one) not in held:
+                            held.append((node.lineno, one))
                 continue
-        pattern = _py_pattern(value, builders=builders)
+        pattern = _py_pattern(value, found if attempt else None,
+                              owners.get(node.lineno, ""), node.lineno, builders)
         if not pattern:
             continue
         for target in targets:
             if not isinstance(target, ast.Name):
                 continue
-            found.setdefault((owners.get(node.lineno, ""), target.id), []).append(
-                (node.lineno, pattern))
+            held = found.setdefault((owners.get(node.lineno, ""), target.id), [])
+            if (node.lineno, pattern) not in held:
+                held.append((node.lineno, pattern))
     for assignments in found.values():
         assignments.sort()
     return found
@@ -1069,7 +1090,7 @@ def _clients_into_parameters(
             continue
         name = (node.func.id if isinstance(node.func, ast.Name)
                 else getattr(node.func, "attr", ""))
-        params = signatures.get(name)
+        params = next(iter(signatures.get(name, ())), None)
         if not params:
             continue
         where = owners.get(node.lineno, "")
@@ -1087,19 +1108,42 @@ def _clients_into_parameters(
     return found
 
 
-def _signatures(tree: ast.AST) -> dict[str, list[str]]:
-    """Function name -> its parameter names, by simple name."""
-    found: dict[str, list[str]] = {}
+def _signatures(tree: ast.AST) -> dict[str, list[list[str]]]:
+    """Function name -> every parameter list defined under that name.
+
+    Every list, because one name can be two functions - and when it is, keeping only the
+    last one silently misreads every call to the other. `safe_get(r, key, default=None)`
+    is the reference project's Redis wrapper; a helper nested inside a GDPR export is
+    also called `safe_get(key, default=None)`, and it happened to be read second. So
+    `safe_get(self.r, cache_key)` filed its key under the parameter named `default`, the
+    wrapper's own `r.get(key)` found nothing under `key`, and a cache read in constant
+    use reported as a key written and never read. Trying each candidate costs nothing:
+    an argument that is not key-shaped is dropped either way.
+    """
+    found: dict[str, list[list[str]]] = {}
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            found[node.name] = [a.arg for a in node.args.args] + \
+            params = [a.arg for a in node.args.args] + \
                 [a.arg for a in node.args.kwonlyargs]
+            known = found.setdefault(node.name, [])
+            if params not in known:
+                known.append(params)
     return found
+
+
+def _merge_signatures(into: dict[str, list[list[str]]],
+                      more: dict[str, list[list[str]]]) -> None:
+    """`dict.update` would drop the other file's function of the same name."""
+    for name, lists in more.items():
+        known = into.setdefault(name, [])
+        for params in lists:
+            if params not in known:
+                known.append(params)
 
 
 def _keys_into_parameters(
     trees: list[tuple[str, ast.AST, dict[int, str], dict, dict]],
-    signatures: dict[str, list[str]],
+    signatures: dict[str, list[list[str]]],
     builders: dict[str, str] | None = None,
 ) -> dict[tuple[str, str], set[str]]:
     """(function, parameter) -> the key patterns callers hand it.
@@ -1146,7 +1190,7 @@ def _keys_into_parameters(
             # What the caller gave this function, this function gives the next one.
             # The fixpoint below is what makes the second hop see the first.
             here = owner.rpartition(".")[2]
-            if argument.id in signatures.get(here, ()):
+            if any(argument.id in params for params in signatures.get(here, ())):
                 return sorted(found.get((here, argument.id), ()))
         return []
 
@@ -1160,16 +1204,23 @@ def _keys_into_parameters(
                     continue
                 name = (node.func.id if isinstance(node.func, ast.Name)
                         else getattr(node.func, "attr", ""))
-                params = signatures.get(name)
-                if not params:
+                every = signatures.get(name)
+                if not every:
                     continue
                 owner, line = owners.get(node.lineno, ""), node.lineno
+                # Every signature this name has. A key-shaped argument lands under the
+                # parameter name each candidate gives it; the candidate that is wrong
+                # names a parameter nothing ever reads back.
+                params = [one for candidate in every for one in candidate]
                 for position, argument in enumerate(node.args):
-                    if position >= len(params):
+                    at = [candidate[position] for candidate in every
+                          if position < len(candidate)]
+                    if not at:
                         break
                     for pattern in patterns_of(argument, key_names, listed, owner, line):
                         if _looks_like_key(pattern):
-                            found.setdefault((name, params[position]), set()).add(pattern)
+                            for param in at:
+                                found.setdefault((name, param), set()).add(pattern)
                 for word in node.keywords:
                     if not word.arg or word.arg not in params:
                         continue
@@ -1253,7 +1304,7 @@ def _scan_python(root: str) -> list[_Hit]:
     # to cannot be resolved until every call site has been read, so the trees are kept
     # rather than re-parsed.
     trees: list[tuple[str, ast.AST, dict[int, str]]] = []
-    signatures: dict[str, list[str]] = {}
+    signatures: dict[str, list[list[str]]] = {}
     builders: dict[str, list[str]] = {}
     # Functions that return a client, so a wrapper around a factory is a factory.
     factories: dict[str, str] = {}
@@ -1272,7 +1323,7 @@ def _scan_python(root: str) -> list[_Hit]:
                 continue
             rel = os.path.relpath(path, root)
             trees.append((rel, tree, owners_of(tree)))
-            signatures.update(_signatures(tree))
+            _merge_signatures(signatures, _signatures(tree))
             builders.update(_key_builders(tree))
             factories.update(_client_factories(tree))
 
@@ -1327,7 +1378,13 @@ def _scan_python(root: str) -> list[_Hit]:
                     # and `_get_max_cas_script(r)(keys=[...])` matched no name at all.
                     # Same evidence as EVALSHA: it names its keys, hides its commands.
                     for element in _script_keys(node):
-                        pattern = _py_pattern(element) or (
+                        # With the names this file knows: a script's key is as likely to
+                        # come out of a builder (`_cold_slots_key(name)`) as to be spelled
+                        # at the call, and reading only literals lost the whole keyspace
+                        # of the scripts that run on the hottest path.
+                        pattern = _py_pattern(element, key_names,
+                                              owners.get(node.lineno, ""), node.lineno,
+                                              builders) or (
                             _key_named(key_names, owners.get(node.lineno, ""),
                                        element.id, node.lineno)
                             if isinstance(element, ast.Name) else "")
@@ -1384,7 +1441,13 @@ def _scan_python(root: str) -> list[_Hit]:
                     receiver = receiver[1:]
                 if method in _SCRIPTS:
                     for element in _script_keys(node):
-                        pattern = _py_pattern(element)
+                        # With this file's names and the project's builders: the key a
+                        # script is given is as often `_cold_slots_key(name)` as a
+                        # literal, and reading only literals lost the keyspace of the
+                        # scripts that run on the hottest path.
+                        pattern = _py_pattern(element, key_names,
+                                              owners.get(node.lineno, ""), node.lineno,
+                                              builders)
                         if not pattern and isinstance(element, ast.Name):
                             pattern = _key_named(key_names,
                                                  owners.get(node.lineno, ""),
