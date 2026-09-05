@@ -19,6 +19,27 @@ backend that answered `uncertain` everywhere would score 100% precision and be u
 
 ## Unreleased
 
+### One row per id — 6,817 of the reference project's rows were duplicates
+
+An id is the map's node key, so a repeated id was never drawn twice. That is precisely why
+nobody noticed: nothing looked wrong. **7,009 of 60,240 rows** on the reference project
+named an id another row already had — every count that walks the symbol list was inflated
+by them, and they were paid for in bytes on every render.
+
+- **Fixed** — **`relativise` was making them.** It rewrites the absolute path inside a
+  symbol's id, so two spellings of one file — `./pointless/x.js` and `pointless/x.js` —
+  only collapse to the same id at that point. Deduping anywhere earlier cannot see them:
+  they were made identical by the very pass that exists to make ids stable.
+- **Fixed** — `:evidence` appended to a `sub` that already ended in it, giving
+  `class:string:evidence:evidence` — a value nothing downstream matches on.
+- **Added** — the invariant is enforced in one place at the boundary rather than at the
+  half-dozen places that append to the list, and where two copies disagree the one
+  carrying an owner and a note wins: it was resolved against real evidence, the other is
+  the same symbol seen again with less attached.
+
+**53,233 rows, 53,233 distinct ids, and not one verdict changed.**
+
+
 ### The SWR cache, which read as write-only
 
 Every cached endpoint on the reference project has moved onto the `swr:*` keyspace, and

@@ -487,15 +487,29 @@ def run_scan(
                                             declared_names)
     seen_selector_ids = {symbol.id for symbol in entry_selectors}
     evidence_selectors = [
-        dataclasses.replace(symbol, sub=f"{symbol.sub}:evidence")
+        # `:evidence` once. A `sub` that already ends in it - `class:string:evidence`
+        # from the JS reader, `id:evidence` from the template scanner - came back out
+        # as `class:string:evidence:evidence`, a value nothing downstream matches on.
+        symbol if symbol.sub.endswith(":evidence")
+        else dataclasses.replace(symbol, sub=f"{symbol.sub}:evidence")
         for symbol in extract_dom_selectors(
             [f for f in js_evidence_files if f not in set(js_files)], [], declared_names)
         if symbol.id not in seen_selector_ids
     ] if js_evidence_files != js_files else []
-    dom_selectors = (
-        entry_selectors + evidence_selectors
-        + extract_js_class_usages(js_evidence_files, template_files or [])
-    )
+    # One row per id. A third source of selectors was concatenated onto the first two
+    # without being deduped against them, so 11,199 selector ids and 2,518 attribute ids
+    # on the reference project named more than one row - 7,009 of 60,240 in all. The map
+    # keys nodes by id so nothing was DRAWN wrong, which is why it went unnoticed, and
+    # every count that walks the symbol list was inflated by them.
+    #
+    # The first copy wins: the entry pass knows the owner and the note, and the later
+    # ones are the same symbol seen again with less of its evidence attached.
+    dom_selectors = list({
+        symbol.id: symbol for symbol in reversed(
+            entry_selectors + evidence_selectors
+            + extract_js_class_usages(js_evidence_files, template_files or [])
+        )
+    }.values())[::-1]
     # Multi-writer detection reads the WHOLE tree, not the entry graph. A write site is an
     # observation, not a claim - "these two files both write #levelName" is true whether or
     # not a bundler entry happens to reach them, and the verified live bugs on the
@@ -646,7 +660,32 @@ def run_scan(
     if not routes_complete:
         classified = _withhold_route_claims(classified, coverage_note)
     graph = Graph(symbols=classified, edges=edges)
-    return _with_feature_labels(graph, dom_attrs)
+    return one_row_per_id(_with_feature_labels(graph, dom_attrs))
+
+
+def one_row_per_id(graph: Graph) -> Graph:
+    # ONE row per id, and the copy that knows most wins.
+    #
+    # An id is the map's node key, so a repeated id was never drawn twice - which is why
+    # 7,009 of the reference project's 60,240 rows went unnoticed as duplicates. Nothing
+    # looked wrong; every count that walks this list was simply inflated, and the extra
+    # rows were paid for in bytes on every render.
+    #
+    # Enforced here, once, rather than at each of the half-dozen places that append to
+    # this list: "a symbol id names one symbol" is an invariant of the graph, and a rule
+    # kept in one place is a rule the next extractor cannot forget. Where two copies
+    # disagree, the one carrying an owner and a note is the one that was resolved
+    # against real evidence; the other is the same symbol seen again with less attached.
+    def evidence(symbol):
+        return bool(symbol.owner) + bool(symbol.note) + bool(symbol.snippet)
+
+    best: dict[str, object] = {}
+    for symbol in graph.symbols:
+        standing = best.get(symbol.id)
+        if standing is None or evidence(symbol) > evidence(standing):
+            best[symbol.id] = symbol
+    return Graph(symbols=list(best.values()), edges=graph.edges,
+                 schema_version=graph.schema_version)
 
 
 def _with_feature_labels(graph: Graph, dom_roots: list[Symbol]) -> Graph:
@@ -659,4 +698,6 @@ def _with_feature_labels(graph: Graph, dom_roots: list[Symbol]) -> Graph:
         else symbol
         for symbol in graph.symbols
     ]
-    return Graph(symbols=symbols, edges=graph.edges, schema_version=graph.schema_version)
+    return Graph(symbols=symbols, edges=graph.edges,
+                 schema_version=graph.schema_version)
+

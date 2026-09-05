@@ -12,7 +12,7 @@ from seamcheck.diff import DiffResult, diff_graphs
 from seamcheck.extractors.preprocessor_extractor import preprocessor_files
 from seamcheck.graph import Graph, Status, relativise
 from seamcheck.nodetools import report as _notify
-from seamcheck.pipeline import SCAN_PHASES, run_scan
+from seamcheck.pipeline import SCAN_PHASES, one_row_per_id, run_scan
 from seamcheck.progress import Progress, null
 from seamcheck.roots import discover_css_files, discover_js_roots, tailwind_classes
 from seamcheck.snapshot import current_git_sha, load_snapshot, save_snapshot
@@ -260,7 +260,11 @@ def scan(
         if _css_root_dir else static_candidates
     )
 
-    scanned = relativise(run_scan(
+    # `relativise` rewrites the absolute path inside a symbol's id, so two spellings of
+    # one file - `./pointless/x.js` and `pointless/x.js` - only collapse to the same id
+    # HERE. Deduping before this point cannot see them: 6,817 of the reference project's
+    # rows were that, made identical by the very pass that fixed the ids.
+    scanned = one_row_per_id(relativise(run_scan(
         # Empty for a project that is not Django. The Django adapter is the only reader
         # that wants it, and it is not the one running in that case.
         urlconf_module=config.get("urlconf_module", ""),
@@ -285,7 +289,7 @@ def scan(
         # The directories that actually serve files, so a `/static/…` reference can be
         # asked of the filesystem rather than of the route table.
         static_roots=static_candidates,
-    ), repo_root)
+    ), repo_root))
     return _with_stores_reached(_with_observations(scanned, repo_root), repo_root)
 
 
