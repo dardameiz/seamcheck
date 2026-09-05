@@ -1103,3 +1103,29 @@ map, the report and the console all carry the new kinds; **anything automated sh
 
 Reference project after all of it: **92 claims → 62**, no code deleted to get there, and
 the two claims that were provably wrong are connected.
+
+## A new ask, found by removing a dead key: the tests assert on dead keys too
+
+Removing the `user:{uid}:stats_cache` deletes broke exactly one test, and it broke for the wrong
+reason:
+
+```python
+assert any(f"user:{uid}:stats_cache" in str(c) for c in fake_redis.delete.call_args_list)
+inval.assert_called_once_with("user_stats", uid)   # ← the line that carries the behaviour
+```
+
+The key has had no writer since that cache moved to SWR. So the assertion guarded a call that
+cleared a key which does not exist — **it watched the CALL, not the EFFECT.** It passed for as
+long as the dead code was there, and failed the moment the dead code was removed: the one change
+it should have welcomed.
+
+The comment immediately above it said the same thing about a *different* dead key, removed in an
+earlier pass. Two dead assertions, one line apart, and only one had been noticed.
+
+**The ask:** the scan already knows which keys have no writer. It also parses the test tree. A
+string literal naming a writer-less key, inside a test, is a **dead assertion** — a distinct and
+quite valuable finding, because it is where false confidence is stored. It also explains why a
+delete-only key can survive so long: the suite is actively defending it.
+
+Related, and cheap: the same rule flags a test that asserts on a key which no product code
+touches at all — a test guarding a feature that has already been deleted.
