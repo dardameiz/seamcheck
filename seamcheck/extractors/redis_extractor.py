@@ -80,6 +80,18 @@ _WRITES = frozenset({
     # whether a call is Redis.
     "adelete", "adelete_many", "delete_many", "clear", "aclear", "aexpire",
 })
+# Commands that ANSWER with the new value. A rate limiter never reads its counter back -
+# it uses what the write returned - so `count = ar.incr(key)` is the read, and reporting
+# the key as "written, never read" describes a limiter that works.
+# Deliberately the commands whose answer is the STATE, not a size: `getset` hands back
+# what was there, `spop` hands back a member, `sadd` answers "was it already in?" - the
+# dedupe idiom. `rpush` returning the new length is not evidence anyone read the list, so
+# it is not here: the cost of a wrong entry is a dead key that looks alive, which is worse
+# than the red it removes.
+_COUNTERS = frozenset({"incr", "incrby", "incrbyfloat", "decr", "decrby",
+                       "hincrby", "hincrbyfloat", "zincrby", "aincr", "adecr",
+                       "getset", "spop", "sadd"})
+
 # A Lua script: the keys it touches are named at the call, the commands it runs are not.
 # `evalsha(sha, 1, WS_CONNECTIONS_KEY)` is how the connection counter is incremented, and
 # reading only the plain calls reported that counter as a key nothing writes.
@@ -1169,6 +1181,65 @@ def _keys_into_parameters(
     return found
 
 
+def _counter_reads(tree: ast.AST, owners: dict[int, str]) -> set[int]:
+    """Lines where a counter's RETURN VALUE is the read.
+
+    ```python
+    count = await ar.incr(f"appeal_rate:{ip}")   # reported "0 read". This IS the read.
+    if count > 3:
+        return 429
+    ```
+
+    Nothing will ever call `get()` on that key, so waiting for one reports every rate
+    limiter in the project as a write nobody reads. The same shape arrives positionally
+    out of a pipeline, which is the harder half - `p.incr(k)` is a bare statement and the
+    value comes back from `p.execute()` several lines later:
+
+    ```python
+    p.incr(f"user:{uid}:high_pps_count"); p.expire(...)
+    mismatch_count, _ = p.execute()              # the read, by tuple position
+    ```
+
+    So a counter counts as a read when its own value is used, or when it was queued on a
+    pipeline whose `execute()` result is bound to a name in the same scope. A pipeline
+    whose result is thrown away stays a write, which is the honest reading of it.
+    """
+    discarded: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Expr):
+            value = node.value
+            discarded.add(id(value.value if isinstance(value, ast.Await) else value))
+
+    def bound(value) -> ast.Call | None:
+        inner = value.value if isinstance(value, ast.Await) else value
+        return inner if isinstance(inner, ast.Call) else None
+
+    drained: set[tuple[str, str]] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        call = bound(node.value) if node.value is not None else None
+        if (call is not None and isinstance(call.func, ast.Attribute)
+                and call.func.attr in ("execute", "aexecute")
+                and isinstance(call.func.value, ast.Name)):
+            drained.add((owners.get(node.lineno, ""), call.func.value.id))
+
+    lines: set[int] = set()
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+            continue
+        if node.func.attr not in _COUNTERS:
+            continue
+        if id(node) not in discarded:
+            lines.add(node.lineno)
+        elif isinstance(node.func.value, ast.Name):
+            where = owners.get(node.lineno, "")
+            if ((where, node.func.value.id) in drained
+                    or ("", node.func.value.id) in drained):
+                lines.add(node.lineno)
+    return lines
+
+
 def _scan_python(root: str) -> list[_Hit]:
     hits: list[_Hit] = []
     # name -> (key argument index, command), and the call sites waiting for it: a wrapper
@@ -1214,6 +1285,8 @@ def _scan_python(root: str) -> list[_Hit]:
     parsed = [(rel, tree, owners, _key_variables(tree, owners, builders), key_lists[rel])
               for rel, tree, owners in trees]
     parameter_keys = _keys_into_parameters(parsed, signatures, builders)
+
+    counter_reads = {rel: _counter_reads(tree, owners) for rel, tree, owners in trees}
 
     for rel, tree, owners, key_names, _listed in parsed:
             pipelines = _pipeline_names(tree, owners)
@@ -1402,6 +1475,15 @@ def _scan_python(root: str) -> list[_Hit]:
                     method in _WRITES, ttl, receiver, method, nx,
                     owners.get(node.lineno, ""),
                 ))
+
+    # A counter that answered is a read as well as a write - one line, both halves, which
+    # is what the code does. Done here rather than at each of the five places a hit is
+    # made, so the rule has one home.
+    for hit in list(hits):
+        if (hit.write and hit.method in _COUNTERS
+                and hit.line in counter_reads.get(hit.file, ())):
+            hits.append(_Hit(hit.key, hit.raw, hit.file, hit.line, False, hit.ttl,
+                             hit.receiver, hit.method, hit.nx, hit.owner))
 
     # The names no single file could answer for.
     for hit in hits:

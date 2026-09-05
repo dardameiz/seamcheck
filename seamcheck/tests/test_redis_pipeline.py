@@ -2023,3 +2023,79 @@ class FindingKindTests(SimpleTestCase):
                 r.delete(f'user:{uid}:cart')
         """}))
         self.assertEqual(kinds["user:*:cart"], "redis_key")
+
+
+class CounterReturnValueTests(SimpleTestCase):
+    """A rate limiter never reads its counter back - it uses what the write returned."""
+
+    def test_an_incr_whose_value_is_used_is_a_read(self):
+        keys = _keys(_project({"views.py": """
+            import redis
+            r = redis.Redis()
+
+            def allow(ip):
+                count = r.incr(f'appeal_rate:{ip}')
+                r.expire(f'appeal_rate:{ip}', 3600)
+                return count <= 3
+        """}))
+        self.assertEqual(keys["appeal_rate:*"][0], "connected")
+        self.assertEqual(keys["appeal_rate:*"][1], "2 write / 1 read")
+
+    def test_an_awaited_one_counts(self):
+        keys = _keys(_project({"views.py": """
+            async def allow(ar, uid):
+                hits = await ar.incr(f'unlimited:rate:{uid}')
+                return hits < 50
+        """}))
+        self.assertEqual(keys["unlimited:rate:*"][0], "connected")
+
+    def test_a_counter_queued_on_a_drained_pipeline_counts(self):
+        # `p.incr(k)` is a bare statement; its value comes back by tuple position several
+        # lines later, which is the harder half of the same shape.
+        keys = _keys(_project({"views.py": """
+            import redis
+            r = redis.Redis()
+
+            def bump(uid):
+                p = r.pipeline()
+                p.incr(f'user:{uid}:high_pps_count')
+                p.expire(f'user:{uid}:high_pps_count', 600)
+                mismatch_count, _ = p.execute()
+                return mismatch_count
+        """}))
+        self.assertEqual(keys["user:*:high_pps_count"][0], "connected")
+
+    def test_a_pipeline_nobody_drains_stays_a_write(self):
+        # The result is thrown away, so nothing read the counter. Saying otherwise would
+        # turn a dead key green, which costs more than the red it removes.
+        keys = _keys(_project({"views.py": """
+            import redis
+            r = redis.Redis()
+
+            def bump(uid):
+                p = r.pipeline()
+                p.incr(f'user:{uid}:ghost_count')
+                p.execute()
+        """}))
+        self.assertEqual(keys["user:*:ghost_count"][0], "unused")
+
+    def test_a_discarded_incr_is_still_only_a_write(self):
+        keys = _keys(_project({"views.py": """
+            import redis
+            r = redis.Redis()
+
+            def bump():
+                r.incr('telemetry:daily_reset_fires:total')
+        """}))
+        self.assertEqual(keys["telemetry:daily_reset_fires:total"][0], "unused")
+
+    def test_a_size_returning_push_is_not_a_read(self):
+        keys = _keys(_project({"views.py": """
+            import redis
+            r = redis.Redis()
+
+            def queue(uid, payload):
+                depth = r.rpush(f'user:{uid}:pending_rewards', payload)
+                return depth
+        """}))
+        self.assertEqual(keys["user:*:pending_rewards"][0], "unused")
