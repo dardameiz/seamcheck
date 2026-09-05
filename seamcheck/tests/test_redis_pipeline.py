@@ -2175,3 +2175,185 @@ class KeyBehindANameTests(SimpleTestCase):
         """}))
         # A key a script is given is that script's keyspace: evidence, never a claim.
         self.assertEqual(keys["swr:cold:slots"][0], "uncertain")
+
+
+class SweptKeyspaceTests(SimpleTestCase):
+    """A `*` spans separators in Redis, so a scan reaches deeper than one segment."""
+
+    def test_a_glob_that_is_read_through_reads_the_keys_it_matches(self):
+        keys = _keys(_project({"seo.py": """
+            import redis
+            r = redis.Redis()
+
+            def record(host, day):
+                r.incr(f'analytics:seo:ref:{host}:{day}')
+                r.expire(f'analytics:seo:ref:{host}:{day}', 86400)
+
+            def dashboard():
+                rows = {}
+                for k in r.scan_iter('analytics:seo:*', count=500):
+                    rows[k] = r.get(k)
+                return rows
+        """}))
+        self.assertEqual(keys["analytics:seo:ref:*:*"][0], "connected")
+
+    def test_the_pattern_itself_is_not_a_key(self):
+        # Nothing stores `analytics:seo:*`. Reporting it as read-and-never-written is a
+        # claim about a shape, and the claim can never be true.
+        keys = _keys(_project({"seo.py": """
+            import redis
+            r = redis.Redis()
+
+            def record(host, day):
+                r.incr(f'analytics:seo:ref:{host}:{day}')
+
+            def dashboard():
+                return {k: r.get(k) for k in r.scan_iter('analytics:seo:*')}
+        """}))
+        self.assertEqual(keys["analytics:seo:*"][0], "uncertain")
+
+    def test_a_wipe_still_does_not_vouch_for_the_keys_it_deletes(self):
+        # scan -> delete is a sweep. Letting it stand as a read cleared four real
+        # findings once - counters read in two places and written in none.
+        keys = _keys(_project({"gdpr.py": """
+            import redis
+            r = redis.Redis()
+
+            def wipe(uid):
+                for k in r.scan_iter(f'user:{uid}:*'):
+                    r.delete(k)
+        """, "seed.py": """
+            import redis
+            r = redis.Redis()
+
+            def seed(uid):
+                r.set(f'user:{uid}:best_hour_streak', 3)
+        """}))
+        self.assertEqual(keys["user:*:best_hour_streak"][0], "unused")
+
+    def test_one_named_segment_is_not_evidence(self):
+        # `user:*` read through would vouch for every key the project has. That is not
+        # evidence, it is a shrug - two named segments at least.
+        keys = _keys(_project({"dump.py": """
+            import redis
+            r = redis.Redis()
+
+            def dump():
+                return {k: r.get(k) for k in r.scan_iter('user:*')}
+
+            def seed(uid):
+                r.set(f'user:{uid}:ghost_total', 3)
+        """}))
+        self.assertEqual(keys["user:*:ghost_total"][0], "unused")
+
+    def test_a_scan_read_through_a_comprehension_still_counts(self):
+        # `keys = [k.decode() if isinstance(k, bytes) else k for k in r.scan_iter(...)]`
+        # then `r.mget(keys)` - decoding bytes is what every one of these lines does, so
+        # the transformed element must not lose the keyspace.
+        keys = _keys(_project({
+            "middleware.py": """
+                import redis
+                r = redis.Redis()
+
+                def count(bucket, day):
+                    r.incr(f'analytics:seo:ref:{bucket}:{day}')
+            """,
+            "admin_views.py": """
+                from app.redis import get_monitoring_redis_client
+
+                def panel(request):
+                    r = get_monitoring_redis_client()
+                    keys = [k.decode() if isinstance(k, bytes) else k
+                            for k in r.scan_iter('analytics:seo:*', count=500)]
+                    if keys:
+                        return dict(zip(keys, r.mget(keys)))
+                    return {}
+            """,
+        }))
+        self.assertEqual(keys["analytics:seo:ref:*:*"][0], "connected")
+
+
+
+
+class LuaGuardTests(SimpleTestCase):
+    """A key assembled inside a Lua string, and the guard whose value is the read."""
+
+    def test_a_lua_local_keeps_the_whole_name(self):
+        # Reading the first quoted piece and calling the rest one hole turned
+        # `'dedup:' .. user_id .. ':' .. request_id` into `dedup:{}` - half a name.
+        keys = _keys(_project({"atomic.py": """
+            SCRIPT = \"\"\"
+                local request_id = ARGV[1]
+                local user_id = ARGV[2]
+                local key = 'dedup:' .. user_id .. ':' .. request_id
+                local result = redis.call('SET', key, '1', 'NX', 'EX', 300)
+                if result then return 'PROCEED' else return 'DUPLICATE' end
+            \"\"\"
+
+            class Ops:
+                def __init__(self, r):
+                    self.script = r.register_script(SCRIPT)
+        """}))
+        self.assertIn("dedup:*:*", keys)
+
+    def test_a_lua_set_nx_is_a_guard_not_a_write_nobody_reads(self):
+        # `if not redis.call("SET", lock, "lua", "NX", "EX", 86400)` - the return value
+        # IS the read, exactly as it is for `set(key, v, nx=True)` in Python. Read as a
+        # plain write, every atomic guard on a hot path reports as never read.
+        keys = _keys(_project({"lua_scripts.py": """
+            RESET = \"\"\"
+                local user_id = ARGV[1]
+                local lock = "user:" .. user_id .. ":daily_reset_fired:" .. ARGV[2]
+                if not redis.call("SET", lock, "lua", "NX", "EX", 86400) then
+                    redis.call("INCR", "telemetry:double_fire:total")
+                end
+            \"\"\"
+        """}))
+        self.assertEqual(keys["user:*:daily_reset_fired:*"][0], "connected")
+
+
+class OutsideTheRepositoryTests(SimpleTestCase):
+    """Code the project itself calls disposable cannot be evidence about the project."""
+
+    def test_a_gitignored_folder_is_not_evidence(self):
+        keys = _keys(_project({
+            ".gitignore": """
+                venv/
+                OTHER
+            """,
+            "OTHER/seed_demo.py": """
+                import redis
+                r = redis.Redis()
+
+                def seed(uid):
+                    r.set(f'user:{uid}:best_hour_streak', 3)
+            """,
+            "app/views.py": """
+                import redis
+                r = redis.Redis()
+
+                def profile(uid):
+                    return r.get(f'user:{uid}:streaks')
+            """,
+        }))
+        # The seeder is not in the repository, so neither is its key.
+        self.assertNotIn("user:*:best_hour_streak", keys)
+        self.assertIn("user:*:streaks", keys)
+
+    def test_a_glob_or_a_path_is_left_alone(self):
+        # Reimplementing gitignore is not the point; a folder the project calls
+        # disposable is. A pattern could name anything, so it names nothing here.
+        keys = _keys(_project({
+            ".gitignore": """
+                *.log
+                app/generated/
+            """,
+            "app/generated/seed.py": """
+                import redis
+                r = redis.Redis()
+
+                def seed(uid):
+                    r.set(f'user:{uid}:best_hour_streak', 3)
+            """,
+        }))
+        self.assertIn("user:*:best_hour_streak", keys)

@@ -36,7 +36,7 @@ import os
 import re
 from dataclasses import replace
 
-from seamcheck.adapters.discovery import SKIP_DIRS
+from seamcheck.adapters.discovery import SKIP_DIRS, gitignored_dirs
 from seamcheck.extractors.js_extractor import _walk, iter_parsed
 from seamcheck.graph import Edge, Status, Symbol
 from seamcheck.nodetools import node_line
@@ -209,10 +209,10 @@ def _looks_like_key(pattern: str) -> bool:
 
 class _Hit:
     __slots__ = ("key", "raw", "file", "line", "write", "ttl", "receiver", "method", "nx",
-                 "owner")
+                 "owner", "swept")
 
     def __init__(self, key, raw, file, line, write, ttl, receiver, method="", nx=False,
-                 owner=""):
+                 owner="", swept=False):
         self.key, self.raw, self.file, self.line = key, raw, file, line
         self.nx = nx
         # The function this touch happens in. "Which handler writes this key" is the
@@ -224,6 +224,10 @@ class _Hit:
         # true. A verdict about expiry needs to know the verb.
         self.method = method
         self.write, self.ttl, self.receiver = write, ttl, receiver
+        # This touch is a SCAN pattern being read through, not a key being looked up.
+        # `scan_iter("analytics:seo:*")` then `get(k)` reads every key that matches, and
+        # the pattern itself is not a key anybody stores.
+        self.swept = swept
 
 
 # ── Python ────────────────────────────────────────────────────────────────
@@ -339,7 +343,7 @@ _LUA_STRING = re.compile(r"""["']([A-Za-z0-9_:.\-{}*]{3,})["']""")
 # `local lb_key = "pps:leaderboard"` and `local user_key = "pps:user:" .. uid`, where the
 # concatenation is the same hole an f-string leaves.
 _LUA_LOCAL = re.compile(
-    r"""local\s+([A-Za-z_]\w*)\s*=\s*["']([^"'\n]+)["'](\s*\.\.\s*\S+)?""")
+    r"""local\s+([A-Za-z_]\w*)\s*=\s*(["'][^\n]*)""")
 # `redis.call("HGET", user_key, ...)` - the command and whatever holds the key. The key
 # may be spelled INLINE: `redis.call("ZADD", "pps:board:i:" .. input_type .. ":t:" ..
 # technique, score, uid)`. Reading only the first quoted piece saw `pps:board:i:` - a
@@ -393,8 +397,8 @@ def _script_runs(tree: ast.AST, owners: dict[int, str]) -> dict[str, list[tuple[
 
 
 def _lua_keys(tree: ast.AST, runs: dict[str, list[tuple[int, str]]] | None = None,
-              ) -> list[tuple[str, int, str, str]]:
-    """(key, line, command) for every key an embedded Lua script touches.
+              ) -> list[tuple[str, int, str, str, bool]]:
+    """(key, line, command, owner, is-a-guard) for every key an embedded Lua script touches.
 
     The script is a Python string and its commands are plain text in it:
     `local lb_key = "pps:leaderboard"` then `redis.call("ZADD", lb_key, …)` says as much
@@ -435,11 +439,23 @@ def _lua_keys(tree: ast.AST, runs: dict[str, list[tuple[int, str]]] | None = Non
         if "redis.call" not in body and "redis.pcall" not in body:
             continue
         locals_: dict[str, str] = {}
-        for name, literal, concatenated in _LUA_LOCAL.findall(body):
-            locals_[name] = literal + ("{}" if concatenated else "")
+        # The WHOLE right-hand side, through the same reader the call sites use. Taking
+        # the first quoted piece and a bare "{}" for the rest turned `local key =
+        # 'dedup:' .. user_id .. ':' .. request_id` into `dedup:{}` and lost the half of
+        # the name that says which key it is.
+        for name, rest in _LUA_LOCAL.findall(body):
+            locals_[name] = _lua_expression(rest.split("--")[0], locals_)
         named: set[str] = set()
         for match in _LUA_CALL.finditer(body):
             command, holder = match.group(1), match.group(2)
+            # `redis.call("SET", lock, "lua", "NX", "EX", 86400)` is the same lock or
+            # dedupe guard as `set(key, v, nx=True)` in Python, and the same thing is
+            # true of it: the RETURN VALUE is the read - `if not redis.call(...)` -
+            # so nothing will ever call GET on it. Read as a plain write, every atomic
+            # guard in a project's hot path reports as written and never read.
+            rest = body[match.end():body.find(")", match.end()) + 1 or None]
+            guard = command.lower() == "set" and re.search(
+                r"""["']NX["']""", rest or "", re.I) is not None
             key = _lua_expression(holder, locals_)
             # A name the script never declared - `KEYS[1]`, a parameter - is the
             # caller's key, not this script's. Only a hole with a literal around it
@@ -453,7 +469,8 @@ def _lua_keys(tree: ast.AST, runs: dict[str, list[tuple[int, str]]] | None = Non
                 # that points at the wrong line is a path a reader cannot follow.
                 line = node.lineno + body.count("\n", 0, match.start())
                 for at, owner in sites or [(line, "")]:
-                    found.append((key, line if not sites else at, command.lower(), owner))
+                    found.append((key, line if not sites else at, command.lower(), owner,
+                                  guard))
         # A key the script DECLARES but never passes to a command: still evidence it is
         # part of this script's keyspace, and nothing more.
         #
@@ -461,12 +478,12 @@ def _lua_keys(tree: ast.AST, runs: dict[str, list[tuple[int, str]]] | None = Non
         # passes a hash FIELD as its third argument, and scooping every quoted string out
         # of the script turned `unknown:n` and `unknown:sum` into keys of their own.
         for match in _LUA_LOCAL.finditer(body):
-            declared = match.group(2) + ("{}" if match.group(3) else "")
+            declared = _lua_expression(match.group(2).split("--")[0], locals_)
             if declared in named or not _looks_like_key(declared) or _is_fragment(declared):
                 continue
             line = node.lineno + body.count("\n", 0, match.start())
             for at, owner in sites or [(line, "")]:
-                found.append((declared, line if not sites else at, "eval", owner))
+                found.append((declared, line if not sites else at, "eval", owner, False))
     return found
 
 
@@ -564,6 +581,21 @@ def _scan_pattern(node: ast.Call) -> str:
     return ""
 
 
+def _comprehended(value, of) -> str:
+    """What a comprehension iterates, asked of each generator until one answers."""
+    if not isinstance(value, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)):
+        return ""
+    for generator in value.generators:
+        source = generator.iter
+        if (isinstance(source, ast.Call) and isinstance(source.func, ast.Name)
+                and source.func.id in ("list", "set", "sorted", "tuple") and source.args):
+            source = source.args[0]
+        answer = of(source)
+        if answer:
+            return answer
+    return ""
+
+
 def _swept_lists(tree: ast.AST, owners: dict[int, str]) -> dict[tuple[str, str], list[str]]:
     """(enclosing def, variable) -> the keyspace a scan handed it.
 
@@ -604,6 +636,13 @@ def _swept_lists(tree: ast.AST, owners: dict[int, str]) -> dict[tuple[str, str],
             value = unwrap(node.value)
             pattern = _scan_pattern(value)
             if not pattern:
+                # `keys = [k.decode() if isinstance(k, bytes) else k
+                #          for k in r.scan_iter('analytics:seo:*')]` then `r.mget(keys)`.
+                # The list IS the scan's result however each element is spelled - decoding
+                # bytes is what every one of these lines does - so the comprehension's
+                # own target is not the only name worth following.
+                pattern = _comprehended(value, _scan_pattern)
+            if not pattern:
                 continue
             for target in node.targets:
                 if isinstance(target, ast.Name):
@@ -633,6 +672,15 @@ def _swept_lists(tree: ast.AST, owners: dict[int, str]) -> dict[tuple[str, str],
                 for target in node.targets:
                     if held and isinstance(target, ast.Name):
                         hold((where, target.id), held)
+            elif isinstance(node, ast.Assign):
+                # ...and the same list, one hop later: `names = [k for k in keys]`.
+                over = _comprehended(
+                    unwrap(node.value),
+                    lambda one: (found.get((where, one.id), [""])[0]
+                                 if isinstance(one, ast.Name) else ""))
+                for target in node.targets:
+                    if over and isinstance(target, ast.Name):
+                        hold((where, target.id), [over])
             elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                     and node.func.attr in ("extend", "append", "add", "update")
                     and len(node.args) == 1 and isinstance(node.func.value, ast.Name)
@@ -1308,9 +1356,13 @@ def _scan_python(root: str) -> list[_Hit]:
     builders: dict[str, list[str]] = {}
     # Functions that return a client, so a wrapper around a factory is a factory.
     factories: dict[str, str] = {}
+    # Plus whatever this repo's own .gitignore calls disposable: a demo seeder and a
+    # folder named `management_commands_archived` are not the product, and nine findings
+    # on the reference project were true of code that is not in the repository.
+    skip = _PY_SKIP | gitignored_dirs(root)
     for here, subdirectories, names in os.walk(root):
         subdirectories[:] = [
-            d for d in subdirectories if d not in _PY_SKIP and not d.startswith(".")
+            d for d in subdirectories if d not in skip and not d.startswith(".")
         ]
         for name in names:
             if not name.endswith(".py"):
@@ -1351,11 +1403,12 @@ def _scan_python(root: str) -> list[_Hit]:
             scripts = _script_names(tree)
             lists_here = key_lists.get(rel, {})
             swept_here = _swept_lists(tree, owners)
-            for quoted, line, command, owner in _lua_keys(tree, _script_runs(tree, owners)):
+            for quoted, line, command, owner, guard in _lua_keys(
+                    tree, _script_runs(tree, owners)):
                 hits.append(_Hit(
                     _normalise(quoted), quoted, rel, line,
                     command in _WRITES, command in ("setex", "psetex", "expire", "pexpire"),
-                    "", command if command in _ALL else "eval", False,
+                    "", command if command in _ALL else "eval", guard,
                     owner or owners.get(line, ""),
                 ))
             wrappers.update(_wrappers_in(tree))
@@ -1465,6 +1518,7 @@ def _scan_python(root: str) -> list[_Hit]:
                 held = node.args[0]
                 inner = held.value if isinstance(held, ast.Starred) else held
                 listed: list[str] = []
+                from_sweep = False
                 if isinstance(inner, (ast.List, ast.Tuple)):
                     listed = [q for q in
                               (_py_pattern(e, key_names, owners.get(node.lineno, ""),
@@ -1480,12 +1534,15 @@ def _scan_python(root: str) -> list[_Hit]:
                     # or every wipe script reports the keys it wipes as invalidated.
                     if not listed and method not in _WRITES:
                         listed = swept_here.get((where, inner.id)) or []
+                        from_sweep = bool(listed)
                 if listed:
+                    swept = from_sweep
                     for one in dict.fromkeys(listed):
                         hits.append(_Hit(
                             _normalise(one), one, rel, node.lineno,
                             method in _WRITES, ttl_of(node, method), receiver, method,
                             nx_of(node, method), owners.get(node.lineno, ""),
+                            swept and one.endswith("*"),
                         ))
                     continue
                 pattern = _py_pattern(node.args[0], key_names,
@@ -1630,9 +1687,10 @@ def _js_pipeline_names(tree: dict) -> dict[str, str]:
 
 def _scan_js(root: str) -> list[_Hit]:
     paths: list[str] = []
+    skip = _PY_SKIP | gitignored_dirs(root)
     for here, subdirectories, names in os.walk(root):
         subdirectories[:] = [
-            d for d in subdirectories if d not in _PY_SKIP and not d.startswith(".")
+            d for d in subdirectories if d not in skip and not d.startswith(".")
         ]
         paths.extend(
             os.path.join(here, name) for name in names if name.endswith(_JS_EXTENSIONS)
@@ -1797,6 +1855,31 @@ def extract_redis(root: str) -> tuple[list[Symbol], list[Edge]]:
         if hit:
             matches[key] = hit
 
+    # A scan pattern whose results are READ is a read of every key it matches - and in
+    # Redis a `*` spans separators, so `analytics:seo:*` really does reach
+    # `analytics:seo:ref:{host}:{day}`, which was reported written-and-never-read while
+    # an admin dashboard read all of it through `scan_iter`.
+    #
+    # Only patterns that name at least two segments of their own, and only sweeps that
+    # end in a READ: `scan → delete` is a wipe, and letting a wipe vouch for a key is how
+    # four real findings were once cleared. `user:*` names one segment and could vouch
+    # for every key a project has, which is not evidence, it is a shrug.
+    read_globs = {
+        key for key, group in by_key.items()
+        if key.endswith("*") and any(h.swept and not h.write for h in group)
+        and sum(1 for part in key.split(":") if part and "*" not in part) >= 2
+    }
+
+    def swept_by(key: str) -> str:
+        for glob in sorted(read_globs):
+            if glob == key:
+                continue
+            shape = re.compile(
+                "^" + ".*".join(re.escape(p) for p in glob.split("*")) + "$")
+            if shape.match(key):
+                return glob
+        return ""
+
     elsewhere: set[str] = set()
     pending_claims: list[int] = []
     for key, group in sorted(by_key.items()):
@@ -1893,6 +1976,21 @@ def extract_redis(root: str) -> tuple[list[Symbol], list[Edge]]:
             note = ("This key's namespace is decided at runtime - the prefix comes from a "
                     "lookup, not from the source - so which key it names is not something "
                     "that can be read here.")
+        if status in (Status.UNRESOLVED, Status.UNUSED):
+            # Every hit on this name is a sweep reading THROUGH it: the pattern is not a
+            # key anything stores, so it is evidence about a keyspace and never a claim.
+            if all(h.swept for h in group):
+                status = Status.UNCERTAIN
+                note = ("A `scan(match=…)` pattern, not a key: this is the shape a sweep "
+                        "reads through, and the keys it names are reported in their own "
+                        "right.")
+            else:
+                glob = swept_by(key)
+                if glob:
+                    status = Status.CONNECTED
+                    note = (f"Read through a sweep: `{glob}` is scanned and every key it "
+                            f"matches is read. A `*` spans separators in Redis, so this "
+                            f"key is one of them.")
         if key in matches and status in (Status.UNRESOLVED, Status.UNUSED):
             other = ", ".join(sorted(matches[key])[:3])
             status = Status.CONNECTED

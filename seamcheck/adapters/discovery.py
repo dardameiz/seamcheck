@@ -120,3 +120,37 @@ def module_file(repo_root: str, module: str) -> str | None:
             if candidate.is_file():
                 return str(candidate)
     return None
+
+
+def gitignored_dirs(repo_root: str) -> set[str]:
+    """Directory names this repo's own `.gitignore` says are not part of it.
+
+    A project keeps one-off scripts somewhere - `OTHER/`, `scratch/`, an archived
+    management-command folder - and says so in `.gitignore`. Code that is not in the
+    repository cannot be evidence about the repository: on the reference project nine
+    findings came from a demo seeder and a folder literally named
+    `management_commands_archived`, all of them true and none of them about the product.
+
+    Only the simple entries: a bare name, or one with a trailing slash. A negation, a
+    glob or a path is left alone - the point is to skip a folder the project itself
+    calls disposable, not to reimplement gitignore.
+    """
+    found: set[str] = set()
+    try:
+        with open(os.path.join(repo_root, ".gitignore"), encoding="utf-8",
+                  errors="replace") as handle:
+            lines = handle.read().splitlines()
+    except OSError:
+        return found
+    for line in lines:
+        entry = line.strip().rstrip("/")
+        if not entry or entry.startswith(("#", "!")):
+            continue
+        if any(ch in entry for ch in "*?[]/"):
+            continue
+        # A name that is also a real source directory somewhere - `src`, `app` - would
+        # be a lot to lose on one line of a dotfile. Ignore entries are usually build
+        # output or scratch; require it to look like one, or to exist as a directory.
+        if os.path.isdir(os.path.join(repo_root, entry)) or entry in SKIP_DIRS:
+            found.add(entry)
+    return found
