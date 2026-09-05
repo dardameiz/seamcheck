@@ -848,6 +848,10 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
 /* A lane heading inside a band. Bigger than the kind headings under it, because the
    store is the thing a reader is choosing between, and the kind is a detail of it. */
 #cv .lanename { font-size:14px; fill:var(--ink); font-weight:700; letter-spacing:-.01em; }
+/* The band's own border is 3px and white; this is the same idea one level in, so it is
+   solid too - a dashed hairline read as a divider rather than as a container - but
+   thinner, and in the language's colour rather than the ink. */
+#cv .langbox { stroke-width:2; stroke-opacity:.85; }
 #cv .lanebadge { font-size:9.5px; letter-spacing:.1em; font-family:var(--mono); }
 #cv .lanebadge.has { fill:var(--ok); }
 #cv .lanebadge.none { fill:var(--muted); }
@@ -2384,6 +2388,28 @@ const ROW_CHOICES = [3, 4, 5, 6, 8, 10, 12, 16, 20];
 const BAND_TOP = 96, BAND_BOT = 22, BAND_GAP = 26;
 // Room for a lane heading, and the air before one that is not the band's first.
 const LANE_HEAD = 34, LANE_GAP = 26;
+// A band holds more than one language and used to say so only in a corner label, while
+// the cards sat intermixed - so the one thing the label promised, that this strip crosses
+// a language boundary, could not be seen anywhere on the canvas.
+//
+// The hues are the ones a developer already reads as that language (the colours GitHub
+// puts beside a repository), lifted where a dark ground would swallow them. Language is
+// its own channel: it colours the CONTAINER, never a card or a wire, so it cannot be
+// mistaken for status - which is what colour means everywhere else on this map.
+const LANG_COLOUR = {
+  "JavaScript": "#f1e05a", "TypeScript": "#5ba0ec", "Python": "#7cc7ef",
+  "CSS": "#a688e0", "Sass": "#e07ab0", "Less": "#7aa3d4",
+  "Template": "#f0864a", "Vue": "#59d2a0", "Svelte": "#ff6a3d",
+  "SQL": "#d8b96a", "Go": "#4fd3e8", "Rust": "#e0a878", "Ruby": "#e06c75",
+  "PHP": "#8c9bd8", "Java": "#d69a5a", "Kotlin": "#c08cf0", "C#": "#5cc98a",
+};
+const LANG_FALLBACK = "var(--line-2)";
+// Language containers need more air than a lane heading did: two boxes that touch read
+// as one box with a line through it, which is the opposite of the point.
+const LANG_GAP = 46;
+function langColour(name) {
+  return LANG_COLOUR[name] || LANG_FALLBACK;
+}
 // The band's own heading is two lines tall, so the first lane inside it has to start
 // below them - without this the store name sat on top of the band's subtitle.
 const LANE_FIRST_DROP = 16;
@@ -2578,7 +2604,34 @@ function place(buckets, used, perRow) {
     const bandServices = [...new Set(
       ordered.flatMap(c => (buckets.get(c) || []).map(svcOf)))].filter(Boolean).sort();
 
-    if (!laneOf && bandServices.length > 1) {
+    // Which languages this band holds. A band with two is two containers; a band with
+    // one is already labelled by the band itself and gains nothing from a box round
+    // everything it contains.
+    const langOf = n => n.lang || "";
+    const bandLangList = [...new Set(
+      ordered.flatMap(c => (buckets.get(c) || []).map(langOf)))].filter(Boolean).sort();
+
+    if (!laneOf && bandServices.length <= 1 && bandLangList.length > 1) {
+      const runs = [...bandLangList, ""];
+      runs.forEach(lang => {
+        const slice = new Map(ordered.map(c =>
+          [c, (buckets.get(c) || []).filter(n => langOf(n) === lang)]));
+        if (![...slice.values()].some(v => v.length)) return;
+        if (x > 44) { x = 44; rowTop += tallest + GAP_Y + KIND_GAP; tallest = 0; }
+        rowTop += rowTop > y + BAND_TOP ? LANG_GAP : LANE_FIRST_DROP + 12;
+        const lane = {x: 44, y: rowTop - 30, id: lang || "unknown",
+                      name: lang || "no file to read a language from",
+                      colour: lang ? langColour(lang) : LANG_FALLBACK,
+                      box: true, top: rowTop - 46, oracle: true, badge: ""};
+        lanes.push(lane);
+        rowTop += LANE_HEAD;
+        ordered.forEach(c => layoutColumn(c, slice.get(c)));
+        // The box is drawn round what was just laid out, so its bottom is only known
+        // now. A heading over a run of cards is not the same thing as a container: the
+        // ask was for the band's own border, one level in.
+        lane.bottom = rowTop + tallest + 14;
+      });
+    } else if (!laneOf && bandServices.length > 1) {
       // A lane per service, in name order, with anything unattributed last so it is
       // visibly the remainder rather than silently folded into a real service.
       const runs = [...bandServices, ""];
@@ -3340,6 +3393,8 @@ function draw() {
   // a marker cannot inherit the stroke of the path using it, and a grey head on a red
   // wire reads as a different edge.
   const out = [MARKERS, '<g id="vp">'];
+  // Every band is the same width, and a language container spans its band.
+  const bandWidth = (bands && bands.length) ? bands[0].w : 300;
   // The bands, drawn first and behind everything: full-width horizontal strips a reader
   // goes DOWN, which is the direction a request actually travels. A person touches
   // something in the top strip, it crosses the middle, and the bottom is what runs.
@@ -3458,8 +3513,19 @@ function draw() {
   // in a dashboard. A reader who sees "no schema" knows a grey card means unknowable
   // rather than dead, before looking at a single card.
   (lanes || []).forEach(L => {
+    // A container, not a heading. The band's own border says "this is the server"; this
+    // one says "and this part of it is Python". Drawn behind its cards, in the language's
+    // own colour, so the boundary is visible before a single label is read.
+    const box = L.box
+      ? `<rect class="langbox" x="30" y="${L.top}" rx="14"
+               width="${Math.max((bandWidth || 300) - 8, 200)}"
+               height="${Math.max((L.bottom || L.top) - L.top, 44)}"
+               fill="none" stroke="${L.colour || "var(--line-2)"}"/>`
+      : "";
     out.push(`<g class="lane">
-      <text class="lanename" x="${L.x}" y="${L.y}">${esc(L.name)}</text>
+      ${box}
+      <text class="lanename"${L.colour ? ` fill="${L.colour}"` : ""}
+            x="${L.x}" y="${L.y}">${esc(L.name)}</text>
       ${L.badge ? `<text class="lanebadge ${L.oracle ? "has" : "none"}"
             x="${L.x + 12 + L.name.length * 8.6}" y="${L.y}">${esc(L.badge)}</text>` : ""}
     </g>`);

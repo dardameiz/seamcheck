@@ -1931,3 +1931,107 @@ class FunctionReachesTheBrowserTests(SimpleTestCase):
         # again - two implementations of one thing, disagreeing, with the weaker one last.
         self.assertIn("THE BROWSER", kinds["bands"])
         self.assertIn("THE SEAM", kinds["bands"])
+
+
+class LanguageContainersTests(SimpleTestCase):
+    """A band holds more than one language, and said so only in a corner label.
+
+    Reported from use: "each section actually holds multiple languages, multiple
+    backends, microservices — inside the main sections there should be separate
+    containers per language, so the .py files are together and any JS is together, in a
+    different coloured container."
+
+    The band knew: it collects every language it contains and prints them top-right as
+    `CSS · JavaScript · Template`. The cards themselves sat intermixed, so the one thing
+    the label promised - that this strip crosses a language boundary - could not be seen
+    anywhere on the canvas.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        try:
+            from playwright.sync_api import sync_playwright  # noqa: F401
+        except ImportError:
+            raise unittest.SkipTest("playwright is not installed (the observe extra)") from None
+
+    def _url(self):
+        from seamcheck.mapdata import build_map
+        from seamcheck.renderers.map_html import render_document
+
+        def sym(kind, label, file, sub=""):
+            return Symbol(id=f"{kind}:{label}", kind=kind, label=label, sub=sub,
+                          file=file, line=1, status=Status.CONNECTED,
+                          snippet=f"{kind} {label}", chain=[label], note="")
+
+        graph = Graph(
+            symbols=[
+                # One band, two languages: a JS module and a TypeScript one.
+                sym("module", "orders.js", "static/js/orders.js"),
+                sym("js_call", "/api/orders/", "static/js/orders.js"),
+                sym("module", "cart.ts", "static/ts/cart.ts"),
+                sym("js_call", "/api/cart/", "static/ts/cart.ts"),
+                sym("dom_selector", "cart-total", "templates/page.html"),
+            ],
+            edges=[],
+        )
+        pages = {"orders-main": {"static/js/orders.js", "static/ts/cart.ts",
+                                 "templates/page.html"}}
+        document = render_document(build_map(graph, pages, git_sha="0" * 12),
+                                   console=_console_for(graph))
+        path = pathlib.Path(tempfile.mkdtemp()) / "map.html"
+        path.write_text(document.single_file(), encoding="utf-8")
+        return path.as_uri()
+
+    def _drawn(self):
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch()
+            except Exception as error:  # pragma: no cover - no browser downloaded
+                raise unittest.SkipTest(f"no chromium: {error}") from None
+            page = browser.new_page()
+            errors: list[str] = []
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.goto(self._url(), wait_until="load")
+            _open_lens(page, "map")
+            page.wait_for_selector("#cv .nd")
+            page.wait_for_timeout(300)
+            state = page.evaluate("""() => ({
+                boxes: [...document.querySelectorAll('#cv .langbox')].map(b => ({
+                    stroke: b.getAttribute('stroke'),
+                    w: Number(b.getAttribute('width')),
+                    h: Number(b.getAttribute('height')),
+                })),
+                names: [...document.querySelectorAll('#cv .lanename')]
+                         .map(t => t.textContent),
+            })""")
+            browser.close()
+        self.assertEqual(errors, [])
+        return state
+
+    def test_each_language_gets_its_own_container(self):
+        state = self._drawn()
+        self.assertGreaterEqual(len(state["boxes"]), 2,
+                                f"one container per language, got {state['names']}")
+
+    def test_the_containers_are_coloured_per_language(self):
+        state = self._drawn()
+        strokes = {b["stroke"] for b in state["boxes"]}
+        self.assertGreaterEqual(len(strokes), 2,
+                                "JavaScript and TypeScript must not share a colour")
+        self.assertTrue(all(s and s != "none" for s in strokes), strokes)
+
+    def test_a_container_is_a_box_around_its_cards(self):
+        # Not a heading: a box, the way the band's own border is a box.
+        state = self._drawn()
+        for box in state["boxes"]:
+            self.assertGreater(box["w"], 100, box)
+            self.assertGreater(box["h"], 40, box)
+
+    def test_the_language_is_named_on_its_container(self):
+        state = self._drawn()
+        named = " ".join(state["names"])
+        self.assertIn("JavaScript", named)
+        self.assertIn("TypeScript", named)

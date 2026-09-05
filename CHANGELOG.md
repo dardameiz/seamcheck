@@ -19,6 +19,30 @@ backend that answered `uncertain` everywhere would score 100% precision and be u
 
 ## Unreleased
 
+### A band's languages are containers now, not a label in the corner
+
+Reported from use: *"each section actually holds multiple languages, multiple backends,
+microservices — inside the main sections there should be separate containers per
+language, so the .py files are together and any JS is together, in a different coloured
+container."*
+
+The band already knew. It collected every language it held and printed them top-right as
+`CSS · JavaScript · Template`, while the cards themselves sat intermixed — so the one
+thing that label promised, that this strip crosses a language boundary, could not be seen
+anywhere on the canvas.
+
+- **Added** — **one container per language inside a band**, drawn as a box in that
+  language's own colour with the language named on it. The hues are the ones a developer
+  already reads as that language, lifted where a dark ground would swallow them.
+  Solid and 2px against the band's 3px white: the same idea one level in, which is what
+  was asked for. A band holding one language is left alone — the band already says so,
+  and a box round everything it contains divides nothing.
+- Language is its own channel: it colours the **container**, never a card and never a
+  wire, so it cannot be read as status — which is what colour means everywhere else here.
+  The store keeps its existing service lanes (Postgres, Redis), which answer a better
+  question about that band than "Python" would.
+
+
 - **Fixed** — **a function's page showed where it goes and not that anything arrives.**
   Filtering the reference project on `submit_push` drew THE SERVER and THE STORE and
   nothing above them: the page walks what the function REACHES, and the browser is on the
