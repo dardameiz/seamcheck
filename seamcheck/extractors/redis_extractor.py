@@ -50,7 +50,7 @@ _READS = frozenset({
     # write reported the one line that drains `import:csv:*:rows` as proof nothing read it.
     "lpop", "rpop", "blpop", "brpop", "lindex", "rpoplpush",
     "smembers", "sismember", "scard", "zrange", "zrevrange", "zscore", "zcard",
-    "lrange", "llen", "ttl", "pttl", "getrange", "sscan", "hscan", "type",
+    "lrange", "llen", "ttl", "pttl", "getrange", "type", "scan",
     # Found by checking the Lua paths against the source: `HINCRBY` was a write and
     # `HINCRBYFLOAT` on the next line was not a command at all. Same for the sorted-set
     # ranges, which is most of what a leaderboard does.
@@ -84,6 +84,9 @@ _WRITES = frozenset({
 # `evalsha(sha, 1, WS_CONNECTIONS_KEY)` is how the connection counter is incremented, and
 # reading only the plain calls reported that counter as a key nothing writes.
 _SCRIPTS = frozenset({"eval", "evalsha", "eval_ro", "evalsha_ro", "fcall", "fcall_ro"})
+# A sweep over a keyspace. The key is the `match` pattern, never the first argument.
+_SCANNERS = frozenset({"scan", "scan_iter", "hscan", "hscan_iter", "sscan", "sscan_iter",
+                       "zscan", "zscan_iter", "keys"})
 _ALL = _READS | _WRITES | _SCRIPTS
 # Writes that REMOVE or merely touch, and so can never need an expiry.
 _NOT_STORES = frozenset({"delete", "del", "unlink", "expire", "pexpire", "publish",
@@ -963,6 +966,23 @@ def _scan_python(root: str) -> list[_Hit]:
                 if not isinstance(node.func, ast.Attribute):
                     continue
                 method = node.func.attr
+                # `scan(cursor, match="user:*:hourly_patterns")` - the key is not the
+                # first argument, it is the MATCH pattern, and sweeping a keyspace to
+                # read the keys in it is a read of that keyspace. The cursor sits where
+                # a key normally would, so nothing here looked like a key at all.
+                if method in _SCANNERS:
+                    for word in node.keywords:
+                        if word.arg not in ("match", "pattern"):
+                            continue
+                        found = _py_pattern(word.value, key_names,
+                                            owners.get(node.lineno, ""), node.lineno,
+                                            builders)
+                        if found and _looks_like_key(found):
+                            hits.append(_Hit(
+                                _normalise(found), found, rel, node.lineno, False, False,
+                                "", "scan", False, owners.get(node.lineno, ""),
+                            ))
+                    continue
                 if method not in _ALL or not node.args:
                     continue
                 receiver = _py_receiver(node.func)
@@ -1310,19 +1330,27 @@ def extract_redis(root: str) -> tuple[list[Symbol], list[Edge]]:
         # nor a write here, it is evidence that something this cannot read touches the
         # key. Counting it as a read reported the WebSocket connection counter - which
         # a script increments on every connect - as a lookup that can only ever miss.
-        scripted = [h for h in group if h.method == "eval"]
-        plain = [h for h in group if h.method != "eval"]
+        # A scan sweeps a keyspace; whether the next line reads the values or deletes
+        # them is not this line's business. Evidence that the keyspace is visited, like
+        # a Lua call - never a read, or every cleanup script invents one.
+        scripted = [h for h in group if h.method in ("eval", "scan")]
+        plain = [h for h in group if h.method not in ("eval", "scan")]
         writers = [h for h in plain if h.write]
         readers = [h for h in plain if not h.write]
         if not plain:
             symbols.append(Symbol(
                 id=f"redis_key:{key}", kind="redis_key", label=key,
-                sub=f"{len(scripted)} script", file=scripted[0].file,
+                sub=(f"{len(scripted)} scan" if scripted[0].method == "scan"
+                     else f"{len(scripted)} script"), file=scripted[0].file,
                 line=scripted[0].line, status=Status.UNCERTAIN, snippet=scripted[0].raw,
                 chain=[key], owner=scripted[0].owner,
-                note="Only ever passed to a Lua script (EVAL/EVALSHA). The script names "
-                     "this key and its commands are not in this source, so what it does "
-                     "with it cannot be read here.",
+                note=("Only ever swept by a `scan(match=…)`. That enumerates the "
+                      "keyspace; whether the caller then reads the values or deletes "
+                      "them is the next line's business, and not something this can see."
+                      if scripted[0].method == "scan" else
+                      "Only ever passed to a Lua script (EVAL/EVALSHA). The script names "
+                      "this key and its commands are not in this source, so what it does "
+                      "with it cannot be read here."),
             ))
             # ...and where. Skipping the per-site rows left these keys on the map with no
             # path to any line at all - the reader could see the key and not one place it
@@ -1400,8 +1428,10 @@ def extract_redis(root: str) -> tuple[list[Symbol], list[Edge]]:
             elsewhere.add(key)
         if scripted and status in (Status.UNRESOLVED, Status.UNUSED):
             status = Status.UNCERTAIN
-            note = ("Also passed to a Lua script (EVAL/EVALSHA), whose commands are not "
-                    "in this source. " + note.rstrip(".") +
+            note = (("Also swept by a `scan(match=…)`. "
+                     if any(h.method == "scan" for h in scripted) else
+                     "Also passed to a Lua script (EVAL/EVALSHA), whose commands are not "
+                     "in this source. ") + note.rstrip(".") +
                     " - unless the script is the other half, which is what a script "
                     "given this key usually is.")
 

@@ -19,6 +19,21 @@ backend that answered `uncertain` everywhere would score 100% precision and be u
 
 ## Unreleased
 
+### A sweep is not a read
+
+- **Added** — `scan(cursor, match="user:*:hourly_patterns")`. The key is not the first
+  argument, it is the **match pattern** — the cursor sits where a key normally would, so
+  nothing in the call looked like a key at all, and a live analytics sweep read as a
+  keyspace nobody visits.
+- **...and a scan is evidence, never a read.** Counting sweeps as reads immediately
+  invented eight *"read here and written nowhere"* claims, every one of them a cleanup
+  script, a GDPR wipe or a reset helper enumerating keys **to delete**. A scan says the
+  keyspace is visited; whether the next line reads the values or removes them is that
+  line's business. So it stops a key being called dead and never claims a read.
+
+Found by a reader checking all 117 claims on the reference project by hand.
+
+
 ### One row per id — 6,817 of the reference project's rows were duplicates
 
 An id is the map's node key, so a repeated id was never drawn twice. That is precisely why

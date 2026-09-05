@@ -1523,3 +1523,61 @@ class ClientFactoryChainTests(SimpleTestCase):
                 await writer.set(f"swr:user_stats:fresh:{user_id}", value, 30)
         """}))
         self.assertEqual(rows["swr:user_stats:fresh:*"][0], "connected")
+
+
+class ScanMatchTests(SimpleTestCase):
+    def test_a_scan_never_invents_a_read_of_a_keyspace_nothing_writes(self):
+        # Every cleanup, GDPR wipe and reset script sweeps for keys to DELETE. Counting
+        # those sweeps as reads produced eight "read here and written nowhere" claims
+        # about keyspaces whose only visitor was a wiper.
+        rows = _keys(_project({"app/gdpr.py": """
+            from app.redis import get_redis_client
+
+            def wipe():
+                r = get_redis_client()
+                for key in r.scan_iter(match="hof:gains:*"):
+                    r.delete(key)
+        """}))
+        self.assertNotEqual(rows.get("hof:gains:*", ("",))[0], "unresolved")
+
+    def test_a_scan_with_a_match_pattern_is_evidence_the_keyspace_is_touched(self):
+        # `main_r.scan(cursor, match='user:*:hourly_patterns', count=200)` - the key is
+        # not the first argument, it is the `match` pattern, and sweeping a keyspace to
+        # read every key in it is a read of that keyspace. Missing it called a live
+        # analytics read a key nobody looks at.
+        rows = _keys(_project({
+            "app/write.py": """
+                from app.redis import get_redis_client
+
+                def record(uid, data):
+                    get_redis_client().set(f"user:{uid}:hourly_patterns", data)
+            """,
+            "app/analytics.py": """
+                from app.redis import get_redis_client
+
+                def sweep():
+                    r = get_redis_client()
+                    cursor, keys = r.scan(0, match='user:*:hourly_patterns', count=200)
+                    return keys
+            """,
+        }))
+        # Not `connected`: a scan ENUMERATES a keyspace, and whether it then reads the
+        # values or deletes them is the next line's business, not this one's. What it
+        # must not do is let the key be called dead - which is what happened while the
+        # sweep was invisible.
+        self.assertEqual(rows["user:*:hourly_patterns"][0], "uncertain")
+        self.assertNotEqual(rows["user:*:hourly_patterns"][0], "unused")
+
+    def test_scan_iter_counts_too(self):
+        rows = _keys(_project({
+            "app/gdpr.py": """
+                from app.redis import get_redis_client
+
+                def wipe(uid):
+                    r = get_redis_client()
+                    r.set(f"user:{uid}:easter_eggs", 1)
+                    for key in r.scan_iter(match=f"user:{uid}:easter_eggs"):
+                        r.delete(key)
+            """,
+        }))
+        self.assertIn("user:*:easter_eggs", rows)
