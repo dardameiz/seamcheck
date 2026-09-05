@@ -231,7 +231,10 @@ def _py_pattern(node, known=None, owner: str = "", line: int = 0,
         # `achievements_version_key(user_id)` - a function that exists to return a key.
         name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", "")
         if builders and name in builders:
-            return builders[name]
+            made = builders[name]
+            # One key: that key. A pair: the caller unpacks it, and which name got which
+            # is decided at the assignment, not here.
+            return made[0] if len(made) == 1 else None
     return None
 
 
@@ -484,6 +487,19 @@ def _key_variables(tree: ast.AST, owners: dict[int, str], builders=None,
         # No `_looks_like_key` here: `schedule_id = f"django_{obj.id}"` is not a key -
         # no namespace, no colon - and it is what the key is built AROUND. Filtering it
         # out left the hole as `*`, and one keyspace was read under two spellings.
+        # `fresh, stale = swr_keys(name, uid)` - a builder returning a pair, unpacked.
+        if (len(targets) == 1 and isinstance(targets[0], ast.Tuple)
+                and isinstance(value, ast.Call)):
+            called = (value.func.id if isinstance(value.func, ast.Name)
+                      else getattr(value.func, "attr", ""))
+            made = (builders or {}).get(called) or []
+            if len(made) == len(targets[0].elts):
+                for name_node, one in zip(targets[0].elts, made, strict=True):
+                    if isinstance(name_node, ast.Name):
+                        found.setdefault(
+                            (owners.get(node.lineno, ""), name_node.id), []
+                        ).append((node.lineno, one))
+                continue
         pattern = _py_pattern(value, builders=builders)
         if not pattern:
             continue
@@ -507,6 +523,13 @@ def _key_named(key_names: dict, owner: str, name: str, line: int) -> str:
     return ""
 
 
+# Filled once every file is read: a function whose returns are all clients is itself a
+# factory, and `reader = _swr_reader(uid)` is then a client like any other.
+_CLIENT_FACTORIES: dict[str, str] = {}
+# "a client, connection unknown" - distinct from "" which means "not a client at all".
+_ANY_CLIENT = "\x00any"
+
+
 def _client_identity(node: ast.AST) -> str:
     """Which CONNECTION a factory call returns, or "" if it is not one.
 
@@ -522,6 +545,9 @@ def _client_identity(node: ast.AST) -> str:
         return ""
     func = node.func
     name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+    # A function that returns a client is a client factory, one hop out.
+    if name in _CLIENT_FACTORIES:
+        return _CLIENT_FACTORIES[name]
     lowered = name.lower()
     # The same test the receiver check uses, applied to the FACTORY instead of the
     # variable - so a client is one because of what made it, not what it is called.
@@ -620,7 +646,12 @@ def _client_names(tree: ast.AST) -> dict[str, str]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
             identity = _client_identity(node.value)
-            if identity:
+            if identity == _ANY_CLIENT:
+                identity = ""
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        found.setdefault(target.id, "")
+            elif identity:
                 for target in node.targets:
                     if isinstance(target, ast.Name):
                         # setdefault: `redis_client = RedisClient()` reads as a factory
@@ -702,7 +733,7 @@ def nx_of(node: ast.Call, method: str) -> bool:
     return method in ("setnx", "add", "aadd") or any(k.arg == "nx" for k in node.keywords)
 
 
-def _key_builders(tree: ast.AST) -> dict[str, str]:
+def _key_builders(tree: ast.AST) -> dict[str, list[str]]:
     """Functions whose whole job is to return a key: name -> the pattern they return.
 
     ```
@@ -723,9 +754,52 @@ def _key_builders(tree: ast.AST) -> dict[str, str]:
                    if isinstance(inner, ast.Return) and inner.value is not None]
         if len(returns) != 1:
             continue
-        pattern = _py_pattern(returns[0].value)
+        value = returns[0].value
+        if isinstance(value, (ast.Tuple, ast.List)):
+            # `return fresh_key, stale_key` - a serve-stale-while-revalidate cache keeps
+            # two copies, so its builder returns two. Following only a single return left
+            # the whole SWR keyspace unreadable, which is what every cached endpoint on
+            # the reference project moved ONTO.
+            pair = [_py_pattern(e) for e in value.elts]
+            good = [q for q in pair if q and _looks_like_key(q)]
+            if good and len(good) == len(pair):
+                found[node.name] = good
+            continue
+        pattern = _py_pattern(value)
         if pattern and _looks_like_key(pattern):
-            found[node.name] = pattern
+            found[node.name] = [pattern]
+    return found
+
+
+def _client_factories(tree: ast.AST) -> dict[str, str]:
+    """Functions that RETURN a client: name -> the connection they hand back.
+
+    `reader = _swr_reader(user_id)` - the variable is not client-shaped and neither is
+    the function, so every read through it was invisible while the writes, which went
+    through a pipeline off a recognisable client, were seen. That is the SWR cache
+    reading as write-only: the keyspace every cached endpoint on the reference project
+    moved ONTO.
+
+    One hop, and only when every return is a client. A function that sometimes returns a
+    client and sometimes a string is not a factory.
+    """
+    found: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        returns = [inner for inner in ast.walk(node)
+                   if isinstance(inner, ast.Return) and inner.value is not None]
+        if not returns:
+            continue
+        made = {_client_identity(r.value) for r in returns}
+        if "" in made:
+            continue
+        # Every branch returns a client. If they agree, that is the connection; if they
+        # do not - `_swr_reader` hands back the replica or the user's shard depending on
+        # config - it is a client whose connection is not known, and an unknown
+        # connection is not a second one. Requiring agreement left that read path
+        # invisible, which is the whole SWR cache.
+        found[node.name] = made.pop() if len(made) == 1 else _ANY_CLIENT
     return found
 
 
@@ -806,7 +880,9 @@ def _scan_python(root: str) -> list[_Hit]:
     # rather than re-parsed.
     trees: list[tuple[str, ast.AST, dict[int, str]]] = []
     signatures: dict[str, list[str]] = {}
-    builders: dict[str, str] = {}
+    builders: dict[str, list[str]] = {}
+    # Functions that return a client, so a wrapper around a factory is a factory.
+    factories: dict[str, str] = {}
     for here, subdirectories, names in os.walk(root):
         subdirectories[:] = [
             d for d in subdirectories if d not in _PY_SKIP and not d.startswith(".")
@@ -824,9 +900,12 @@ def _scan_python(root: str) -> list[_Hit]:
             trees.append((rel, tree, owners_of(tree)))
             signatures.update(_signatures(tree))
             builders.update(_key_builders(tree))
+            factories.update(_client_factories(tree))
 
     # A builder is a project-wide name, so nothing that depends on one can be resolved
     # until every file has been read.
+    _CLIENT_FACTORIES.clear()
+    _CLIENT_FACTORIES.update(factories)
     parsed = [(rel, tree, owners, _key_variables(tree, owners, builders))
               for rel, tree, owners in trees]
     key_lists = {rel: _key_lists(tree, owners, builders)

@@ -19,6 +19,29 @@ backend that answered `uncertain` everywhere would score 100% precision and be u
 
 ## Unreleased
 
+### The SWR cache, which read as write-only
+
+Every cached endpoint on the reference project has moved onto the `swr:*` keyspace, and
+the lens could see the writes and not the reads — so the keyspace the project's whole
+caching strategy now runs on looked like a cache nobody reads. Two reasons, both about
+one hop of indirection:
+
+- **Added** — **a key builder may return a PAIR.** A serve-stale-while-revalidate cache
+  keeps a fresh copy and a stale one, so `swr_keys()` returns two, and only a single
+  return was followed. `fresh, stale = swr_keys(name, uid)` binds each name to its own
+  key now.
+- **Added** — **a function that returns a client is a client factory.**
+  `reader = _swr_reader(user_id)` is not a client-shaped name and neither is the
+  function, so every read through it was invisible while the writes — through a pipeline
+  off a recognisable client — were seen. And when the branches disagree
+  (`_swr_reader` hands back the replica or the user's shard depending on config) it is
+  still a client, just one whose connection is not known: an unknown connection is not a
+  second one. Requiring the branches to agree left the read path invisible.
+
+`swr:*:fresh:*` and `swr:*:stale:*` are both connected now, three more keys moved off
+`uncertain`, and the reference project reads **504 keys · 322 connected · 3,306 uses**.
+
+
 ### Bulk invalidation, which is how half the deletes in a real project are written
 
 - **Added** — **a command handed a LIST of keys touches every one of them**: inline

@@ -1426,3 +1426,100 @@ class ListOfKeysTests(SimpleTestCase):
         """}))
         self.assertIn("push_arena:is_hourly_mode", rows)
         self.assertIn("push_arena:reset_timezone", rows)
+
+
+class TupleKeyBuilderTests(SimpleTestCase):
+    def test_a_builder_that_returns_a_pair_names_both_keys(self):
+        # ```
+        # def swr_keys(name, user_id):
+        #     return f"swr:{name}:fresh:{user_id}", f"swr:{name}:stale:{user_id}"
+        # ...
+        # fresh, stale = swr_keys(name, uid)
+        # ```
+        # A cache with a fresh copy and a stale copy is the whole point of
+        # serve-stale-while-revalidate, so its key builder returns two. Only a single
+        # return was followed, which left the entire SWR keyspace - the thing every
+        # cached endpoint on the reference project moved ONTO - unreadable.
+        rows = _keys(_project({
+            "app/swr.py": """
+                from django.core.cache import cache
+
+                def swr_keys(name, user_id):
+                    return f"swr:{name}:fresh:{user_id}", f"swr:{name}:stale:{user_id}"
+
+                def store(name, user_id, value):
+                    fresh, stale = swr_keys(name, user_id)
+                    cache.set(fresh, value, 30)
+                    cache.set(stale, value, 600)
+            """,
+            "app/read.py": """
+                from django.core.cache import cache
+
+                from .swr import swr_keys
+
+                def load(name, user_id):
+                    fresh, stale = swr_keys(name, user_id)
+                    return cache.get(fresh) or cache.get(stale)
+            """,
+        }))
+        self.assertEqual(rows["swr:*:fresh:*"][0], "connected")
+        self.assertEqual(rows["swr:*:stale:*"][0], "connected")
+
+
+class ClientFactoryChainTests(SimpleTestCase):
+    def test_a_function_that_returns_a_client_is_a_client_factory(self):
+        # `reader = _swr_reader(user_id)` - the name is not client-shaped, so every read
+        # through it was invisible while the writes (through a pipeline off a
+        # recognisable client) were seen. That is the SWR cache: the keyspace every
+        # cached endpoint on the reference project moved onto, reading as write-only.
+        rows = _keys(_project({"app/swr.py": """
+            from app.redis import get_async_redis_client
+
+            def _swr_reader(user_id):
+                return get_async_redis_client(db=6)
+
+            async def load(user_id):
+                reader = _swr_reader(user_id)
+                return await reader.get(f"swr:user_stats:fresh:{user_id}")
+
+            async def store(user_id, value):
+                writer = get_async_redis_client(db=6)
+                await writer.set(f"swr:user_stats:fresh:{user_id}", value, 30)
+        """}))
+        self.assertEqual(rows["swr:user_stats:fresh:*"][0], "connected")
+
+    def test_a_function_returning_something_else_is_not_a_client(self):
+        rows = _keys(_project({"app/x.py": """
+            from app.redis import get_redis_client
+
+            def label(uid):
+                return "player-" + str(uid)
+
+            def go(uid):
+                name = label(uid)
+                return name.get("cache:thing:one")
+        """}))
+        self.assertEqual(rows, {})
+
+    def test_a_factory_that_picks_between_two_clients_is_still_a_client(self):
+        # `_swr_reader` returns the replica or the user's shard depending on config.
+        # Both are clients, so reads through it are reads - the connection is simply not
+        # known, and an unknown connection is not a second one. Requiring the two
+        # branches to AGREE left the SWR read path invisible.
+        rows = _keys(_project({"app/swr.py": """
+            from app.redis import get_async_redis_replica, get_async_user_redis
+
+            def _swr_reader(user_id):
+                if READ_FROM_REPLICA:
+                    return get_async_redis_replica(db=6)
+                return get_async_user_redis(user_id, db=6)
+
+            async def load(user_id):
+                reader = _swr_reader(user_id)
+                return await reader.get(f"swr:user_stats:fresh:{user_id}")
+
+            async def store(user_id, value):
+                writer = get_async_user_redis(user_id, db=6)
+                await writer.set(f"swr:user_stats:fresh:{user_id}", value, 30)
+        """}))
+        self.assertEqual(rows["swr:user_stats:fresh:*"][0], "connected")
