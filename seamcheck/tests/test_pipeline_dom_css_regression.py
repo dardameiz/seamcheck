@@ -1,6 +1,7 @@
 """The DOM/CSS over-reporting gate: planted cases the wired pipeline must get right.
 
   shared-counter        written by two fixture modules       -> multi_writer_element
+  bound-counter         two functions in ONE module write it -> multi_writer_element
   purchase-btn          in the template, styled by CSS       -> no unresolved edge
   no-such-class-anywhere  a CSS rule nothing uses            -> UNUSED (both sides visible)
   --dead-token          declared, never consumed             -> UNUSED
@@ -38,10 +39,21 @@ class DomCssRegressionGateTests(SimpleTestCase):
             self.by_kind.setdefault(symbol.kind, []).append(symbol)
 
     def test_the_two_writer_element_is_flagged(self):
-        flagged = self.by_kind.get("multi_writer_element", [])
+        # Two findings, and they are deliberately different strengths. `shared-counter`
+        # is written from two FILES: whichever loads last wins, and that is UNRESOLVED.
+        # `bound-counter` is written from two functions in ONE file - once through a
+        # local, once through `this` - which used to be invisible because the gate asked
+        # for two distinct files, and is the exact shape of a display bug that comes back
+        # after being "fixed" in one of them. One module writing an element from a setup
+        # path and an update path is ordinary until a person looks, so it is a lead:
+        # UNCERTAIN, naming the two functions rather than two files.
+        flagged = {s.label: s for s in self.by_kind.get("multi_writer_element", [])}
 
-        self.assertEqual([s.label for s in flagged], ["shared-counter"])
-        self.assertGreaterEqual(len(flagged[0].chain), 2)
+        self.assertEqual(sorted(flagged), ["bound-counter", "shared-counter"])
+        self.assertEqual(flagged["shared-counter"].status, Status.UNRESOLVED)
+        self.assertEqual(flagged["bound-counter"].status, Status.UNCERTAIN)
+        for label, symbol in flagged.items():
+            self.assertGreaterEqual(len(symbol.chain), 2, label)
 
     def test_the_single_writer_element_is_not_flagged(self):
         flagged = {s.label for s in self.by_kind.get("multi_writer_element", [])}

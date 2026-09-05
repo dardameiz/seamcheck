@@ -153,13 +153,16 @@ class TouchTests(SimpleTestCase):
         self.assertNotIn('addEventListener("mousedown"', out)
         self.assertNotIn('addEventListener("mousemove"', out)
 
-    def test_a_node_carries_a_tap_target_larger_than_the_box_it_draws(self):
+    def test_a_node_carries_a_tap_target_a_thumb_can_hit(self):
         out = map_html.render(_map())
 
-        # The drawn box is 20px tall and the view opens scaled down; on a phone that is
-        # roughly 8px of target. The transparent rect fills the whole row pitch.
-        self.assertIn('height="30" fill="transparent"', out)
-        self.assertIn('pointer-events="all"', out)
+        # The drawn box used to be 150x20 with a transparent 160x30 rect over it for the
+        # 5px of slop that made it tappable at all. The card replaced both: 190x48 is
+        # more target than the rect ever added, and `pointer-events:bounding-box` hands
+        # the WHOLE card its taps - including an opened aggregate, which is drawn with a
+        # transparent fill and would otherwise have no way to be closed again.
+        self.assertIn("const CARD_W = 190, CARD_H = 48", out)
+        self.assertIn(".nd { pointer-events:bounding-box; }", out)
 
     def test_zoom_is_reachable_without_a_wheel_or_two_fingers(self):
         out = map_html.render(_map())
@@ -215,13 +218,20 @@ class CommitPickerTests(SimpleTestCase):
 class MobileLayoutTests(SimpleTestCase):
     """A phone spent 1250 of 1600 pixels on fixed chrome and 150 on the map."""
 
-    def test_the_two_filters_are_the_only_navigation(self):
+    def test_nothing_is_stacked_above_the_canvas(self):
         out = map_html.render(_map())
 
-        # Commit on the left, page on the right, side by side in one strip.
-        self.assertIn('<div class="filters">', out)
+        # It used to be commit and page side by side in one strip ABOVE the map, which
+        # was the cheapest version of the same mistake: a strip is still chrome, and on
+        # a phone it is chrome the map pays for. Nothing sits above the canvas now. The
+        # canvas is the first thing in <main>, the commit picker lives inside the one
+        # dropdown and the page picker floats on the glass beside it.
+        self.assertNotIn('<div class="filters"', out)
+        self.assertIn('<main class="main">\n<div class="cvclip">', out)
+        self.assertIn('<div class="hud tl">', out)
         self.assertIn('<select id="cm">', out)
-        self.assertIn('<select id="pg">', out)
+        self.assertIn('<div id="pgwrap" class="pagepicks">', out)
+        self.assertIn('<select id="pg" aria-label="Page">', out)
 
     def test_pages_are_a_select_not_a_scrolling_rail(self):
         out = map_html.render(_map())
@@ -345,7 +355,10 @@ class MergedReviewViewTests(SimpleTestCase):
     def test_the_review_sections_are_offered_beside_the_map(self):
         out = map_html.render(_map(), console=self._console())
 
-        self.assertIn('<select id="vw">', out)
+        # The nav in the dropdown is what a reader touches; #vw is the same list as a
+        # select, kept in the tree because switchTo() writes the current view to it.
+        self.assertIn('<div class="nav" id="nav">', out)
+        self.assertIn('<select id="vw" hidden>', out)
         self.assertIn("DOM Wiring", out)
 
     def test_row_text_is_escaped_before_it_reaches_innerHTML(self):
@@ -387,11 +400,15 @@ class MergedReviewViewTests(SimpleTestCase):
     def test_the_map_is_called_the_map(self):
         out = map_html.render(_map(), console=self._console())
 
-        # The menu is built from MENU + TITLES now: five places, each a different kind of
+        # The menu is built from MENU + TITLES now: each entry a different kind of
         # question. The five lens sections that used to sit beside "Map" were the map
         # filtered to a set of kinds - the same thing the Layer control does - so a reader
-        # on "Backend" could not tell why "Map" was also there.
-        self.assertIn('const MENU = ["overview", "map", "findings", "files", "changes"]', out)
+        # on "Backend" could not tell why "Map" was also there. "report" joined later and
+        # is the one entry that is not a way of looking at the scan but a way of sending
+        # it; VIEWS drops it when there is no share payload to send.
+        self.assertIn(
+            'const MENU = ["overview", "map", "findings", "files", "changes", "report"]',
+            out)
         self.assertIn('map: "Map"', out)
         self.assertNotIn("Map — what reaches what", out)
 
@@ -443,15 +460,20 @@ class MergedReviewViewTests(SimpleTestCase):
 
         self.assertIn("#aslist { font-weight:600; color:var(--sig); border-color:var(--sig);", out)
 
-    def test_a_desktop_gets_a_rail_and_a_phone_gets_the_select(self):
-        # Rebuilding for the phone deleted the rail entirely; both drive one switch, and
-        # both are built from one list so they cannot disagree.
+    def test_the_rail_and_the_select_are_built_from_one_list(self):
+        # There were two navigations, one per screen size, and rebuilding for the phone
+        # deleted the rail. There is one control at every width now - the rail, inside
+        # the dropdown - and #vw survives as the switch the script writes to. Both are
+        # still filled from VIEWS rather than from a second copy of the list, which is
+        # the half of the original promise that matters: a menu that can disagree with
+        # itself is a menu that goes stale on one screen and not the other.
         out = map_html.render(_map(), console=self._console())
 
         self.assertIn('<div class="nav" id="nav">', out)
+        self.assertIn('<select id="vw" hidden>', out)
         self.assertIn("const VIEWS = ", out)
-        self.assertIn('class="filters onlymob"', out)
-        self.assertIn(".onlymob { display:none; }", out)
+        self.assertIn("viewer.innerHTML = VIEWS.map(", out)
+        self.assertIn("rail.innerHTML = VIEWS.map(", out)
 
 
 class HiddenElementTests(SimpleTestCase):
@@ -478,7 +500,7 @@ class BigCanvasTests(SimpleTestCase):
         # One page holds 839 selectors: in a single file that column stood 25,000px tall.
         out = map_html.render(_map())
 
-        self.assertIn("function place(buckets, used, rows)", out)
+        self.assertIn("function place(buckets, used, perRow)", out)
         self.assertIn("ROW_CHOICES", out)
 
     def test_the_wrap_is_chosen_by_measuring_not_by_a_constant(self):
@@ -518,8 +540,11 @@ class BigCanvasTests(SimpleTestCase):
 
         # 0.34 was chosen for a desktop, where a 400-node page fits at a comfortable zoom.
         # A phone fits the same page at about 0.18, so it opened with no names on it at all.
-        self.assertIn('svg.classList.toggle("nolabels", view.k < 0.24)', out)
-        self.assertIn("svg.nolabels .nd text { display:none; }", out)
+        # The write is guarded because toggling a class on the <svg> - even to the value
+        # it already holds - is a style recalc over everything under it.
+        self.assertIn("const nolabels = view.k < 0.24;", out)
+        self.assertIn('svg.classList.toggle("nolabels", nolabels)', out)
+        self.assertIn("#cv.nolabels .nd text { display:none; }", out)
 
     def test_panning_moves_one_transform_instead_of_redrawing(self):
         # The whole reason a 1,450-node page was unusable: draw() rebuilt the markup on
@@ -580,10 +605,17 @@ class ReadabilityTests(SimpleTestCase):
 
     def test_the_legend_does_not_borrow_the_key_buttons_class(self):
         # Both were called .key, so the strip inherited the button's absolute position and
-        # rendered as a 40px square in the bottom corner.
+        # rendered as a 40px square in the bottom corner. The button that opens it is
+        # .key; the panel it opens is .legend, and the two names may never meet again.
+        import re
+
         out = map_html.render(_map())
 
-        self.assertIn('class="legendbar"', out)
+        self.assertIn('<button class="key" id="lg"', out)
+        legend = re.search(r'<div class="legend" id="legend" hidden>.*?</div>\n', out,
+                           re.S)
+        self.assertTrue(legend, "the legend is not drawn as its own element")
+        self.assertNotIn('class="key"', legend.group(0))
 
     def test_clicking_lights_the_line_through_a_node_not_its_whole_island(self):
         # Walking edges undirected reaches the page node, and from there everything:
@@ -649,9 +681,12 @@ class FileTreeViewTests(SimpleTestCase):
         self.assertIn("no declarations", map_html.render(_map(), files=self._files()))
 
     def test_choosing_a_file_draws_only_that_file(self):
+        # Through the lens rather than over the whole page: the Layer control and the
+        # file picker are two narrowings of the same canvas, and reading p.nodes here
+        # drew symbols the reader had just filtered out.
         out = map_html.render(_map(), files=self._files())
 
-        self.assertIn("if (fileFilter) return new Set(p.nodes.filter(n => n.file === fileFilter)", out)
+        self.assertIn("return new Set(lensed(p).filter(n => n.file === fileFilter)", out)
 
     def test_a_filtered_tree_opens_itself(self):
         # 52 folders collapsed by default meant a match sat inside a folder nobody opened.
@@ -660,20 +695,55 @@ class FileTreeViewTests(SimpleTestCase):
         self.assertIn('depth < 2 || needle ? " open" : ""', out)
 
 
-class PaletteTests(SimpleTestCase):
-    def test_both_themes_define_every_colour_they_use(self):
-        # A colour defined only inside the dark block renders as nothing in light, and
-        # the other way round - the classic unreadable-page bug.
-        out = map_html.render(_map())
-        tokens = ("--bg", "--panel", "--sunk", "--ink", "--muted", "--line", "--sig",
-                  "--ok", "--crit", "--warn", "--dim",
-                  "--ok-fill", "--crit-fill", "--warn-fill", "--dim-fill")
-        light = out[out.index(":root {"):out.index("@media (prefers-color-scheme: dark)")]
-        dark = out[out.index("@media (prefers-color-scheme: dark)"):out.index("* { box-sizing")]
+TOKENS = ("--bg", "--panel", "--sunk", "--ink", "--muted", "--line", "--line-2",
+          "--sig", "--sig-fill", "--sig-fill-hi", "--ok", "--crit", "--warn", "--dim",
+          "--ok-fill", "--crit-fill", "--warn-fill", "--dim-fill", "--grid", "--shadow")
 
-        for token in tokens:
-            self.assertIn(f"{token}:", light, f"{token} missing from the light palette")
-            self.assertIn(f"{token}:", dark, f"{token} missing from the dark palette")
+
+def _pack_blocks(out):
+    """Every `:root` rule that declares a pack, as {selector: declarations}.
+
+    Eight of them: five packs, and the three that also carry a dark world. Aurora rides
+    on the bare `:root` as the default, which is why the selector is matched rather than
+    the pack name.
+    """
+    import re
+
+    return dict(re.findall(r"(:root[^{]*data-pack[^{]*)\{([^}]*)\}", out))
+
+
+class PaletteTests(SimpleTestCase):
+    def test_every_pack_defines_every_colour_it_uses(self):
+        # Was: light and dark, split by a prefers-color-scheme block. It is five packs
+        # now, three of which carry a dark world as well - but the bug it guards is the
+        # same one and it got eight times as easy to make. A colour declared in one pack
+        # and not the next renders as nothing in the next, and a dark variant that
+        # restates the background without restating the ink is an unreadable page.
+        # Every block declares the whole palette; none of them inherits half of one.
+        out = map_html.render(_map())
+        blocks = _pack_blocks(out)
+
+        self.assertEqual(len(blocks), 8, f"expected five packs and three dark worlds, "
+                                         f"found {sorted(blocks)}")
+        for selector, block in blocks.items():
+            for token in TOKENS:
+                self.assertIn(f"{token}:", block,
+                              f"{token} missing from {selector.strip()}")
+
+    def test_every_pack_names_faces_the_machine_already_has(self):
+        # The packs used to name seven Google-hosted families, which meant the report
+        # asked a third party for type every time somebody opened it - and rendered as
+        # something else when they were offline. Each pack still declares its own three
+        # faces; every one of them is now a stack, and the document requests nothing
+        # (see test_it_loads_nothing_from_the_network).
+        out = map_html.render(_map())
+
+        for selector, block in _pack_blocks(out).items():
+            if "data-mode" in selector:
+                continue  # a dark world re-colours a pack; it does not re-face it
+            for face in ("--font", "--mono", "--display"):
+                self.assertIn(f"{face}:", block,
+                              f"{face} missing from {selector.strip()}")
 
     def test_no_colour_is_mixed_against_the_panel_at_runtime(self):
         # A nearly-black dark panel mixed to grey mush; each status carries its own fill
@@ -763,7 +833,7 @@ class PathNumberingTests(SimpleTestCase):
 
         self.assertIn('<span class="hn">${step}</span>', out)
         self.assertIn('<span class="hs">last</span>', out)
-        self.assertIn("Path — browser to backend · ${path.length} hop", out)
+        self.assertIn("Path — browser to backend · <b>${path.length}</b> hop", out)
 
 
 class ColophonTests(SimpleTestCase):
