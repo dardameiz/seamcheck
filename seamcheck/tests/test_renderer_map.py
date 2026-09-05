@@ -24,11 +24,23 @@ class MapRenderTests(SimpleTestCase):
         # no font, no image, no matter where it is opened or who is watching. Anchors are
         # excluded deliberately - a link the reader may click is not a request the page
         # makes - and the next test pins that they are the ONLY external references.
+        #
+        # `<link` covers the webfonts this page used to pull from Google: a report is
+        # opened against somebody's private codebase, and asking a third party for type
+        # tells them it was opened, from which network, and when. Every pack's faces are
+        # a stack of type the machine already has, so it also renders identically offline.
+        import re
+
         out = map_html.render(_map())
 
-        for forbidden in ("<link", "<img", "<iframe", "url(", "@import", "srcset",
+        for forbidden in ("<link", "<img", "<iframe", "@import", "srcset",
                           "XMLHttpRequest", "importScripts", "<script src"):
             self.assertNotIn(forbidden, out)
+        # `url(` was forbidden outright, and the promise it protects is that no url()
+        # names something off this page. `url(#ar-connected)` names a marker defined in
+        # this document's own <defs>: it is how SVG refers to an arrowhead at all, and it
+        # reaches no server. So the letter moves to "a fragment, or nothing".
+        self.assertEqual(re.findall(r"url\((?!#)", out), [])
 
     def test_the_only_request_it_can_make_is_same_origin_and_asked_for(self):
         """The code viewer reads a file from the server that served this page.
@@ -58,16 +70,32 @@ class MapRenderTests(SimpleTestCase):
                       "the viewer must fall back rather than request under file://")
 
     def test_every_external_url_is_an_anchor_and_opens_away_from_the_report(self):
+        # An external URL may only ever be somewhere a reader can CLICK - never a src, a
+        # stylesheet, a fetch. There are two shapes of that: written into an anchor here,
+        # or assigned to one from the script, which the pre-filled issue link has to be
+        # because its body is the report and the report is built at runtime. Both must
+        # leave the report rather than navigate it away.
         import re
 
         out = map_html.render(_map())
 
         for match in re.finditer(r"https?://", out):
             before = out[max(0, match.start() - 120):match.start()]
-            self.assertRegex(before, r'<a href="$', "an external URL that is not an anchor")
+            self.assertRegex(before, r'(<a href="|\.href = ")$',
+                             "an external URL that is not an anchor")
         for chunk in out.split('<a href="http')[1:]:
             self.assertIn('target="_blank"', chunk[:220])
             self.assertIn('rel="noreferrer"', chunk[:220])
+        # And the ones the script assigns: follow the variable back to the id it was
+        # looked up by, and read that element's own attributes.
+        for element in re.findall(r"(\w+)\.href = \"https?://", out):
+            lookup = re.search(rf'const {element} = document\.getElementById\("([^"]+)"\)',
+                               out)
+            self.assertTrue(lookup, f"{element} is handed an external URL from nowhere")
+            anchor = re.search(rf'<a [^>]*id="{lookup.group(1)}"[^>]*>', out)
+            self.assertTrue(anchor, f'nothing declares an anchor id="{lookup.group(1)}"')
+            self.assertIn('target="_blank"', anchor.group(0))
+            self.assertIn('rel="noreferrer', anchor.group(0))
 
     def test_the_script_escapes_labels_before_inserting_them(self):
         # 163 of this project's URL labels contain <path:object_id>; unescaped, the

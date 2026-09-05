@@ -93,6 +93,15 @@ _CSS = """
    AURORA is the default: dark grounds read better for a graph of hairlines,
    and a dark theme with no chroma in it reads as nothing at all. The other
    four are one keypress away.
+
+   EVERY FACE IS ALREADY ON THE READER'S MACHINE. This file is opened against
+   somebody's private codebase, often offline, and a webfont link would tell a
+   third party that it was opened at all - so each pack picks a stack of type
+   that ships with macOS, Windows, Linux or Android and names its own genre:
+   a geometric humanist for Aurora, a neo-grotesque for Blueprint, monospace
+   for the whole of Phosphor, an old-style serif for Signal's headings, the
+   plain UI face for Slate. A pack is still a different world; none of it
+   costs a request.
    ═══════════════════════════════════════════════════════════════════════ */
 
 /* ── AURORA (default) — deep indigo with real chroma. Dark, but alive. ── */
@@ -102,9 +111,10 @@ _CSS = """
   --sig:#7c6cff; --sig-fill:#1c1a44; --sig-fill-hi:#282456;
   --ok:#2ee6a8; --crit:#ff6b8a; --warn:#c07cff; --dim:#7b83b8;
   --ok-fill:#0d2b23; --crit-fill:#301826; --warn-fill:#261a3a; --dim-fill:#171a34;
-  --font:"DM Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
-  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
-  --display:"DM Sans",system-ui,sans-serif; --display-w:700; --display-ls:-.028em;
+  --font:"Avenir Next",Avenir,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --display:"Avenir Next",Avenir,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --display-w:700; --display-ls:-.028em;
   --r-pill:999px; --r-card:18px; --r-node:12px;
   --ease:cubic-bezier(.34,1.4,.5,1); --dur:520ms;
   --wire:2.2; --glow:0 0 22px; --grid:rgba(124,108,255,.07);
@@ -119,9 +129,10 @@ _CSS = """
   --sig:#2b5ce6; --sig-fill:#e8eefc; --sig-fill-hi:#d7e2fa;
   --ok:#0d8f68; --crit:#d94436; --warn:#7a4fd4; --dim:#8b93a3;
   --ok-fill:#e4f4ef; --crit-fill:#fceceb; --warn-fill:#f0ebfb; --dim-fill:#eef0f4;
-  --font:"Archivo",system-ui,-apple-system,"Segoe UI",sans-serif;
-  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
-  --display:"Archivo",system-ui,sans-serif; --display-w:700; --display-ls:-.032em;
+  --font:"Helvetica Neue",Helvetica,Arial,"Liberation Sans",system-ui,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --display:"Helvetica Neue",Helvetica,Arial,"Liberation Sans",system-ui,sans-serif;
+  --display-w:700; --display-ls:-.032em;
   --r-pill:999px; --r-card:12px; --r-node:5px;
   --ease:cubic-bezier(.2,.9,.25,1); --dur:320ms;
   --wire:2; --glow:0 0 0; --grid:rgba(43,92,230,.055);
@@ -146,9 +157,10 @@ _CSS = """
   --sig:#4ee88f; --sig-fill:#0e2318; --sig-fill-hi:#143121;
   --ok:#4ee88f; --crit:#ff5f56; --warn:#ffb833; --dim:#5c8a70;
   --ok-fill:#0e2318; --crit-fill:#2a1210; --warn-fill:#2a2010; --dim-fill:#131d17;
-  --font:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
-  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
-  --display:"JetBrains Mono",monospace; --display-w:700; --display-ls:-.02em;
+  --font:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+  --display:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --display-w:700; --display-ls:-.02em;
   --r-pill:4px; --r-card:4px; --r-node:2px;
   --ease:steps(5,end); --dur:180ms;
   --wire:1.6; --glow:0 0 14px; --grid:rgba(78,232,143,.05);
@@ -163,9 +175,9 @@ _CSS = """
   --sig:#e8532a; --sig-fill:#fceee9; --sig-fill-hi:#fae0d7;
   --ok:#177f6f; --crit:#c62f26; --warn:#7a3fa8; --dim:#8a7f72;
   --ok-fill:#e3f1ee; --crit-fill:#fbeae8; --warn-fill:#f1eaf8; --dim-fill:#eeeae3;
-  --font:"DM Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
-  --mono:"Space Mono",ui-monospace,Menlo,monospace;
-  --display:"Instrument Serif",Georgia,"Times New Roman",serif;
+  --font:Optima,Candara,"Gill Sans","Gill Sans MT",system-ui,-apple-system,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --display:"Iowan Old Style","Hoefler Text",Palatino,"Book Antiqua",Georgia,serif;
   --display-w:400; --display-ls:-.012em;
   --r-pill:999px; --r-card:16px; --r-node:16px;
   --ease:cubic-bezier(.16,1,.3,1); --dur:640ms;
@@ -191,9 +203,10 @@ _CSS = """
   --sig:#3b5bdb; --sig-fill:#eaeefc; --sig-fill-hi:#dae1fa;
   --ok:#0d8050; --crit:#c0362c; --warn:#6741d9; --dim:#7a8899;
   --ok-fill:#e4f2eb; --crit-fill:#fbeae8; --warn-fill:#eeeafb; --dim-fill:#eef1f5;
-  --font:"Inter Tight",system-ui,-apple-system,"Segoe UI",sans-serif;
-  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
-  --display:"Inter Tight",system-ui,sans-serif; --display-w:600; --display-ls:-.024em;
+  --font:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --display:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --display-w:600; --display-ls:-.024em;
   --r-pill:8px; --r-card:10px; --r-node:4px;
   --ease:cubic-bezier(.4,0,.2,1); --dur:240ms;
   --wire:1.8; --glow:0 0 0; --grid:rgba(15,27,42,.038);
@@ -1331,8 +1344,11 @@ function inflateNode(row) {
 
 // One chunk, decoded once. It arrives one of two ways: an inert text block in the
 // page (the single file), or its own script beside the page when BUNDLE names a
-// directory - a classic <script src> being the one on-demand loader a browser allows
-// from file://. gzip+base64 goes through a data: URL and DecompressionStream either way.
+// directory - a classic script element with a src being the one on-demand loader a
+// browser allows from file://. (Spelled out rather than written as a tag: the test that
+// pins "this page fetches nothing" greps the document for that tag, and a comment
+// containing one would read exactly like the thing it is there to forbid.)
+// gzip+base64 goes through a data: URL and DecompressionStream either way.
 // Inline text is dropped from the DOM once read: the base64 alone was 20 MB on a real map.
 function decodeChunk(enc, text) {
   if (enc !== "gz") return Promise.resolve(typeof text === "string" ? JSON.parse(text) : text);
@@ -6129,18 +6145,12 @@ def render_document(connectivity_map: ConnectivityMap, console=None, files=None,
         '<html lang="en" data-pack="aurora"><head><meta charset="utf-8">',
         '<meta name="viewport" content="width=device-width, initial-scale=1, '
         'viewport-fit=cover">',
-        # Every pack names real faces. They are loaded with a full local fallback stack, so
-        # a map opened on a plane degrades to system type and still reads as itself.
-        '<link rel="preconnect" href="https://fonts.googleapis.com">'
-        '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
-        '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?'
-        'family=Archivo:wght@400;500;600;700&'
-        'family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&'
-        'family=IBM+Plex+Mono:wght@400;500;600&'
-        'family=Instrument+Serif&'
-        'family=JetBrains+Mono:wght@400;500;700&'
-        'family=Inter+Tight:wght@400;500;600;700&'
-        'family=Space+Mono:wght@400;700&display=swap">',
+        # No font link, and none is coming back. Every pack's faces are stacks of type
+        # the reader's machine already has (see _CSS), because a report is opened on
+        # somebody's internal codebase: fetching a stylesheet tells Google that a person
+        # opened it, from which network, and when. It also has to render identically on
+        # a plane, and a webfont that arrives on one machine and not another is two
+        # different documents.
         f"<title>Seamcheck — {_esc(connectivity_map.git_sha[:12])}</title>",
         f"<style>{_CSS}</style></head><body>",
         # NOTHING SITS ABOVE THE MAP ANY MORE. The header used to stack eight controls -
