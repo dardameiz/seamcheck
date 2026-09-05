@@ -1059,3 +1059,47 @@ intervals are what the preprod environment runs, so on the environment where an 
 likely to add a store item, the "appears immediately" guarantee silently did not hold. Verified
 against the pre-fix tree at 60s, 120s, 300s and 1800s: the stale cache survived every time.
 Nothing errored and nothing logged, because deleting an absent key is a success.
+
+---
+
+## Answered · 0.11.0 · what the lens does now, ask by ask
+
+Written from the other side: this is the tool's reply to the list above, and every line of
+it is a test that fails without the change.
+
+| ask | state |
+|---|---|
+| 1 · split delete-only from write-only | **done** — `redis_invalidation` and `redis_key`, ranked apart |
+| 3 · erasure context is its own low-severity type | **done** — `redis_cleanup`, by the name of the function or the module it sits in |
+| 6 · state the limits beside the count | **done** — the caveat rides with the Redis groups, not only the footer |
+| 4 · read `.gitignore`, skip archived paths | **done** — simple entries only; a glob, a path or a negation is left alone |
+| 2 · collapse a defensive reset block into one finding | **not done** — the dedupe and the erasure kind took most of it (22 rows → 3); the general rule is still worth writing |
+| 5 · report SITES, not keys | **not done** — the honest unit of work, and a bigger change than it looks: it is the symbol model, not the Redis lens |
+
+And the five false-positive classes:
+
+- **F24** — an `INCR`/`HINCRBY`/`DECR` whose value is used, awaited, or unpacked from a
+  pipeline that is actually drained, is a read. A pipeline nobody drains stays a write.
+  Deliberately not `rpush`: its answer is a length, and a dead key that looks alive costs
+  more than the red it removes.
+- **F25** — all three shapes. The one that mattered was not indirection at all: **two
+  functions of one name**. `safe_get(r, key, default=None)` is the wrapper; a helper
+  nested in an export is also `safe_get(key, default=None)`, and keeping only the last
+  signature filed every key under `default`.
+- **F26** — a Lua local keeps its whole name now, and a Lua `SET … "NX"` is the same
+  guard as `set(key, v, nx=True)`: `if not redis.call(…)` is the read.
+- **F27** — a sweep is classified by **what consumes it**. `scan → hgetall` is a read of
+  every key it matches — and a `*` spans separators, so `analytics:seo:*` reaches
+  `analytics:seo:ref:{host}:{day}`. `scan → delete` is still a wipe and still vouches for
+  nothing. Two guards: two named segments, and the sweep must end in a read.
+- **F28** — already closed by the parameter hop: a key handed to a helper is a key that
+  helper touches, whichever argument it arrives in.
+
+**On the caution.** A delete-only key does have its own node in the graph JSON — kind
+`redis_invalidation`, status `unused`. What is true is that a consumer filtering
+`kind == "redis_key"` loses it silently, which is the same trap as any renamed field. The
+map, the report and the console all carry the new kinds; **anything automated should read
+`redis_key`, `redis_invalidation` and `redis_cleanup` as one family.**
+
+Reference project after all of it: **92 claims → 62**, no code deleted to get there, and
+the two claims that were provably wrong are connected.
