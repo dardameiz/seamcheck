@@ -141,6 +141,21 @@ _SPECIFIC: dict[str, tuple[str, str]] = {
         "Either the reader was deleted and the write outlived it, or the reader spells the "
         "key differently. Both are worth a look before deleting.",
     ),
+    "redis_invalidation|unused": (
+        "Every touch of this key is a DELETE, and nothing in the repo writes it.",
+        "So the delete clears nothing - and cannot say so: DEL on a missing key returns 0 "
+        "and raises nothing, which is why this outlives the cache it was busting. Either "
+        "the writer moved (the invalidation now has to follow it) or the writer is gone "
+        "(the line can go). Check which before deleting the line: on the reference "
+        "project four sites of one such key worked by accident because they ALSO called "
+        "the right helper, and the fifth did not.",
+    ),
+    "redis_cleanup|unused": (
+        "Deleted only by erasure or teardown code - a GDPR wipe, a logout, a test reset.",
+        "Finding nothing is the point of those, so this is true and unactionable: the key "
+        "is dead, the code is correct. Listed so a dead key is on the record, ranked "
+        "below the invalidations that were meant to clear something.",
+    ),
     "redis_ttl|unresolved": (
         "A key whose name says it is a cache, written with no expiry.",
         "Redis keeps it forever. Pass `ex=` (or use setex) - this is the leak nobody "

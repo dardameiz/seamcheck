@@ -99,6 +99,17 @@ _NOT_STORES = frozenset({"delete", "del", "unlink", "expire", "pexpire", "publis
 _INVALIDATIONS = frozenset({"delete", "del", "adelete", "delete_many", "adelete_many",
                             "unlink", "expire", "pexpire", "clear"})
 
+# Erasure and teardown: a delete whose whole purpose is to find nothing. A GDPR wipe walks
+# every key an account might hold, a logout clears a session that may already be gone, a
+# test harness resets a keyspace it did not fill. "Nothing writes this" is TRUE of all of
+# them and can never be acted on - the code is correct as written. Reported, because a dead
+# key is worth knowing; reported apart, because ranking it beside an invalidation that was
+# supposed to bust a hot cache is what buried the one finding that mattered.
+_CLEANUP_CONTEXT = re.compile(
+    r"erase|anonymi[sz]e|gdpr|forget|purge|wipe|cleanup|clean_up|teardown|tear_down|"
+    r"reset|logout|log_out|leave|disconnect|expire_|delete_account|deactivate",
+    re.I)
+
 # A receiver that says "this is Redis" rather than a dict. Without it, every `d.get(k)` in
 # a Python codebase becomes a Redis key and the finding list is noise.
 # `ar` is the async client throughout the reference project - and `ar` is not `redis`,
@@ -1562,6 +1573,21 @@ def _named_elsewhere(root: str, keys: set[str]) -> dict[str, str]:
     return found
 
 
+_CLEANUP_NOTE = (
+    "Only ever invalidated, and every one of those deletes is erasure or teardown - a "
+    "GDPR wipe, a logout, a harness reset. Finding nothing is what those are FOR, so this "
+    "is true and unactionable: the key is dead, the code is correct, and removing the "
+    "delete would only mean an old account could keep a key forever. Kept apart from the "
+    "invalidations that were supposed to clear something, which are the ones worth reading.")
+
+
+def _is_cleanup_context(hit: _Hit) -> bool:
+    """A delete inside an erasure or teardown path - by the name of the function it sits in,
+    or of the module, since a `gdpr_service.py` is that whole file's job."""
+    return bool(_CLEANUP_CONTEXT.search(hit.owner or "")
+                or _CLEANUP_CONTEXT.search(os.path.basename(hit.file or "")))
+
+
 def extract_redis(root: str) -> tuple[list[Symbol], list[Edge]]:
     hits = _scan_python(root) + _scan_js(root)
     if not hits:
@@ -1773,12 +1799,33 @@ def extract_redis(root: str) -> tuple[list[Symbol], list[Edge]]:
 
         if status in (Status.UNRESOLVED, Status.UNUSED):
             pending_claims.append(len(symbols))
+
+        # Deleting is not writing, and a row reading "6 write / 0 read" over a key that is
+        # only ever deleted describes the opposite of what the code does.
+        invalidation_only = bool(writers) and all(
+            h.method in _INVALIDATIONS for h in writers)
+
+        # A write with no reader and a DELETE with no writer are opposite findings sharing
+        # one red, and on the reference project they shared it 43 : 17 - with every fix
+        # that mattered coming from the 17. A write nobody reads is usually deliberate:
+        # telemetry and audit trails exist to be read by a human with redis-cli after an
+        # incident, and no scan will ever see that reader. A delete nobody writes is
+        # almost always a bug AND is invisible by construction - DEL on a missing key
+        # returns 0, raises nothing, logs nothing, and the surrounding code reads as
+        # working invalidation. That is how a stale-cache defect survived a full test
+        # suite: the suite compared the API against the DOM, and a stale cache makes both
+        # surfaces agree. Two views of one number can only prove they came from the same
+        # place. So they are two kinds, ranked apart, rather than one number to tune.
+        kind = "redis_key"
+        if invalidation_only and status is Status.UNUSED:
+            kind = ("redis_cleanup"
+                    if all(_is_cleanup_context(h) for h in writers)
+                    else "redis_invalidation")
+            note = (_CLEANUP_NOTE if kind == "redis_cleanup" else note)
         symbols.append(Symbol(
-            id=f"redis_key:{key}", kind="redis_key", label=key,
-            # Deleting is not writing, and a row reading "6 write / 0 read" over a key
-            # that is only ever deleted describes the opposite of what the code does.
+            id=f"redis_key:{key}", kind=kind, label=key,
             sub=(f"{len(writers)} invalidate / {len(readers)} read"
-                 if writers and all(h.method in _INVALIDATIONS for h in writers)
+                 if invalidation_only
                  else f"{len(writers)} write / {len(readers)} read"),
             file=where.file, line=where.line, status=status,
             snippet=where.raw, chain=sorted({h.file for h in group})[:4], note=note,

@@ -39,7 +39,8 @@ FRONTEND_KINDS = (
 STORE_KINDS = (
     "db_table", "db_column", "db_function", "db_policy",
     "db_table_use", "db_column_use", "db_function_use",
-    "redis_key", "redis_ttl", "firestore_rule", "firestore_collection",
+    "redis_key", "redis_invalidation", "redis_cleanup", "redis_ttl",
+    "firestore_rule", "firestore_collection",
     "cloud_function", "cloud_function_use",
     "storage_bucket", "edge_function", "edge_function_use",
 )

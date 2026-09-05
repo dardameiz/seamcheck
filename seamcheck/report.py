@@ -44,6 +44,10 @@ _GROUP_TITLES = {
     "firestore_collection": "Collections and the rules that cover them",
     "firestore_rule": "Rules guarding nothing",
     "redis_key": "Redis keys",
+    # A delete of a key nothing writes, kept apart from a write nobody reads: opposite
+    # findings, opposite default severity. See the note in redis_extractor.
+    "redis_invalidation": "Invalidations that clear nothing",
+    "redis_cleanup": "Erasure and teardown deletes (correct, and dead)",
     "redis_ttl": "Cache keys written with no expiry",
     # Background work, outside Celery. Named for the consequence, not the library.
     "job": "Background jobs",
@@ -58,6 +62,18 @@ _GROUP_TITLES = {
 # face value. Only kinds with a genuine, logged gap get one; do not use this to soften
 # a group that is simply large.
 _GROUP_CAVEATS = {
+    # Asked "is all the Redis clean now?", a count on its own cannot answer, and every
+    # caveat below is something the scan knows and used not to say next to the number.
+    "redis_key": (
+        "Code is not the keyspace: keys written by code that no longer exists still sit "
+        "in every running instance. Celery tasks, Redis subscribers, WebSocket handlers "
+        "and webhooks are entry points the scan does not follow, and Redis is exactly "
+        "where those reach - so a write-only key may be read by one of them."
+    ),
+    "redis_invalidation": (
+        "The half worth reading first: a delete of a key nothing writes clears nothing, "
+        "returns 0, and raises nothing, so it reads as working invalidation forever."
+    ),
     "css_selector": (
         "JavaScript that applies classes via className, classList.add, or setAttribute "
         "is not yet scanned, so many of these are false positives."

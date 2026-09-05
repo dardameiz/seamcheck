@@ -24,15 +24,26 @@ def _project(files: dict[str, str]) -> str:
     return str(root)
 
 
+# One key is one symbol, under whichever of the three names its evidence earns: a write
+# nobody reads stays `redis_key`, a delete nobody writes is `redis_invalidation`, and a
+# delete that is erasure or teardown is `redis_cleanup`.
+_KEY_KINDS = ("redis_key", "redis_invalidation", "redis_cleanup")
+
+
 def _keys(root: str) -> dict[str, tuple[str, str]]:
     symbols, _ = extract_redis(root)
-    return {s.label: (s.status.value, s.sub) for s in symbols if s.kind == "redis_key"}
+    return {s.label: (s.status.value, s.sub) for s in symbols if s.kind in _KEY_KINDS}
+
+
+def _kinds(root: str) -> dict[str, str]:
+    symbols, _ = extract_redis(root)
+    return {s.label: s.kind for s in symbols if s.kind in _KEY_KINDS}
 
 
 def _note(root: str, label: str) -> str:
     symbols, _ = extract_redis(root)
     return next((s.note or "" for s in symbols
-                 if s.kind == "redis_key" and s.label == label), "")
+                 if s.kind in _KEY_KINDS and s.label == label), "")
 
 
 class PipelineWritesTests(SimpleTestCase):
@@ -1926,3 +1937,89 @@ class ClientHandedToAParameterTests(SimpleTestCase):
             """,
         }))
         self.assertEqual(rows["analytics:req:total:*"][0], "connected")
+
+
+class FindingKindTests(SimpleTestCase):
+    """A write nobody reads and a delete nobody writes are opposite findings.
+
+    They shared one red for a long time, 43 : 17 on the reference project, and every fix
+    that mattered came from the 17. A write with no reader is usually deliberate - a
+    telemetry counter is read by a human with redis-cli after an incident, and no scan
+    will ever see that reader. A delete with no writer clears nothing and cannot say so.
+    """
+
+    def test_a_delete_with_no_writer_is_its_own_kind(self):
+        kinds = _kinds(_project({"views.py": """
+            import redis
+            r = redis.Redis()
+
+            def render_profile(uid):
+                r.delete(f'api:user_stats:{uid}')
+        """}))
+        self.assertEqual(kinds["api:user_stats:*"], "redis_invalidation")
+
+    def test_a_write_with_no_reader_keeps_the_plain_kind(self):
+        kinds = _kinds(_project({"views.py": """
+            import redis
+            r = redis.Redis()
+
+            def count_it():
+                r.incr('telemetry:daily_reset_fires:total')
+        """}))
+        self.assertEqual(kinds["telemetry:daily_reset_fires:total"], "redis_key")
+
+    def test_an_erasure_delete_is_ranked_apart(self):
+        # A GDPR wipe walks every key an account might hold. Finding nothing is what it is
+        # FOR, so "nothing writes this" is true and can never be acted on.
+        kinds = _kinds(_project({"gdpr_service.py": """
+            import redis
+            r = redis.Redis()
+
+            def anonymize_user_data(uid):
+                r.delete(f'user:{uid}:legacy_badges')
+        """}))
+        self.assertEqual(kinds["user:*:legacy_badges"], "redis_cleanup")
+
+    def test_a_teardown_named_function_counts_even_in_an_ordinary_file(self):
+        kinds = _kinds(_project({"views.py": """
+            import redis
+            r = redis.Redis()
+
+            def logout(uid):
+                r.delete(f'session:{uid}:cart')
+        """}))
+        self.assertEqual(kinds["session:*:cart"], "redis_cleanup")
+
+    def test_one_ordinary_delete_among_erasure_ones_keeps_the_whole_key_actionable(self):
+        # The erasure kind is for keys deleted ONLY by erasure. One live invalidation on a
+        # hot path is the finding, and it must not be filed under "correct by design".
+        kinds = _kinds(_project({
+            "gdpr_service.py": """
+                import redis
+                r = redis.Redis()
+
+                def anonymize_user_data(uid):
+                    r.delete(f'user:{uid}:stats_cache')
+            """,
+            "push_views.py": """
+                import redis
+                r = redis.Redis()
+
+                def rollover(uid):
+                    r.delete(f'user:{uid}:stats_cache')
+            """,
+        }))
+        self.assertEqual(kinds["user:*:stats_cache"], "redis_invalidation")
+
+    def test_a_connected_key_is_never_reclassified(self):
+        kinds = _kinds(_project({"views.py": """
+            import redis
+            r = redis.Redis()
+
+            def read_it(uid):
+                return r.get(f'user:{uid}:cart')
+
+            def logout(uid):
+                r.delete(f'user:{uid}:cart')
+        """}))
+        self.assertEqual(kinds["user:*:cart"], "redis_key")
