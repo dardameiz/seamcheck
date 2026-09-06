@@ -770,6 +770,9 @@ def _plain_args(arguments) -> dict:
         "reason": "", "why": "", "undo": False, "set_tunnel": None,
         "symbols": False, "search": "", "kind": "", "limit": 25, "cursor": "",
         "findings": False, "file": "", "owner": "",
+        # Same names, same meaning as the management command's --full/--yes: --full alone
+        # still refuses to print the whole graph, on this path too.
+        "full": False, "yes": False,
     }
     items = list(arguments)
     for index, item in enumerate(items):
@@ -836,6 +839,10 @@ def _plain_args(arguments) -> dict:
             options["local_only"] = True
         elif item == "--open":
             options["open"] = True
+        elif item == "--full":
+            options["full"] = True
+        elif item == "--yes":
+            options["yes"] = True
     return options
 
 

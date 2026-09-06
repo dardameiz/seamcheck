@@ -14,6 +14,7 @@ from __future__ import annotations
 import contextlib
 import difflib
 import os
+import subprocess
 
 from seamcheck import envelope, scancache
 
@@ -118,3 +119,54 @@ def findings(repo_root: str = ".", file: str = "", kind: str = "", status: str =
         {"findings": shown, "by_kind": by_kind, "by_status": by_status,
          "statuses": list(wanted)},
         repo=repo_root, truncated=cut, cost=cost, warnings=warnings)
+
+
+def _resolve(repo_root: str, ref: str) -> str:
+    """The sha a ref points at, or "" when git cannot say."""
+    try:
+        done = subprocess.run(["git", "-C", repo_root, "rev-parse", ref],
+                              capture_output=True, text=True, check=True)
+    except (OSError, subprocess.CalledProcessError):
+        return ""
+    return done.stdout.strip()
+
+
+def diff(repo_root: str = ".", since: str = "HEAD~1", limit: int = 25,
+         cursor: str = "") -> dict:
+    """What appeared, what vanished and what changed status since a ref.
+
+    "What did this commit break" is a question CI and an agent both ask, and until now the
+    only way to ask it was `check --since`, which folds the answer into a pass/fail gate -
+    there was no way to just SEE the list. This reuses the same before/after comparison but
+    returns it as data, unfiltered by triage, so a caller can ask the question on its own.
+    """
+    from seamcheck import snapshot
+
+    sha = _resolve(repo_root, since)
+    if not sha:
+        return envelope.failure("diff", "no_git", f"Could not resolve {since!r}.",
+                                hint="Pass a ref this repository has, e.g. --since origin/main.")
+    before = snapshot.load_snapshot(sha, repo_root)
+    if before is None:
+        return envelope.failure(
+            "diff", "no_baseline", f"No snapshot for {sha[:12]}.",
+            hint=f"Run `seamcheck scan` at {since} once, or `seamcheck backfill 20`.")
+    graph, cost = _scan(repo_root)
+    was = {s.id: s for s in before.symbols}
+    now = {s.id: s for s in graph.symbols}
+    appeared = [_row(now[i]) for i in now.keys() - was.keys()]
+    vanished = [_row(was[i]) for i in was.keys() - now.keys()]
+    changed = [dict(_row(now[i]), was=was[i].status.value)
+               for i in now.keys() & was.keys()
+               if now[i].status.value != was[i].status.value]
+    for rows in (appeared, vanished, changed):
+        rows.sort(key=lambda row: (row["kind"], row["id"]))
+    shown, cut = envelope.page(appeared + vanished + changed, limit, cursor)
+    ids = {row["id"] for row in shown}
+    return envelope.answer(
+        "diff",
+        {"baseline": sha, "since": since,
+         "appeared": [r for r in appeared if r["id"] in ids],
+         "vanished": [r for r in vanished if r["id"] in ids],
+         "changed": [r for r in changed if r["id"] in ids]},
+        repo=repo_root, truncated=cut, cost=cost)

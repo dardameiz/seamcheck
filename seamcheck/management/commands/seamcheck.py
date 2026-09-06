@@ -23,6 +23,13 @@ _DOCUMENTS = {
     "console": ("map_output", "docs/maps/connectivity-map.html"),
 }
 
+# `seamcheck json` on the reference project is 72.6 MB - about 18 million tokens. That is
+# the whole graph, unfiltered, and it is the command the code names as the agent interface:
+# an agent that runs it to answer one question has already lost before it reads a symbol.
+# `findings` and `symbols` answer the same questions in a few KB, so past this size the
+# gate below refuses to print and points there instead.
+_JSON_WARN = 2_000_000
+
 
 class Command(BaseCommand):
     help = "Scan the project's connectivity graph and report on it."
@@ -133,6 +140,16 @@ class Command(BaseCommand):
         parser.add_argument(
             "--no-progress", action="store_true",
             help="Never draw the progress bar (it is off already when output is redirected).",
+        )
+        parser.add_argument(
+            "--full", action="store_true",
+            help="With --json, print the whole graph even past the size warning. Needs "
+                 "--yes too - one flag alone still refuses.",
+        )
+        parser.add_argument(
+            "--yes", action="store_true",
+            help="Confirms --full. Two separate flags, not one, so printing 18 million "
+                 "tokens to an agent's context takes a deliberate second keystroke.",
         )
 
     def _progress(self, options, total: int) -> Progress:
@@ -499,6 +516,23 @@ class Command(BaseCommand):
             if graph is None:
                 graph = api.scan(repo_root, bar)
             text = json.dumps(graph_to_dict(graph), indent=2)
+            # Only guards the case that actually costs an agent its context: printing to
+            # stdout. `--out FILE` already writes to disk rather than a terminal, so it is
+            # left alone - it is the escape hatch this message points to, not a second
+            # thing to refuse.
+            if (len(text) > _JSON_WARN and options["out"] in (None, "-")
+                    and not (options["full"] and options["yes"])):
+                from seamcheck.exitcodes import EXIT_USAGE
+
+                bar.finish()
+                self.stderr.write(
+                    f"  The whole graph is {len(text) / 1e6:.1f} MB "
+                    f"(~{len(text) // 4:,} tokens). Refusing to print it.\n"
+                    "  `seamcheck findings` answers most questions in a few KB.\n"
+                    "  --full alone still refuses - it takes --full --yes together to "
+                    "print it anyway, so an agent needs a second, deliberate keystroke "
+                    "to do this. `--out FILE` writes it to disk instead.")
+                raise SystemExit(EXIT_USAGE)
         elif fmt in ("map", "console"):
             document = api.map_document(repo_root, ref=options["since"] or "HEAD",
                                         progress=bar)

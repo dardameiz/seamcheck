@@ -4,6 +4,7 @@
 the command the code names as the agent interface. These functions exist so that "what is
 this called", "what is wrong in this file" and "what changed" each cost a few hundred tokens.
 """
+import json
 import os
 from unittest import mock
 
@@ -151,3 +152,42 @@ class FindingsTests(SimpleTestCase):
         self.assertEqual([row["id"] for row in connected_out["data"]["findings"]],
                          ["view:submit_push"])
         self.assertEqual(connected_out["data"]["statuses"], ["connected"])
+
+
+class DiffTests(SimpleTestCase):
+    """"What did this commit break" is the question CI and an agent both ask, and there was
+    no command that answered it: only `check --since`, which mixes the answer into a gate."""
+
+    def test_it_names_what_appeared_and_what_went(self):
+        before = Graph(symbols=[_symbol("url", "api/old/", "app/urls.py")], edges=[])
+        after = Graph(symbols=[_symbol("url", "api/new/", "app/urls.py")], edges=[])
+        with mock.patch("seamcheck.scancache.cached_scan",
+                        return_value=(after, {"cached": True, "seconds": 0.0})), \
+             mock.patch("seamcheck.snapshot.load_snapshot", return_value=before), \
+             mock.patch("seamcheck.queries._resolve", return_value="abc123"):
+            out = queries.diff(".", since="main")
+
+        self.assertEqual([row["id"] for row in out["data"]["appeared"]], ["url:api/new/"])
+        self.assertEqual([row["id"] for row in out["data"]["vanished"]], ["url:api/old/"])
+        self.assertEqual(out["data"]["baseline"], "abc123")
+
+    def test_no_baseline_is_a_coded_failure_not_a_crash(self):
+        with mock.patch("seamcheck.scancache.cached_scan",
+                        return_value=(GRAPH, {"cached": True, "seconds": 0.0})), \
+             mock.patch("seamcheck.snapshot.load_snapshot", return_value=None), \
+             mock.patch("seamcheck.queries._resolve", return_value="abc123"):
+            out = queries.diff(".", since="main")
+
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["error"]["code"], "no_baseline")
+        self.assertIn("seamcheck scan", out["error"]["hint"])
+
+
+class DeterminismTests(SimpleTestCase):
+    def test_two_identical_runs_of_a_machine_command_agree(self):
+        with mock.patch("seamcheck.scancache.cached_scan",
+                        return_value=(GRAPH, {"cached": True, "seconds": 0.0})):
+            first = json.dumps(queries.findings("."))
+            second = json.dumps(queries.findings("."))
+
+        self.assertEqual(first, second, "a machine answer may not carry a clock")
