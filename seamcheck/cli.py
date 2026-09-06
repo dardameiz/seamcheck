@@ -538,6 +538,7 @@ def _run_without_django(arguments, verbose: bool) -> int:
     this path goes to the API directly and skips the management layer entirely.
     """
     from seamcheck import api
+    from seamcheck.exitcodes import EXIT_ENVIRONMENT
 
     root = str(pathlib.Path.cwd())
     if not _worth_scanning(root):
@@ -549,7 +550,10 @@ def _run_without_django(arguments, verbose: bool) -> int:
             "those, some JavaScript to read. Run it from the root of a project.",
             file=sys.stderr,
         )
-        return 2
+        # The machine is wrong for this tool, not the invocation - EXIT_NO_BASELINE (2)
+        # is a CI-gate answer about findings history, and this ran before any scan could
+        # even start. EXIT_ENVIRONMENT is the one nothing else was using for exactly this.
+        return EXIT_ENVIRONMENT
 
     options = _plain_args(arguments)
     if options["set_tunnel"]:
@@ -974,7 +978,12 @@ def main(argv: list[str] | None = None) -> int:
                 "project on purpose and cannot see its dependencies.",
                 file=sys.stderr,
             )
-            return 2
+            # A missing dependency is the machine being wrong, not a CI gate finding no
+            # baseline - EXIT_ENVIRONMENT is the constant that exists for exactly this and
+            # nothing was returning it.
+            from seamcheck.exitcodes import EXIT_ENVIRONMENT
+
+            return EXIT_ENVIRONMENT
         try:
             call_command("seamcheck", *arguments)
         except CommandError as error:

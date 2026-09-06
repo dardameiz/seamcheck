@@ -433,7 +433,7 @@ class Command(BaseCommand):
                 raise SystemExit(1)
             return
 
-        outcome = api.check(repo_root)
+        outcome = api.check(repo_root, graph=graph)
         if outcome["message"]:
             self.stdout.write(outcome["message"])
         for key in ("new_unresolved", "new_unused"):

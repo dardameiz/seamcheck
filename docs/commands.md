@@ -2,7 +2,8 @@
 
 ```bash
 seamcheck map        # scan, then open the canvas. Start here.
-seamcheck check      # the CI gate. Exit 1 on new findings, 2 with no baseline, 0 clean.
+seamcheck check      # the CI gate. Exit 1 on findings, 0 clean; --since REF adds exit 2
+                     # if REF has no stored snapshot to compare against.
 seamcheck report     # the findings digest, as text or markdown
 seamcheck explain    # why one symbol is classified the way it is
 seamcheck triage     # record "this one is fine, and here is why"

@@ -67,6 +67,24 @@ class DumpConnectivityMapTests(SimpleTestCase):
 
         self.assertEqual(raised.exception.code, 1)
 
+    def test_a_bare_check_scans_once(self):
+        # _check() built its own graph (for the --since branch and the summary) and then
+        # called api.check(repo_root) with no graph, which scanned a second time - about
+        # 168 seconds on the reference project for one command. Count calls rather than
+        # asserting "it still works", which would not catch a regression back to two scans.
+        calls = []
+        real_scan = api.scan
+
+        def counting_scan(*args, **kwargs):
+            calls.append(1)
+            return real_scan(*args, **kwargs)
+
+        with mock.patch("seamcheck.api.scan", side_effect=counting_scan), \
+             self.assertRaises(SystemExit):
+            call_command("seamcheck", "--check", stdout=StringIO(), stderr=StringIO())
+
+        self.assertEqual(len(calls), 1)
+
     def test_triage_without_status_is_rejected(self):
         with self.assertRaises(SystemExit):
             self._run("--triage", "view:whatever")

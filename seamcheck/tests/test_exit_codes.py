@@ -41,11 +41,17 @@ class NonDjangoGateTests(SimpleTestCase):
 
 
 class BaselineExitCodeTests(SimpleTestCase):
-    """Help, docs/commands.md and llms.txt all promise "2 if no baseline". Reproduced on the
-    reference project with no snapshot: exit 1. A CI job cannot tell a regression from a
-    first run, which is the whole reason that code was documented."""
+    """`check --since REF` promises "2 if no baseline" in docs/commands.md and llms.txt -
+    that ladder is real, but only for a run that asked to compare (see
+    GateCodeCombinationsTests). A bare `check`, which is all `cli._run_without_django`'s
+    `--check` path can ever be (it has no `--since` of its own), never asked that question:
+    `outcome["passed"]` already says whether the CURRENT scan has blocking findings,
+    baseline or not, so a bare check with no snapshot is judged by that, exactly like a
+    bare check with one."""
 
-    def test_no_baseline_exits_two_not_one(self):
+    def test_a_bare_check_with_no_baseline_is_still_judged_by_its_own_findings(self):
+        # Previously exited 2 here, which conflated "nothing to compare" with "no findings"
+        # - the gate reported the build clean-ish when `passed` said it plainly was not.
         outcome = {"passed": False,
                    "message": "No baseline snapshot stored for abc123 yet - nothing to diff against.",
                    "new_unresolved": [], "new_unused": [], "triage_invalidated": [],
@@ -55,7 +61,7 @@ class BaselineExitCodeTests(SimpleTestCase):
              mock.patch("seamcheck.cli._worth_scanning", return_value=True):
             code = cli._run_without_django(["--check"], verbose=False)
 
-        self.assertEqual(code, 2, "no baseline is not the same answer as a regression")
+        self.assertEqual(code, 1, "a bare check never returns 2 - it did not ask to compare")
 
     def test_real_api_message_uses_the_constant(self):
         """The NO_BASELINE prefix is load-bearing: gate_code reads it. If it drifts from
@@ -83,3 +89,71 @@ class BaselineExitCodeTests(SimpleTestCase):
             # The message must start with the constant
             self.assertTrue(message.startswith(exitcodes.NO_BASELINE),
                            f"Message '{message}' does not start with constant '{exitcodes.NO_BASELINE}'")
+
+
+class GateCodeCombinationsTests(SimpleTestCase):
+    """Direct coverage of `gate_code`'s six combinations - the CLI-level tests above only
+    ever exercise `comparing=False` (neither call site is a `--since` one), so the
+    `comparing=True` ladder had no test of its own until now.
+
+    `gate_code()` checked the no-baseline message before it ever looked at `passed`, so a
+    bare `check` on a repo with real findings and no snapshot reported "nothing to compare"
+    (2) instead of "this is broken" (1) - reproduced by
+    `test_check_exits_nonzero_when_a_finding_blocks` in test_cli.py, which failed until
+    `comparing` existed and the two current call sites stopped asking for it."""
+
+    _CLEAN = {"passed": True, "message": "clean"}
+    _FINDINGS = {"passed": False, "message": "2 new"}
+    _NO_BASELINE = {"passed": False,
+                    "message": "No baseline snapshot stored for abc123 yet - nothing to diff against."}
+
+    def test_not_comparing_clean(self):
+        self.assertEqual(exitcodes.gate_code(self._CLEAN), exitcodes.EXIT_CLEAN)
+
+    def test_not_comparing_findings(self):
+        self.assertEqual(exitcodes.gate_code(self._FINDINGS), exitcodes.EXIT_FINDINGS)
+
+    def test_not_comparing_no_baseline(self):
+        # comparing=False (the default): a bare check never asked "what changed", so a
+        # missing baseline is not its problem - `passed` alone decides.
+        self.assertEqual(exitcodes.gate_code(self._NO_BASELINE), exitcodes.EXIT_FINDINGS)
+
+    def test_comparing_clean(self):
+        self.assertEqual(exitcodes.gate_code(self._CLEAN, comparing=True), exitcodes.EXIT_CLEAN)
+
+    def test_comparing_findings(self):
+        self.assertEqual(exitcodes.gate_code(self._FINDINGS, comparing=True), exitcodes.EXIT_FINDINGS)
+
+    def test_comparing_no_baseline(self):
+        # comparing=True (a --since run): the documented ladder - 2 when there is nothing
+        # to diff against, because the question asked literally cannot be answered.
+        self.assertEqual(exitcodes.gate_code(self._NO_BASELINE, comparing=True),
+                          exitcodes.EXIT_NO_BASELINE)
+
+
+class EnvironmentExitCodeTests(SimpleTestCase):
+    """EXIT_NO_BASELINE (2) is a CI-gate answer about findings history. Two "the machine is
+    wrong, not the invocation" cases were returning it anyway, which meant a CI job could
+    not tell "your Postgres driver is missing" from "this is the first run" - they printed
+    different messages but exited identically. EXIT_ENVIRONMENT (4) existed for exactly
+    this and nothing used it."""
+
+    def test_nothing_to_scan_is_an_environment_problem_not_a_baseline_one(self):
+        with mock.patch("seamcheck.cli._worth_scanning", return_value=False):
+            code = cli._run_without_django([], verbose=False)
+
+        self.assertEqual(code, exitcodes.EXIT_ENVIRONMENT)
+
+    def test_a_missing_project_dependency_is_an_environment_problem_not_a_baseline_one(self):
+        # What happens when seamcheck is installed globally (pipx, uv tool, a system pip)
+        # rather than into the project's own virtualenv: the project imports something
+        # that resolves in ITS environment but not in seamcheck's.
+        with (
+            mock.patch("seamcheck.cli.find_project", return_value=None),
+            mock.patch.dict("os.environ", {"DJANGO_SETTINGS_MODULE": "x.settings"}),
+            mock.patch("django.setup",
+                       side_effect=ModuleNotFoundError("No module named 'psycopg2'", name="psycopg2")),
+        ):
+            code = cli.main(["check"])
+
+        self.assertEqual(code, exitcodes.EXIT_ENVIRONMENT)

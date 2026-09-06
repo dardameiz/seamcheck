@@ -41,8 +41,9 @@ half and says what it lost.
   real report and an invented one
 - `seamcheck help` — every command; `seamcheck help <command>` explains one, with examples
 - `seamcheck scan` — scan and summarise; also writes the snapshot the other commands diff against
-- `seamcheck check` — the CI gate. Exit 1 on new findings, 2 if the baseline is missing, 0 clean
-- `seamcheck check --since $BASE_SHA` — gate a pull request against its base commit
+- `seamcheck check` — the CI gate. Exit 1 on findings, 0 clean
+- `seamcheck check --since $BASE_SHA` — gate a pull request against its base commit. Exit 1 on
+  new findings since that commit, 2 if it has no stored snapshot to compare against, 0 clean
 - `seamcheck map` — the main one. Scans, writes one self-contained HTML file (the connectivity
   map plus the review views), then serves it and prints a loopback link and a LAN link for a
   phone. Blocks until Ctrl-C. `--no-serve` writes the file and exits, which is what CI and any
