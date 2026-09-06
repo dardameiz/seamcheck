@@ -125,6 +125,12 @@ class Command(BaseCommand):
         parser.add_argument("--limit", type=int, default=25, help="How many rows at most.")
         parser.add_argument("--cursor", default="", help="Continue a previous page.")
         parser.add_argument(
+            "--findings", action="store_true",
+            help="List findings; --file, --kind, --status and --owner narrow it.",
+        )
+        parser.add_argument("--file", default="", help="Only findings in this file.")
+        parser.add_argument("--owner", default="", help="Only findings owned by this function.")
+        parser.add_argument(
             "--no-progress", action="store_true",
             help="Never draw the progress bar (it is off already when output is redirected).",
         )
@@ -158,6 +164,14 @@ class Command(BaseCommand):
             out = queries.symbols(options["repo_root"], options["search"],
                                   options["kind"], options["limit"], options["cursor"])
             return self.stdout.write(json.dumps(out, indent=2))
+        if options.get("findings"):
+            from seamcheck import queries
+
+            out = queries.findings(options["repo_root"], options["file"], options["kind"],
+                                   options["status"] or "", options["owner"],
+                                   options["limit"], options["cursor"])
+            self.stdout.write(json.dumps(out, indent=2))
+            return None
         if options["show_config"]:
             return self._show_config(options["repo_root"])
         if options["triage"]:

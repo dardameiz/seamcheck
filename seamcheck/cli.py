@@ -332,6 +332,21 @@ COMMANDS: dict[str, Command] = {
             ("seamcheck symbols --search push --kind url", "...routes only"),
         ],
     ),
+    "findings": Command(
+        args=["--findings"],
+        summary="What is wrong, filtered and bounded. Start here.",
+        detail=(
+            "The whole graph is 72 MB on a 500k-line project and answers no question by "
+            "itself. This answers the one an agent actually has - what is wrong, and "
+            "where - narrowed by file, kind, status or owning function, and it says what "
+            "it left out so nothing looks complete when it is not."
+        ),
+        examples=[
+            ("seamcheck findings --file app/views.py", "what is wrong in the file I am editing"),
+            ("seamcheck findings --kind redis_key --limit 50", "one kind, fifty rows"),
+            ("seamcheck findings --cursor 50", "the next page"),
+        ],
+    ),
 }
 
 
@@ -579,6 +594,13 @@ def _run_without_django(arguments, verbose: bool) -> int:
         print(json.dumps(queries.symbols(root, options["search"], options["kind"],
                                          options["limit"], options["cursor"]), indent=2))
         return 0
+    if options["findings"]:
+        from seamcheck import queries
+
+        print(json.dumps(queries.findings(root, options["file"], options["kind"],
+                                          options["status"] or "", options["owner"],
+                                          options["limit"], options["cursor"]), indent=2))
+        return 0
     if options["show_config"]:
         return _show_config_plain(root)
     with quiet(not verbose):
@@ -744,6 +766,7 @@ def _plain_args(arguments) -> dict:
         "explain": None, "show_config": False, "triage": None, "status": None,
         "reason": "", "why": "", "undo": False, "set_tunnel": None,
         "symbols": False, "search": "", "kind": "", "limit": 25, "cursor": "",
+        "findings": False, "file": "", "owner": "",
     }
     items = list(arguments)
     for index, item in enumerate(items):
@@ -758,6 +781,12 @@ def _plain_args(arguments) -> dict:
             options["explain"] = following
         elif item == "--symbols":
             options["symbols"] = True
+        elif item == "--findings":
+            options["findings"] = True
+        elif item == "--file" and following:
+            options["file"] = following
+        elif item == "--owner" and following:
+            options["owner"] = following
         elif item == "--search" and following:
             options["search"] = following
         elif item == "--kind" and following:

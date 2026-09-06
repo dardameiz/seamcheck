@@ -46,3 +46,35 @@ def near(repo_root: str = ".", symbol_id: str = "", limit: int = 5) -> list[str]
     graph, _ = _scan(repo_root)
     return difflib.get_close_matches(symbol_id, [s.id for s in graph.symbols],
                                      n=limit, cutoff=0.5)
+
+
+# What counts as a finding. `uncertain` is deliberately not here: it is the tool saying it
+# could not tell, and reporting it as a finding is how a guess gets laundered into a fact.
+FINDING_STATUSES = ("unresolved", "unused")
+ALL_STATUSES = ("unresolved", "unused", "uncertain", "connected")
+
+
+def findings(repo_root: str = ".", file: str = "", kind: str = "", status: str = "",
+             owner: str = "", limit: int = 25, cursor: str = "") -> dict:
+    """What is wrong, narrowed by file, kind, status or owning function."""
+    if status and status not in ALL_STATUSES:
+        return envelope.failure(
+            "findings", "bad_argument", f"Unknown status {status!r}.",
+            hint="One of: " + ", ".join(ALL_STATUSES))
+    graph, cost = _scan(repo_root)
+    wanted = (status,) if status else FINDING_STATUSES
+    rows = [_row(s) for s in graph.symbols
+            if s.status.value in wanted
+            and (not file or s.file == file)
+            and (not kind or s.kind == kind)
+            and (not owner or (s.owner or "") == owner)]
+    rows.sort(key=lambda row: (row["status"], row["kind"], row["file"], row["line"] or 0))
+    by_kind: dict[str, int] = {}
+    by_status: dict[str, int] = {}
+    for row in rows:
+        by_kind[row["kind"]] = by_kind.get(row["kind"], 0) + 1
+        by_status[row["status"]] = by_status.get(row["status"], 0) + 1
+    shown, cut = envelope.page(rows, limit, cursor)
+    return envelope.answer("findings",
+                           {"findings": shown, "by_kind": by_kind, "by_status": by_status},
+                           repo=repo_root, truncated=cut, cost=cost)

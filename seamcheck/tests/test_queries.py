@@ -55,3 +55,37 @@ class SymbolsTests(SimpleTestCase):
     def test_near_suggests_ids_for_a_typo(self):
         # The 88.5-second "No symbol with id `urls.py`" is the thing this kills.
         self.assertIn("url:api/submit/", queries.near(".", "url:api/submit"))
+
+
+class FindingsTests(SimpleTestCase):
+    def setUp(self):
+        patch = mock.patch("seamcheck.scancache.cached_scan",
+                           return_value=(GRAPH, {"cached": True, "seconds": 0.0}))
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_only_findings_are_returned_not_the_graph(self):
+        out = queries.findings(".")
+
+        statuses = {row["status"] for row in out["data"]["findings"]}
+        self.assertEqual(statuses, {"unresolved", "unused"},
+                         "connected symbols are not findings")
+
+    def test_a_file_filter_answers_what_is_wrong_in_this_file(self):
+        out = queries.findings(".", file="app/cache.py")
+
+        self.assertEqual([row["id"] for row in out["data"]["findings"]],
+                         ["redis_key:user:*:pushes"])
+
+    def test_the_census_tells_an_agent_the_vocabulary(self):
+        out = queries.findings(".")
+
+        self.assertEqual(out["data"]["by_status"], {"unresolved": 1, "unused": 1})
+        self.assertIn("redis_key", out["data"]["by_kind"])
+
+    def test_a_status_outside_the_vocabulary_is_a_coded_failure(self):
+        out = queries.findings(".", status="wobbly")
+
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["error"]["code"], "bad_argument")
+        self.assertIn("unresolved", out["error"]["hint"])
