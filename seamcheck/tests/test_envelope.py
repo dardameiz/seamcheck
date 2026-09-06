@@ -90,6 +90,16 @@ class EnvelopeTests(SimpleTestCase):
         self.assertEqual(len(shown), 1, "limit=0 must be clamped up to 1, not return nothing")
         self.assertEqual(cut["cursor"], "1", "the cursor must advance past the offset it started from")
 
+    def test_too_large_carries_the_size_a_caller_needs_to_report(self):
+        # Raised by api.report(), never SystemExit - a library call the MCP server also
+        # makes, so a caller (a management command, the plain CLI door) needs the raw
+        # numbers back to build its own refusal message rather than a process exit.
+        error = envelope.TooLarge(72_800_000, 18_200_000)
+
+        self.assertEqual(error.size_bytes, 72_800_000)
+        self.assertEqual(error.tokens, 18_200_000)
+        self.assertIn("too_large", envelope.ERRORS, "the code a caller maps TooLarge to")
+
     def test_a_cursor_that_cannot_be_parsed_starts_from_the_beginning(self):
         # "²".isdigit() is True and int("²") raises, so the digit check alone was a crash.
         rows = [{"id": f"x{i}"} for i in range(5)]

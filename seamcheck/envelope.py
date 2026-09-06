@@ -24,7 +24,24 @@ ERRORS = {
     "missing_dependency": "The project imports something that is not installed here.",
     "no_git": "This is not a git repository, or the ref could not be resolved.",
     "too_large": "The answer is bigger than the limit; ask for less or pass --full --yes.",
+    "stale_snapshot": "The stored snapshot could not be read by this version of seamcheck.",
 }
+
+
+class TooLarge(Exception):
+    """Raised by a library call (`api.report`) instead of printing a refusal and exiting.
+
+    `api.report` is called by the MCP server as well as both CLI front doors, and a
+    server has no process to exit - raising here and letting each CALLER translate it into
+    its own idiom (a management command prints to stderr and exits `EXIT_USAGE`; the plain
+    CLI path does the same without Django; an MCP tool would map it to the `too_large` code
+    above) is what "guard it once" means. Never raise `SystemExit` from inside `api.py`.
+    """
+
+    def __init__(self, size_bytes: int, tokens: int):
+        super().__init__(f"{size_bytes:,} bytes (~{tokens:,} tokens), over the size gate.")
+        self.size_bytes = size_bytes
+        self.tokens = tokens
 
 
 def answer(command: str, data, *, repo: str = "", sha: str = "",

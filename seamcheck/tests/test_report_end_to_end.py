@@ -1,10 +1,12 @@
 import subprocess
 import tempfile
 from pathlib import Path
+from unittest import mock
 
 from django.test import SimpleTestCase, override_settings
 
 from seamcheck import api
+from seamcheck.envelope import TooLarge
 from seamcheck.graph import Graph, Status, Symbol
 from seamcheck.mcp_server import seamcheck_report
 from seamcheck.snapshot import save_snapshot
@@ -56,6 +58,27 @@ class EndToEndReportTests(SimpleTestCase):
         # Same discriminating marker as the terminal case above: proves the "fmt"
         # argument the wrapper takes actually reaches api.report, not just repo_root.
         self.assertTrue(seamcheck_report(fmt="terminal", repo_root=".").startswith("Seamcheck —"))
+
+
+@override_settings(SEAMCHECK_CONFIG=_CONFIG)
+class JsonSizeGateTests(SimpleTestCase):
+    """api.report() is the one implementation the management command, the plain CLI door
+    and the MCP server all call for fmt="json" - so the size gate lives here, once, rather
+    than duplicated per caller. It raises TooLarge instead of exiting the process: this is
+    a library function the MCP server calls too, and a server has no process to exit."""
+
+    def test_past_the_size_gate_it_raises_with_the_size_on_it(self):
+        with mock.patch("seamcheck.api.JSON_WARN", 1), self.assertRaises(TooLarge) as raised:
+            api.report(".", "json")
+
+        self.assertGreater(raised.exception.size_bytes, 1)
+        self.assertGreater(raised.exception.tokens, 0)
+
+    def test_full_true_is_the_only_way_past_the_gate(self):
+        with mock.patch("seamcheck.api.JSON_WARN", 1):
+            text = api.report(".", "json", full=True)
+
+        self.assertIn('"symbols"', text)
 
 
 def _git(repo_root, *args):

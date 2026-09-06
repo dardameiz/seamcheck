@@ -182,6 +182,44 @@ class DiffTests(SimpleTestCase):
         self.assertEqual(out["error"]["code"], "no_baseline")
         self.assertIn("seamcheck scan", out["error"]["hint"])
 
+    def test_a_snapshot_this_version_cannot_read_is_a_coded_failure_not_a_crash(self):
+        # A snapshot written by an older or foreign version of the tool: graph_from_dict
+        # raises TypeError on a renamed/missing field rather than returning None, and that
+        # must not reach the caller as a bare stack trace.
+        with mock.patch("seamcheck.scancache.cached_scan",
+                        return_value=(GRAPH, {"cached": True, "seconds": 0.0})), \
+             mock.patch("seamcheck.snapshot.load_snapshot",
+                        side_effect=TypeError("missing 1 required positional argument")), \
+             mock.patch("seamcheck.queries._resolve", return_value="abc123"):
+            out = queries.diff(".", since="main")
+
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["error"]["code"], "stale_snapshot")
+        self.assertIn("seamcheck scan", out["error"]["hint"])
+
+    def test_counts_are_whole_even_when_a_category_is_empty_on_the_current_page(self):
+        # Three appeared + two vanished, paged at limit=2: the page's own "vanished" list
+        # is empty (the first 2 rows are all "appeared"), but the caller must still be
+        # able to tell that from "nothing vanished at all" - that is what counts is for.
+        before = Graph(symbols=[
+            _symbol("url", "api/old1/", "app/urls.py"),
+            _symbol("url", "api/old2/", "app/urls.py"),
+        ], edges=[])
+        after = Graph(symbols=[
+            _symbol("url", "api/new1/", "app/urls.py"),
+            _symbol("url", "api/new2/", "app/urls.py"),
+            _symbol("url", "api/new3/", "app/urls.py"),
+        ], edges=[])
+        with mock.patch("seamcheck.scancache.cached_scan",
+                        return_value=(after, {"cached": True, "seconds": 0.0})), \
+             mock.patch("seamcheck.snapshot.load_snapshot", return_value=before), \
+             mock.patch("seamcheck.queries._resolve", return_value="abc123"):
+            out = queries.diff(".", since="main", limit=2)
+
+        self.assertEqual(out["data"]["counts"], {"appeared": 3, "vanished": 2, "changed": 0})
+        self.assertEqual(out["data"]["vanished"], [],
+                         "nothing vanished on THIS page - counts says 2 total, not 0")
+
 
 class DeterminismTests(SimpleTestCase):
     def test_two_identical_runs_of_a_machine_command_agree(self):

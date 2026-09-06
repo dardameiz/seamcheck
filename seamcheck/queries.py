@@ -137,8 +137,9 @@ def diff(repo_root: str = ".", since: str = "HEAD~1", limit: int = 25,
 
     "What did this commit break" is a question CI and an agent both ask, and until now the
     only way to ask it was `check --since`, which folds the answer into a pass/fail gate -
-    there was no way to just SEE the list. This reuses the same before/after comparison but
-    returns it as data, unfiltered by triage, so a caller can ask the question on its own.
+    there was no way to just SEE the list. A separate comparison from the one `check`
+    uses, not a shared implementation: this is unfiltered by triage, so a caller diffing
+    two arbitrary points sees the raw graph difference rather than a CI-gate's opinion.
     """
     from seamcheck import snapshot
 
@@ -146,7 +147,18 @@ def diff(repo_root: str = ".", since: str = "HEAD~1", limit: int = 25,
     if not sha:
         return envelope.failure("diff", "no_git", f"Could not resolve {since!r}.",
                                 hint="Pass a ref this repository has, e.g. --since origin/main.")
-    before = snapshot.load_snapshot(sha, repo_root)
+    try:
+        before = snapshot.load_snapshot(sha, repo_root)
+    except (TypeError, KeyError, ValueError) as error:
+        # A snapshot written by an older or foreign version of the tool can fail to parse
+        # back into a Graph - a schema field renamed, a status value that no longer exists.
+        # graph_from_dict raising straight out of a read-only query is exactly the crash
+        # the envelope exists to prevent, so it is caught here and turned into a code.
+        return envelope.failure(
+            "diff", "stale_snapshot",
+            f"The stored snapshot for {sha[:12]} could not be read by this version of "
+            f"seamcheck ({error}).",
+            hint=f"Run `seamcheck scan` at {since} to write a fresh one.")
     if before is None:
         return envelope.failure(
             "diff", "no_baseline", f"No snapshot for {sha[:12]}.",
@@ -161,11 +173,16 @@ def diff(repo_root: str = ".", since: str = "HEAD~1", limit: int = 25,
                if now[i].status.value != was[i].status.value]
     for rows in (appeared, vanished, changed):
         rows.sort(key=lambda row: (row["kind"], row["id"]))
+    # Computed over the whole (unpaged) lists: the three categories are paged together as
+    # one concatenated list below, so a page can show "vanished": [] while more vanished
+    # rows sit on a later page - counts are the only way to tell "nothing vanished" from
+    # "not on this page yet".
+    counts = {"appeared": len(appeared), "vanished": len(vanished), "changed": len(changed)}
     shown, cut = envelope.page(appeared + vanished + changed, limit, cursor)
     ids = {row["id"] for row in shown}
     return envelope.answer(
         "diff",
-        {"baseline": sha, "since": since,
+        {"baseline": sha, "since": since, "counts": counts,
          "appeared": [r for r in appeared if r["id"] in ids],
          "vanished": [r for r in vanished if r["id"] in ids],
          "changed": [r for r in changed if r["id"] in ids]},

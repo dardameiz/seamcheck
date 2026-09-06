@@ -437,22 +437,36 @@ def check(repo_root: str = ".", graph: Graph | None = None) -> dict:
     }
 
 
+# `seamcheck json` on the reference project is 72.6 MB - about 18 million tokens - and it
+# is the format the code names as the agent interface, so an agent that reads it to answer
+# one question has already lost before it reaches a symbol. `queries.findings`/`symbols`
+# answer the same questions in a few KB; past this many characters of rendered JSON, this
+# is the one place (every caller of `report()` passes through it: the management command,
+# the plain CLI, the MCP server) that refuses instead of dumping it.
+JSON_WARN = 2_000_000
+
+
 def report(
     repo_root: str = ".", fmt: str = "terminal", ref: str = "HEAD", graph: Graph | None = None,
-    progress: Progress | None = None,
+    progress: Progress | None = None, full: bool = False,
 ) -> str:
-    """Render the report. One model, chosen serializer - ordering lives in report.py."""
+    """Render the report. One model, chosen serializer - ordering lives in report.py.
+
+    `full=True` is the only way past the JSON_WARN size gate below - raises `TooLarge`
+    (see `seamcheck.envelope`) rather than exiting the process, because this is a library
+    function the MCP server calls too, and a server has no process to exit.
+    """
     from seamcheck.extractors.js_extractor import clear_parse_cache
 
     try:
-        return _report(repo_root, fmt, ref, graph, progress)
+        return _report(repo_root, fmt, ref, graph, progress, full)
     finally:
         # The parsed ASTs served every extractor and the map's page attribution; a
         # long-lived process (the MCP server) should not keep a repository's worth.
         clear_parse_cache()
 
 
-def _report(repo_root, fmt, ref, graph, progress) -> str:
+def _report(repo_root, fmt, ref, graph, progress, full=False) -> str:
     from seamcheck.renderers import html as html_renderer
     from seamcheck.renderers import markdown as markdown_renderer
     from seamcheck.renderers import terminal as terminal_renderer
@@ -480,9 +494,13 @@ def _report(repo_root, fmt, ref, graph, progress) -> str:
         # terminal report instead - and the agent-facing format was the one that broke.
         import json as _json
 
+        from seamcheck.envelope import TooLarge
         from seamcheck.graph import graph_to_dict
 
-        return _json.dumps(graph_to_dict(graph), indent=2)
+        text = _json.dumps(graph_to_dict(graph), indent=2)
+        if len(text) > JSON_WARN and not full:
+            raise TooLarge(len(text), len(text) // 4)
+        return text
     diff, baseline_sha, message = diff_against(graph, ref, repo_root)
     try:
         sha = current_git_sha(repo_root)

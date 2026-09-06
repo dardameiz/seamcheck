@@ -626,7 +626,30 @@ def _run_without_django(arguments, verbose: bool) -> int:
         if options["fmt"] in ("map", "console"):
             document = api.map_document(repo_root=root)
         else:
-            rendered = api.report(repo_root=root, fmt=options["fmt"])
+            from seamcheck.envelope import TooLarge
+
+            # `--out FILE` writes to disk rather than a terminal, so it is exempt from the
+            # size gate `api.report` raises `TooLarge` for - the same escape hatch the
+            # Django door's `--out` is, and the one the refusal below points to.
+            going_to_disk = bool(options["out"])
+            try:
+                rendered = api.report(
+                    repo_root=root, fmt=options["fmt"],
+                    full=going_to_disk or (options["full"] and options["yes"]),
+                )
+            except TooLarge as error:
+                from seamcheck.exitcodes import EXIT_USAGE
+
+                print(
+                    f"  The whole graph is {error.size_bytes / 1e6:.1f} MB "
+                    f"(~{error.tokens:,} tokens). Refusing to print it.\n"
+                    "  `seamcheck findings` answers most questions in a few KB.\n"
+                    "  --full alone still refuses - it takes --full --yes together to "
+                    "print it anyway, so an agent needs a second, deliberate keystroke "
+                    "to do this. `--out FILE` writes it to disk instead.",
+                    file=sys.stderr,
+                )
+                return EXIT_USAGE
 
     if options["fmt"] in ("map", "console"):
         return _map_plain(document, root, options)

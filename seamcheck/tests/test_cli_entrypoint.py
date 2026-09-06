@@ -339,6 +339,39 @@ class UndoFlagTests(SimpleTestCase):
             scan.assert_not_called()
 
 
+class PlainJsonSizeGateTests(SimpleTestCase):
+    """`api.report()`'s size gate has three callers: the Django management command, this
+    plain (non-Django) door, and the MCP server. Only the first one used to see TooLarge -
+    on an Express or Flask repo `seamcheck json` still dumped everything, and --full/--yes
+    were parsed here but never read, so they looked like coverage and did nothing."""
+
+    def test_the_plain_door_refuses_without_both_flags_and_prints_nothing_to_stdout(self):
+        import os
+
+        from seamcheck.cli import _run_without_django
+        from seamcheck.envelope import TooLarge
+        from seamcheck.exitcodes import EXIT_USAGE
+
+        with tempfile.TemporaryDirectory() as tmp:
+            pathlib.Path(tmp, "package.json").write_text("{}")
+            cwd = os.getcwd()
+            os.chdir(tmp)
+            try:
+                with (mock.patch("seamcheck.cli._worth_scanning", return_value=True),
+                      mock.patch("seamcheck.api.report",
+                                 side_effect=TooLarge(72_800_000, 18_200_000)),
+                      redirect_stdout(io.StringIO()) as out,
+                      redirect_stderr(io.StringIO()) as err):
+                    code = _run_without_django(["--json"], verbose=False)
+            finally:
+                os.chdir(cwd)
+
+        self.assertEqual(code, EXIT_USAGE)
+        self.assertEqual(out.getvalue(), "", "nothing may reach stdout when the gate refuses")
+        self.assertIn("Refusing to print it", err.getvalue())
+        self.assertIn("--full --yes", err.getvalue())
+
+
 class TunnelSettingArgumentTests(SimpleTestCase):
     """`seamcheck config --tunnel always` is the sentence a person types.
 
