@@ -2594,3 +2594,91 @@ class FunctionListEscapesTheSheetTests(SimpleTestCase):
         self.assertLessEqual(measured["right"], measured["wide"] + 1,
                              f"nor off the right edge: {measured}")
         self.assertGreaterEqual(measured["left"], 0, measured)
+
+
+class NoPullToRefreshTests(SimpleTestCase):
+    """Reported from a phone: "when I move down on the map with one finger it's possible,
+    however when I want to move upward it wants to update the full page."
+
+    That is the browser's pull-to-refresh taking the drag. It only fires in one direction,
+    which is why panning one way worked and the other reloaded the report - and a reload
+    of this page is not cheap: the reader loses the page they were on, the filter they set
+    and the card they had open.
+
+    The page did say `overscroll-behavior:none` - on BODY. Per the CSS Overscroll Behavior
+    spec that value is NOT propagated to the viewport: only the ROOT element's is. `overflow`
+    propagates from body, `overscroll-behavior` does not, and the two rules read alike. So
+    the declaration did nothing on the one platform that has the gesture.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        try:
+            from playwright.sync_api import sync_playwright  # noqa: F401
+        except ImportError:
+            raise unittest.SkipTest("playwright is not installed (the observe extra)") from None
+
+    def _computed(self):
+        from playwright.sync_api import sync_playwright
+
+        from seamcheck.graph import Graph
+        from seamcheck.mapdata import ConnectivityMap, MapEdge, MapNode, PageMap
+        from seamcheck.renderers.map_html import render_document
+
+        nodes = [MapNode("page:home", "home", "page", "connected"),
+                 MapNode("url:api/x/", "api/x/", "url", "connected", file="urls.py", line=1)]
+        document = render_document(
+            ConnectivityMap(git_sha="0" * 12, generated_at="2026-09-06T00:00:00",
+                            pages=[PageMap("home", nodes,
+                                           [MapEdge("page:home", "url:api/x/", "connected")])]),
+            console=_console_for(Graph(symbols=[], edges=[])))
+        path = pathlib.Path(tempfile.mkdtemp()) / "map.html"
+        path.write_text(document.single_file(), encoding="utf-8")
+
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch()
+            except Exception as error:  # pragma: no cover - no browser downloaded
+                raise unittest.SkipTest(f"no chromium: {error}") from None
+            page = browser.new_page(viewport={"width": 390, "height": 844})
+            page.goto(path.as_uri(), wait_until="load")
+            _open_lens(page, "map")
+            page.wait_for_selector("#cv .nd", state="attached")
+            measured = page.evaluate("""() => {
+                const root = getComputedStyle(document.documentElement);
+                const clip = document.querySelector('.cvclip');
+                const sheet = document.getElementById('filtersheet');
+                return {
+                  rootOverscrollY: root.overscrollBehaviorY,
+                  clipTouch: getComputedStyle(clip).touchAction,
+                  layerTouch: getComputedStyle(document.getElementById('cvlayer')).touchAction,
+                  sheetTouch: sheet ? getComputedStyle(sheet).touchAction : null,
+                };
+            }""")
+            browser.close()
+        return measured
+
+    def test_the_root_element_refuses_the_gesture(self):
+        # On the root, not on body: body's value is never propagated to the viewport.
+        measured = self._computed()
+
+        self.assertEqual(measured["rootOverscrollY"], "none",
+                         f"a drag past the edge must not reach the browser: {measured}")
+
+    def test_the_whole_map_area_owns_its_gestures_not_only_the_svg(self):
+        # `touch-action:none` was on the svg and its children. The clip and the layer
+        # around it - which is three viewports wide and slides under the finger during a
+        # pan - said nothing, so a drag that began on one of them was the browser's.
+        measured = self._computed()
+
+        self.assertEqual(measured["clipTouch"], "none", measured)
+        self.assertEqual(measured["layerTouch"], "none", measured)
+
+    def test_the_sheets_can_still_be_scrolled_with_a_finger(self):
+        # The reason this is not simply set on body: the filter sheet is a scrolling box,
+        # and touch-action:none on an ancestor would make it unscrollable on a phone.
+        measured = self._computed()
+
+        self.assertNotEqual(measured["sheetTouch"], "none",
+                            f"the sheet has to keep its own scrolling: {measured}")

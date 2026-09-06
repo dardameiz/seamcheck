@@ -237,7 +237,15 @@ _CSS = """
    is exactly one screen tall so nothing scrolls the map out of view. */
 /* overscroll-behavior:none stops the page rubber-banding when a drag reaches the edge of
    the canvas: on iOS that bounce steals the gesture mid-pan, which reads as the map
-   fighting back rather than as the page doing something. */
+   fighting back rather than as the page doing something.
+   ON THE ROOT ELEMENT, and that is the whole point of this rule existing twice. Per the
+   CSS Overscroll Behavior spec the value is propagated to the viewport from the ROOT
+   only - `overflow` propagates from body, `overscroll-behavior` does not, and the two
+   read identically in a stylesheet. Declared on body alone it did nothing on the one
+   platform that has the gesture: a phone panning the map UPWARD got pull-to-refresh and
+   reloaded the report, losing the page, the filter and the open card. Reported exactly
+   that way: "when I move upward it wants to update the full page." */
+html { overscroll-behavior:none; }
 body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overflow:hidden;
        overscroll-behavior:none;
        height:100dvh; -webkit-font-smoothing:antialiased;
@@ -683,8 +691,14 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
      layer's edge, and a layer the size of the screen would show blank strips while dragging
      until the commit. Tiles are rasterised near the viewport only, so the size is free.
    .cvclip clips to the screen - not .main, whose menus may hang past its edge. */
-.cvclip { position:absolute; inset:0; overflow:hidden; }
+/* The gestures belong to the map, not only to the svg inside it. `touch-action:none` was
+   on #cv and its children; the clip and the layer said nothing, and the layer is three
+   viewports wide and slides under the finger during a pan - so a drag that began on one
+   of them was the browser's to interpret. Not set on body or .main: the sheets are
+   scrolling boxes, and touch-action:none on an ancestor would make them unscrollable. */
+.cvclip { position:absolute; inset:0; overflow:hidden; touch-action:none; }
 .cvlayer { position:absolute; inset:-100%; contain:paint; will-change:transform;
+           touch-action:none;
            transform-origin:calc(100% / 3) calc(100% / 3); }
 #cv { position:absolute; left:calc(100% / 3); top:calc(100% / 3);
       width:calc(100% / 3); height:calc(100% / 3); display:block;

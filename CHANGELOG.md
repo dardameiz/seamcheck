@@ -19,6 +19,27 @@ backend that answered `uncertain` everywhere would score 100% precision and be u
 
 ## Unreleased
 
+### Panning the map upward reloaded the page
+
+Reported from a phone: *"when I move down on the map with one finger it's possible,
+however when I want to move upward it wants to update the full page."*
+
+That is pull-to-refresh taking the drag, which is why it happened in one direction only.
+A reload here is not a small thing: the reader loses the page they were on, the filter
+they set and the card they had open.
+
+- **Fixed** — `overscroll-behavior:none` is now declared on the ROOT element. It was
+  declared on `body`, and per the CSS Overscroll Behavior spec that value is **not**
+  propagated to the viewport; only the root's is. `overflow` propagates from body,
+  `overscroll-behavior` does not, and the two rules read identically in a stylesheet — so
+  the declaration did nothing on the one platform that has the gesture, while looking
+  correct to anyone reviewing it.
+- **Fixed** — `touch-action:none` now covers the whole map area, not only the `svg`. The
+  clip and the layer around it said nothing, and the layer is three viewports wide and
+  slides under the finger during a pan, so a drag that began on one of them belonged to
+  the browser. Deliberately not set on `body`: the sheets are scrolling boxes and would
+  stop scrolling on a phone, which a test pins.
+
 ### One function's world stopped at the network, if the function was in the browser
 
 Reported from a phone, filtering the map on `submitPushes()`: *"it needs to drop
