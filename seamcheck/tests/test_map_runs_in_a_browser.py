@@ -2383,3 +2383,214 @@ class ReadingOrderTests(SimpleTestCase):
 
         self.assertIn("Python", [lane["name"] for lane in lanes],
                       f"the server band names its one language: {lanes}")
+
+
+class OneFunctionsWorldTests(SimpleTestCase):
+    """Reported from a phone, filtering on `submitPushes()`: "it needs to drop everything,
+    not just 1 node - I want to see how things are working for submit_push and all the
+    connections it has."
+
+    The page built for a function walks OUTWARD from what the function owns, one hop, and
+    then follows a fixed shape upstream - a store row is reached by a handler, a handler by
+    its route, a route by the fetch that resolves to it. That shape only ever ran towards
+    the browser. A function ON the browser side therefore stopped at the request it makes:
+    on the reference project `submitPushes` drew five nodes, all of them JavaScript, and
+    the route it calls, the handler behind it and the keys that handler writes were absent
+    from the one view built to answer "what happens when this runs".
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        try:
+            from playwright.sync_api import sync_playwright  # noqa: F401
+        except ImportError:
+            raise unittest.SkipTest("playwright is not installed (the observe extra)") from None
+
+    def _url(self) -> str:
+        from seamcheck.graph import Graph
+        from seamcheck.mapdata import ConnectivityMap, MapEdge, MapNode, PageMap
+        from seamcheck.renderers.map_html import render_document
+
+        # One push, followed the whole way: a call in a module, the request it makes, the
+        # route that answers, the handler behind it, and the key that handler writes.
+        nodes = [
+            MapNode("page:cart", "cart", "page", "connected"),
+            MapNode("module:cart.js", "cart.js", "module", "connected",
+                    file="static/js/cart.js", line=1, lang="JavaScript"),
+            MapNode("js_call:/api/cart/", "/api/cart/", "js_call", "connected",
+                    file="static/js/cart.js", line=2, lang="JavaScript", owner="addToCart"),
+            MapNode("fetch_target:/api/cart/", "/api/cart/", "fetch_target", "connected",
+                    file="static/js/cart.js", line=2, lang="JavaScript", owner="addToCart"),
+            MapNode("url:api/cart/", "api/cart/", "url", "connected",
+                    file="app/urls.py", line=3, lang="Python"),
+            MapNode("view:cart_add", "cart_add", "view", "connected",
+                    file="app/views.py", line=4, lang="Python", owner="cart_add"),
+            MapNode("redis_key_use:cart:*:items", "cart:*:items", "redis_key_use",
+                    "connected", file="app/views.py", line=5, lang="Python",
+                    owner="cart_add"),
+        ]
+        edges = [MapEdge(a, b, "connected") for a, b in (
+            ("page:cart", "module:cart.js"),
+            ("module:cart.js", "js_call:/api/cart/"),
+            ("js_call:/api/cart/", "fetch_target:/api/cart/"),
+            ("fetch_target:/api/cart/", "url:api/cart/"),
+            ("url:api/cart/", "view:cart_add"),
+            ("view:cart_add", "redis_key_use:cart:*:items"),
+        )]
+        document = render_document(
+            ConnectivityMap(git_sha="0" * 12, generated_at="2026-09-06T00:00:00",
+                            pages=[PageMap("cart", nodes, edges)]),
+            console=_console_for(Graph(symbols=[], edges=[])))
+        path = pathlib.Path(tempfile.mkdtemp()) / "map.html"
+        path.write_text(document.single_file(), encoding="utf-8")
+        return path.as_uri()
+
+    def _world_of(self, name: str):
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch()
+            except Exception as error:  # pragma: no cover - no browser downloaded
+                raise unittest.SkipTest(f"no chromium: {error}") from None
+            page = browser.new_page(viewport={"width": 1400, "height": 900})
+            errors: list[str] = []
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.goto(self._url(), wait_until="load")
+            _open_lens(page, "map")
+            page.wait_for_selector("#cv .nd", state="attached")
+            page.wait_for_timeout(200)
+            ids = page.evaluate("""async (name) => {
+                await buildFunctionPage(name, null, 1);
+                return (PAGES[FN_PAGE].nodes || []).map(n => n.id);
+            }""", name)
+            browser.close()
+        self.assertEqual(errors, [], "the canvas must not throw")
+        return set(ids)
+
+    def test_a_browser_function_is_followed_across_the_seam(self):
+        world = self._world_of("addToCart")
+
+        self.assertIn("fetch_target:/api/cart/", world, world)
+        self.assertIn("url:api/cart/", world,
+                      f"the route the request resolves to is part of its world: {world}")
+        self.assertIn("view:cart_add", world,
+                      f"and the handler behind that route: {world}")
+        self.assertIn("redis_key_use:cart:*:items", world,
+                      f"and what the handler touches - that IS how it works: {world}")
+
+    def test_a_server_function_still_reaches_back_to_the_browser(self):
+        # The direction that already worked has to keep working: a handler's world
+        # includes the route and the request that arrive at it.
+        world = self._world_of("cart_add")
+
+        self.assertIn("view:cart_add", world, world)
+        self.assertIn("url:api/cart/", world, world)
+        self.assertIn("fetch_target:/api/cart/", world,
+                      f"the request that arrives is still part of it: {world}")
+
+
+class FunctionListEscapesTheSheetTests(SimpleTestCase):
+    """Reported from a phone: "the function filter dropdown search needs to overflow the
+    filter container, it's not that UX friendly."
+
+    On a narrow screen the three pickers live inside the Filter sheet, and that sheet
+    scrolls its own content (`overflow-y:auto`). An absolutely positioned list inside a
+    scrolling box is trapped in it: the suggestions open below the fold of a box the
+    reader then has to scroll, inside a page that also scrolls, to choose a function.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        try:
+            from playwright.sync_api import sync_playwright  # noqa: F401
+        except ImportError:
+            raise unittest.SkipTest("playwright is not installed (the observe extra)") from None
+
+    def _open_the_list_on_a_phone(self):
+        from playwright.sync_api import sync_playwright
+
+        from seamcheck.graph import Graph
+        from seamcheck.mapdata import ConnectivityMap, MapEdge, MapNode, PageMap
+        from seamcheck.renderers.map_html import render_document
+
+        # Enough functions that the list is worth opening, and one shared prefix so a
+        # search returns several rows.
+        nodes = [MapNode("page:cart", "cart", "page", "connected"),
+                 MapNode("module:cart.js", "cart.js", "module", "connected",
+                         file="static/js/cart.js", line=1, lang="JavaScript")]
+        edges = [MapEdge("page:cart", "module:cart.js", "connected")]
+        defined, calls = {}, {}
+        for i in range(12):
+            name = f"submitPushes{i}"
+            node = MapNode(f"js_call:/api/push/{i}/", f"/api/push/{i}/", "js_call",
+                           "connected", file="static/js/cart.js", line=2 + i,
+                           lang="JavaScript", owner=name)
+            nodes.append(node)
+            edges.append(MapEdge("module:cart.js", node.id, "connected"))
+            defined[name] = "static/js/cart.js"
+            calls[name] = []
+        document = render_document(
+            ConnectivityMap(git_sha="0" * 12, generated_at="2026-09-06T00:00:00",
+                            pages=[PageMap("cart", nodes, edges)],
+                            defined=defined, calls=calls),
+            console=_console_for(Graph(symbols=[], edges=[])))
+        path = pathlib.Path(tempfile.mkdtemp()) / "map.html"
+        path.write_text(document.single_file(), encoding="utf-8")
+
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch()
+            except Exception as error:  # pragma: no cover - no browser downloaded
+                raise unittest.SkipTest(f"no chromium: {error}") from None
+            # A phone, which is where this was reported and the only width where the
+            # pickers are inside the sheet at all.
+            page = browser.new_page(viewport={"width": 390, "height": 844})
+            errors: list[str] = []
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.goto(path.as_uri(), wait_until="load")
+            _open_lens(page, "map")
+            page.wait_for_selector("#cv .nd", state="attached")
+            page.click("#filterbtn")
+            # The sheet slides in, and while it does it carries a transform - which makes
+            # it the containing block for anything fixed inside it. Measuring through that
+            # reads a scaled rectangle and says nothing about where the list lands.
+            page.wait_for_function(
+                "() => getComputedStyle(document.getElementById('filtersheet')).transform"
+                " === 'none'", timeout=5000)
+            page.fill("#fn", "submitPushes")
+            page.wait_for_selector("#fnlist .fnrow", state="attached", timeout=5000)
+            page.wait_for_timeout(150)
+            measured = page.evaluate("""() => {
+                const list = document.getElementById('fnlist');
+                const box = list.getBoundingClientRect();
+                const row = list.querySelector('.fnrow').getBoundingClientRect();
+                const at = document.elementFromPoint(row.left + row.width / 2,
+                                                     row.top + row.height / 2);
+                return {
+                  top: Math.round(box.top), bottom: Math.round(box.bottom),
+                  left: Math.round(box.left), right: Math.round(box.right),
+                  height: Math.round(box.height),
+                  viewport: window.innerHeight, wide: window.innerWidth,
+                  hit: !!(at && at.closest('#fnlist')),
+                };
+            }""")
+            browser.close()
+        self.assertEqual(errors, [], "the canvas must not throw")
+        return measured
+
+    def test_the_suggestions_are_on_screen_and_clickable(self):
+        measured = self._open_the_list_on_a_phone()
+
+        self.assertTrue(measured["hit"],
+                        f"a tap on the first suggestion has to reach it: {measured}")
+        self.assertGreater(measured["height"], 60,
+                           f"the list is drawn at a usable height: {measured}")
+        self.assertLessEqual(measured["bottom"], measured["viewport"] + 1,
+                             f"and no part of it hangs below the screen: {measured}")
+        self.assertGreaterEqual(measured["top"], 0, measured)
+        self.assertLessEqual(measured["right"], measured["wide"] + 1,
+                             f"nor off the right edge: {measured}")
+        self.assertGreaterEqual(measured["left"], 0, measured)

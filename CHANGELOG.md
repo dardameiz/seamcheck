@@ -19,6 +19,42 @@ backend that answered `uncertain` everywhere would score 100% precision and be u
 
 ## Unreleased
 
+### One function's world stopped at the network, if the function was in the browser
+
+Reported from a phone, filtering the map on `submitPushes()`: *"it needs to drop
+everything, not just 1 node - I want to see how things are working for submit_push and all
+the connections it has."*
+
+The page built for a function walks outward from what the function owns, then follows a
+fixed shape rather than widening: a store row is reached by the handler that touched it, a
+handler by its route, a route by the request that resolves to it. That shape only ever ran
+**towards** the browser. A function ON the browser side therefore stopped at the request it
+makes, which is the one hop that matters least.
+
+- **Added** — the mirror of that walk. A call is followed across the seam to the route, the
+  handler behind it and the rows that handler touches, and each row is paired with the key,
+  table or column it resolves to. Measured on the reference project, filtering
+  `submitPushes`: **5 nodes in one band, now 30 across all four** — the call, the request,
+  the route, the handler, 15 Redis key uses and the 8 keys behind them. `submit_push` on
+  the server side is 811 nodes, drawn as 116 cards with the rest behind counted aggregates.
+- Still a shape and not a widening, for the reason the first half is: unbounded
+  reachability from a request is the whole application, which is the page view again.
+
+### The function search list was trapped in the filter sheet
+
+Reported in the same breath: *"the function filter dropdown search needs to overflow the
+filter container, it's not that UX friendly."*
+
+- **Fixed** — on a phone the three pickers live inside the Filter sheet, and that sheet
+  scrolls its own content. An absolutely positioned list inside a scrolling box is clipped
+  by it: at 390px the suggestions ran **258px below the bottom of the screen** and a tap on
+  the first row reached nothing at all. The list is now placed against the input in
+  viewport coordinates, opens upward when there is no room below, and is re-placed on
+  scroll and resize.
+- The percentage widths went with it. `min-width:100%` on a fixed element means the
+  viewport, not the box it sits under, so the list spilled off the right edge of the phone
+  it was meant to fit.
+
 ### The phone link, for the phone that is not on this wifi
 
 Reported from use: *"seamcheck should serve always a link for phone, because people and

@@ -316,7 +316,16 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overf
 }
 .funcpick #fnoff:hover { color:var(--ink); background:var(--sunk); }
 .fnlist {
-  position:absolute; top:41px; left:0; min-width:100%; max-width:82vw; z-index:6;
+  /* Fixed, and placed against the input by placeFuncList(): on a phone these pickers
+     live inside the Filter sheet, and that sheet scrolls its own content, so an
+     absolutely positioned list is CLIPPED by it - the suggestions open inside a box the
+     reader has to scroll, in a page that also scrolls, to tap one. Above the sheet's own
+     z-index for the same reason. */
+  /* No min-width:100% and no max-width in vw: those were written for a list positioned
+     inside `.funcpick`, and a FIXED element's percentage is the viewport - so the list
+     was forced to the full width of the screen and hung off the right edge of it. Every
+     dimension is placed by placeFuncList() instead, against the input it belongs to. */
+  position:fixed; top:41px; left:0; z-index:14;
   max-height:min(52vh, 420px); overflow:auto; padding:5px;
   border:1.2px solid var(--line-2); border-radius:12px; background:var(--panel);
   box-shadow:var(--shadow);
@@ -1844,12 +1853,44 @@ const funcOff = document.getElementById("fnoff");
 const funcList = document.getElementById("fnlist");
 let _funcHi = 0;
 
-function closeFuncList() { funcList.hidden = true; funcList.innerHTML = ""; _funcHi = 0; }
+function closeFuncList() {
+  funcList.hidden = true; funcList.innerHTML = ""; _funcHi = 0;
+  // Back to the stylesheet's own values, so the next open starts from a known place.
+  funcList.style.cssText = "";
+  window.removeEventListener("resize", placeFuncList);
+  window.removeEventListener("scroll", placeFuncList, true);
+}
+
+// Against the input, in viewport coordinates, and never off the screen: opened downward
+// when there is room under the box and upward when there is not, which on a phone in
+// landscape is most of the time. Re-run on scroll and resize because a fixed element
+// does not follow the box it is anchored to.
+function placeFuncList() {
+  if (funcList.hidden) return;
+  const at = funcBox.getBoundingClientRect();
+  const gap = 6, edge = 8;
+  const below = window.innerHeight - at.bottom - gap - edge;
+  const above = at.top - gap - edge;
+  const upward = below < 180 && above > below;
+  const width = Math.min(Math.max(at.width, 260), window.innerWidth - edge * 2);
+  funcList.style.width = width + "px";
+  funcList.style.left =
+    Math.max(edge, Math.min(at.left, window.innerWidth - width - edge)) + "px";
+  funcList.style.maxHeight = Math.max(120, Math.min(420, upward ? above : below)) + "px";
+  if (upward) {
+    funcList.style.top = "auto";
+    funcList.style.bottom = (window.innerHeight - at.top + gap) + "px";
+  } else {
+    funcList.style.bottom = "auto";
+    funcList.style.top = (at.bottom + gap) + "px";
+  }
+}
 
 function renderFuncList(rows) {
   if (!rows.length) {
     funcList.innerHTML = `<div class="fnnone">No function is called that.</div>`;
     funcList.hidden = false;
+    _watchFuncList();
     return;
   }
   funcList.innerHTML = rows.map((r, i) =>
@@ -1858,9 +1899,17 @@ function renderFuncList(rows) {
        <b>${esc(r.name)}</b><span>${esc(r.file.split("/").pop())} · ${r.count}</span>
      </button>`).join("");
   funcList.hidden = false;
+  _watchFuncList();
   funcList.querySelectorAll(".fnrow").forEach(el => {
     el.onclick = () => pickFunction(el.dataset.name);
   });
+}
+
+function _watchFuncList() {
+  placeFuncList();
+  window.addEventListener("resize", placeFuncList);
+  // Capturing, because the thing that scrolls is the sheet, not the window.
+  window.addEventListener("scroll", placeFuncList, true);
 }
 
 function offerFunctions() {
@@ -3190,6 +3239,40 @@ function buildFunctionPage(name, on, hops) {
         });
       });
       upstream = next;
+    }
+    // ...and the same shape read the other way, for a function on the BROWSER side.
+    // ARRIVES walks towards the browser, which is the whole answer for a handler and no
+    // answer at all for the code that calls it: filtering the reference project on
+    // `submitPushes` drew five nodes, every one of them JavaScript, and stopped at the
+    // request. The route that answers it, the handler behind that route and the keys the
+    // handler writes - the entire "how does this work" - were absent from the one view
+    // built to show it. Reported as "it needs to drop everything, not just 1 node".
+    //
+    // Followed as a SHAPE for the same reason ARRIVES is: unbounded reachability from a
+    // request is the whole application. A push is
+    // js call -> fetch -> route -> handler -> the rows that handler touches, every time,
+    // and a row that names a declared key or column is paired with its declaration,
+    // because "which key" is the question a reader has next.
+    const DEPARTS = {
+      js_call: ["fetch_target"], fetch_target: ["url"], url: ["view"],
+      view: ["redis_key_use", "db_table_use", "db_column_use", "db_function_use",
+             "json_field"],
+      redis_key_use: ["redis_key"], db_table_use: ["db_table"],
+      db_column_use: ["db_column"], db_function_use: ["db_function"],
+    };
+    let downstream = [...keep];
+    for (let step = 0; step < 6 && downstream.length; step++) {
+      const next = [];
+      downstream.forEach(id => {
+        const want = DEPARTS[(known.get(id) || {}).kind];
+        if (!want) return;
+        (adj.get(id) || []).forEach(other => {
+          const node = known.get(other);
+          if (!node || !want.includes(node.kind) || keep.has(other)) return;
+          keep.add(other); next.push(other);
+        });
+      });
+      downstream = next;
     }
     const nodes = [...keep].map(id => known.get(id)).filter(Boolean);
     const st = {};
