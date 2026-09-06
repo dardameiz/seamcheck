@@ -62,3 +62,13 @@ class EnvelopeTests(SimpleTestCase):
         _, cut = envelope.page(rows, limit=10)
 
         self.assertEqual(cut["cursor"], "")
+
+    def test_a_cursor_that_cannot_be_parsed_starts_from_the_beginning(self):
+        # "²".isdigit() is True and int("²") raises, so the digit check alone was a crash.
+        rows = [{"id": f"x{i}"} for i in range(5)]
+
+        for bad in ("²", "abc", "-5", "12.5", ""):
+            shown, cut = envelope.page(rows, limit=2, cursor=bad)
+
+            self.assertEqual(shown[0]["id"], "x0", f"cursor {bad!r} must fall back, not raise")
+            self.assertEqual(cut["offset"], 0)

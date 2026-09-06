@@ -68,8 +68,15 @@ def page(rows: list, limit: int, cursor: str = "") -> tuple[list, dict]:
 
     The cursor is the offset as a string rather than an opaque token: the row order is
     stable within a scan, an agent can read it, and there is nothing to keep server-side.
+    An unparseable or out-of-range cursor starts from the beginning rather than raising,
+    so a caller that lost its place gets the first page and not a stack trace.
     """
-    start = int(cursor) if cursor.isdigit() else 0
+    try:
+        start = int(cursor)
+        if start < 0:
+            start = 0
+    except ValueError:
+        start = 0
     shown = rows[start:start + limit]
     following = start + len(shown)
     return shown, {
