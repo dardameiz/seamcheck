@@ -2472,7 +2472,7 @@ const KIND_GAP = 26, KIND_LABEL = 22;
 // Above this a kind is a number, not a list. Twenty-eight cards is already two full rows.
 const AGGREGATE_OVER = 28;
 
-function place(buckets, used, perRow) {
+function place(buckets, used, perRow, depth) {
   const pos = new Map();
   const columns = [];
   const bands = [];
@@ -2726,16 +2726,57 @@ function place(buckets, used, perRow) {
         const slice = new Map(ordered.map(c =>
           [c, (buckets.get(c) || []).filter(n => langOf(n) === lang)]));
         if (![...slice.values()].some(v => v.length)) return;
+        // The page entry has no file, so it lands in the lane for symbols with no
+        // language - and that lane is the one a reader starts at. Named for what it
+        // actually holds when that is all it holds.
+        const held = [...slice.values()].flat();
+        const pagesOnly = held.length && held.every(n => n.kind === "page");
         runs.push({id: lang || "unknown",
-                   name: lang || "no file to read a language from",
+                   name: lang || (pagesOnly ? (held.length > 1 ? "The pages" : "The page")
+                                            : "no file to read a language from"),
                    colour: lang ? langColour(lang) : LANG_FALLBACK,
                    box: true, oracle: true, badge: "", drop: LANE_FIRST_DROP + 12,
                    slice});
       });
     }
     if (!runs.length) {
-      runs = [{name: "", drop: 0,
+      // A band nothing divides is still a container, and saying which language it is
+      // costs one border: the seam reads "JavaScript", the server reads "Python". Only
+      // when EVERY node in the band is that language - a box labelled Python around a
+      // symbol with no file to read a language from would be a claim, not a label.
+      const bandNodes = ordered.flatMap(c => buckets.get(c) || []);
+      const one = bandLangList.length === 1
+                  && bandNodes.every(n => langOf(n) === bandLangList[0])
+                ? bandLangList[0] : "";
+      runs = [{name: one, id: one, colour: one ? langColour(one) : null, box: !!one,
+               oracle: true, badge: "", drop: one ? LANE_FIRST_DROP + 12 : 0,
                slice: new Map(ordered.map(c => [c, buckets.get(c) || []]))}];
+    }
+
+    // Left to right in the order the code runs, not in the order the alphabet does.
+    // Reported that way: "base and the main should be on the left side", and "if API
+    // reached JS first then css or vice versa it needs to be visible on the map when it
+    // is not highlighted and selected". Sorted alphabetically, the browser band opened
+    // on CSS - the LAST thing reached, four hops after the page - and the page itself
+    // sat on the far right under "no file to read a language from".
+    //
+    // The key is the mean hop count from the page, not the smallest: one early card in a
+    // lane of late ones does not make the lane early, and the median would mean sorting
+    // every node's depth on every candidate layout. A store's lanes keep their own order
+    // - Postgres, Redis, Firebase is a taxonomy, and a taxonomy that reshuffles per page
+    // is worse than one that reads out of order.
+    if (!laneOf && depth) {
+      runs.forEach((run, i) => {
+        let sum = 0, seen = 0;
+        [...run.slice.values()].flat().forEach(n => {
+          const d = depth.get(n.id);
+          if (d !== undefined) { sum += d; seen++; }
+        });
+        run.at = seen ? sum / seen : Infinity;
+        run.was = i;
+      });
+      const key = run => (run.at === Infinity ? 1e9 : run.at);
+      runs.sort((a, b) => (key(a) - key(b)) || (a.was - b.was));
     }
 
     // Side by side, each with its share of the row. A lane whose content is wider than
@@ -2855,6 +2896,38 @@ function layoutPath(p, keep) {
 }
 
 
+// How many hops each symbol is from the page. The map's edges run the way the code runs
+// - a page reaches its module, the module reaches its request, the request reaches the
+// route - so this is the reading order, and it is what decides which container stands
+// left of which.
+//
+// A bucket page (the not-reached ones) holds no page node, so nothing here gets a depth
+// and the lanes keep the order they already had. That is the honest answer: those
+// symbols are in the map precisely because no page reaches them.
+function reachOrder(p, keep) {
+  const depth = new Map();
+  const fwd = new Map();
+  p.edges.forEach(e => {
+    if (!keep.has(e.source) || !keep.has(e.target)) return;
+    if (!fwd.has(e.source)) fwd.set(e.source, []);
+    fwd.get(e.source).push(e.target);
+  });
+  let front = p.nodes.filter(n => keep.has(n.id) && n.kind === "page").map(n => n.id);
+  front.forEach(id => depth.set(id, 0));
+  // Bounded: the deepest chain the scan builds is a page to a store key, and a cycle
+  // would otherwise walk for as long as there are edges.
+  for (let d = 1; front.length && d < 32; d++) {
+    const next = [];
+    front.forEach(id => (fwd.get(id) || []).forEach(to => {
+      if (depth.has(to)) return;
+      depth.set(to, d);
+      next.push(to);
+    }));
+    front = next;
+  }
+  return depth;
+}
+
 function layout(p, keep) {
   if (isolate && lit) return layoutPath(p, keep);
   const buckets = new Map();
@@ -2865,9 +2938,12 @@ function layout(p, keep) {
   });
   const used = [...buckets.keys()].sort((a, b) => a - b);
   const w = svg.clientWidth || 1200, h = svg.clientHeight || 700;
+  // Once, not once per candidate: nine row counts are tried and the answer is the same
+  // for all nine.
+  const depth = reachOrder(p, keep);
   let best = null, bestFit = -1;
   ROW_CHOICES.forEach(rows => {
-    const candidate = place(buckets, used, rows);
+    const candidate = place(buckets, used, rows, depth);
     const fit = Math.min(w / (candidate.width + 40), h / (candidate.height + 40));
     if (fit > bestFit) { bestFit = fit; best = candidate; }
   });

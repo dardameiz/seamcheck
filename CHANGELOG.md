@@ -19,6 +19,31 @@ backend that answered `uncertain` everywhere would score 100% precision and be u
 
 ## Unreleased
 
+### The map reads left to right in the order the code runs
+
+Reported from a phone, of the browser band: *"base and the main should be on the left
+side"*, and *"if API reached JS first then css or vica versa it needs to be visible on the
+map — when it is not highlighted and selected."*
+
+- **Changed** — containers are ordered by how far their contents are from the page, not by
+  the alphabet. The band used to open on CSS, which is the LAST thing reached — the page
+  reaches a module, the module a selector, the selector a rule — and the page itself sat on
+  the far right under "no file to read a language from". It now reads page → JavaScript →
+  Template → CSS, which is the order a request actually travels, visible without lighting
+  a chain. A store's lanes keep their own order: Postgres, Redis, Firebase is a taxonomy,
+  and one that reshuffles per page is worse than one that reads out of order.
+- **Changed** — the lane holding the page entry is named *The page*, because that is what
+  is in it. It is the same lane as before (the entry has no file, so it has no language),
+  now standing where a reader starts rather than at the end of the alphabet.
+- **Changed** — a band nothing divides is still a container: the seam draws *JavaScript*,
+  the server draws *Python*. Only when every symbol in the band is that language — a box
+  labelled Python around a symbol with no file to read a language from would be a claim,
+  not a label.
+
+Measured on the reference project's base page, mean hops from the page: **the page 0 ·
+JavaScript 2.46 · Template 3.0 · CSS 3.0 · the server's Python 5.41**. Template and CSS
+tie there, and the alphabet breaks the tie — it decides only what the flow cannot.
+
 ### Two languages in a band stand beside each other, not one under the other
 
 Reported from a phone: *"different languages and databases should be next to each other

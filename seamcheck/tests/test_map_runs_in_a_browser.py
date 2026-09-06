@@ -2282,3 +2282,104 @@ class LanesSideBySideTests(SimpleTestCase):
         near, far = sorted(column, key=lambda c: c["y"])
         self.assertLess(far["y"] - near["y"], 70,
                         f"and directly under each other: {cards}")
+
+
+class ReadingOrderTests(SimpleTestCase):
+    """Reported from a phone: "base and the main should be on the left side", and "if API
+    reached JS first then css or vica versa it needs to be visible on the map - when it is
+    not highlighted and selected".
+
+    The containers used to be sorted by the alphabet, which opened the browser band on CSS
+    - the last thing reached, four hops after the page - and put the page itself on the far
+    right, in the lane for symbols with no file. The order is the order the code runs in.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        try:
+            from playwright.sync_api import sync_playwright  # noqa: F401
+        except ImportError:
+            raise unittest.SkipTest("playwright is not installed (the observe extra)") from None
+
+    def _url(self) -> str:
+        from seamcheck.graph import Graph
+        from seamcheck.mapdata import ConnectivityMap, MapEdge, MapNode, PageMap
+        from seamcheck.renderers.map_html import render_document
+
+        # The alphabet and the flow DISAGREE here, which is the whole point: CSS sorts
+        # first and is reached last, three hops behind the JavaScript that reaches it.
+        nodes = [
+            MapNode("page:home", "home", "page", "connected"),
+            MapNode("module:app.js", "app.js", "module", "connected",
+                    file="static/js/app.js", line=1, lang="JavaScript"),
+            MapNode("dom_selector:cart", "cart", "dom_selector", "connected",
+                    file="static/js/app.js", line=2, lang="JavaScript"),
+            MapNode("css_selector:cart", "cart", "css_selector", "connected",
+                    file="static/css/site.css", line=3, lang="CSS"),
+            MapNode("url:api/cart/", "api/cart/", "url", "connected",
+                    file="app/urls.py", line=4, lang="Python"),
+            MapNode("view:cart", "cart", "view", "connected",
+                    file="app/views.py", line=5, lang="Python"),
+        ]
+        edges = [MapEdge(a, b, "connected") for a, b in (
+            ("page:home", "module:app.js"),
+            ("module:app.js", "dom_selector:cart"),
+            ("dom_selector:cart", "css_selector:cart"),
+            ("module:app.js", "url:api/cart/"),
+            ("url:api/cart/", "view:cart"),
+        )]
+        document = render_document(
+            ConnectivityMap(git_sha="0" * 12, generated_at="2026-09-06T00:00:00",
+                            pages=[PageMap("home", nodes, edges)]),
+            console=_console_for(Graph(symbols=[], edges=[])))
+        path = pathlib.Path(tempfile.mkdtemp()) / "map.html"
+        path.write_text(document.single_file(), encoding="utf-8")
+        return path.as_uri()
+
+    def _lanes(self):
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch()
+            except Exception as error:  # pragma: no cover - no browser downloaded
+                raise unittest.SkipTest(f"no chromium: {error}") from None
+            page = browser.new_page(viewport={"width": 1600, "height": 700})
+            errors: list[str] = []
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.goto(self._url(), wait_until="load")
+            _open_lens(page, "map")
+            page.wait_for_selector("#cv .nd", state="attached")
+            page.wait_for_timeout(200)
+            lanes = page.evaluate("""() => [...document.querySelectorAll('#cv .lanename')]
+                .map(t => ({name: t.textContent,
+                            x: Math.round(Number(t.getAttribute('x')))}))""")
+            browser.close()
+        self.assertEqual(errors, [], "the canvas must not throw")
+        return lanes
+
+    def test_the_page_is_the_leftmost_container(self):
+        lanes = self._lanes()
+
+        self.assertTrue(lanes, "the browser band has containers")
+        first = min(lanes, key=lambda lane: lane["x"])
+        self.assertEqual(first["name"], "The page",
+                         f"the page is where a reader starts: {lanes}")
+
+    def test_containers_stand_in_the_order_the_code_runs(self):
+        lanes = {lane["name"]: lane["x"] for lane in self._lanes()}
+
+        for name in ("The page", "JavaScript", "CSS"):
+            self.assertIn(name, lanes, lanes)
+        self.assertLess(lanes["The page"], lanes["JavaScript"], lanes)
+        self.assertLess(lanes["JavaScript"], lanes["CSS"],
+                        f"CSS is reached through the JavaScript, not before it: {lanes}")
+
+    def test_a_band_one_language_owns_is_still_a_container(self):
+        """The server band here is Python and nothing else. It used to be the only band
+        drawn without an inner border, so it read as unsorted remainder."""
+        lanes = self._lanes()
+
+        self.assertIn("Python", [lane["name"] for lane in lanes],
+                      f"the server band names its one language: {lanes}")

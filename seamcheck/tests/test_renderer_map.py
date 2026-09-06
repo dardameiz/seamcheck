@@ -549,7 +549,7 @@ class BigCanvasTests(SimpleTestCase):
         # One page holds 839 selectors: in a single file that column stood 25,000px tall.
         out = map_html.render(_map())
 
-        self.assertIn("function place(buckets, used, perRow)", out)
+        self.assertIn("function place(buckets, used, perRow, depth)", out)
         self.assertIn("ROW_CHOICES", out)
 
     def test_the_wrap_is_chosen_by_measuring_not_by_a_constant(self):
