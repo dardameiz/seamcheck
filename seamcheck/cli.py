@@ -20,6 +20,7 @@ It also owns the two things that make the front door usable rather than merely p
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import pathlib
 import re
@@ -317,6 +318,20 @@ COMMANDS: dict[str, Command] = {
         ),
         examples=[("seamcheck explain 'url:/api/get-user-stats/'", "one symbol, in full")],
     ),
+    "symbols": Command(
+        args=["--symbols"],
+        summary="Find a symbol by name. The cheap way to get an id.",
+        detail=(
+            "Every other command takes a symbol id, and getting one wrong used to cost a "
+            "full scan to be told so - 88 seconds on a 500k-line project, to read `No "
+            "symbol with id ...`. This answers from the cached scan in a fraction of a "
+            "second, and it is the right first call before explain or triage."
+        ),
+        examples=[
+            ("seamcheck symbols --search push", "everything whose id or label says push"),
+            ("seamcheck symbols --search push --kind url", "...routes only"),
+        ],
+    ),
 }
 
 
@@ -558,6 +573,12 @@ def _run_without_django(arguments, verbose: bool) -> int:
     options = _plain_args(arguments)
     if options["set_tunnel"]:
         return _set_tunnel_plain(options["set_tunnel"])
+    if options["symbols"]:
+        from seamcheck import queries
+
+        print(json.dumps(queries.symbols(root, options["search"], options["kind"],
+                                         options["limit"], options["cursor"]), indent=2))
+        return 0
     if options["show_config"]:
         return _show_config_plain(root)
     with quiet(not verbose):
@@ -722,6 +743,7 @@ def _plain_args(arguments) -> dict:
         # right, so the two surfaces disagreed, which is the one thing they must never do.
         "explain": None, "show_config": False, "triage": None, "status": None,
         "reason": "", "why": "", "undo": False, "set_tunnel": None,
+        "symbols": False, "search": "", "kind": "", "limit": 25, "cursor": "",
     }
     items = list(arguments)
     for index, item in enumerate(items):
@@ -734,6 +756,16 @@ def _plain_args(arguments) -> dict:
             options["set_tunnel"] = following
         elif item == "--explain" and following:
             options["explain"] = following
+        elif item == "--symbols":
+            options["symbols"] = True
+        elif item == "--search" and following:
+            options["search"] = following
+        elif item == "--kind" and following:
+            options["kind"] = following
+        elif item == "--limit" and following and following.isdigit():
+            options["limit"] = int(following)
+        elif item == "--cursor" and following:
+            options["cursor"] = following
         elif item == "--triage" and following:
             options["triage"] = following
         elif item == "--status" and following:

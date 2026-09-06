@@ -117,6 +117,14 @@ class Command(BaseCommand):
             help="Print the config a scan would use, and where each value came from.",
         )
         parser.add_argument(
+            "--symbols", action="store_true",
+            help="Find symbols by name; --search and --kind narrow it.",
+        )
+        parser.add_argument("--search", default="", help="Substring to look for.")
+        parser.add_argument("--kind", default="", help="Restrict to one kind.")
+        parser.add_argument("--limit", type=int, default=25, help="How many rows at most.")
+        parser.add_argument("--cursor", default="", help="Continue a previous page.")
+        parser.add_argument(
             "--no-progress", action="store_true",
             help="Never draw the progress bar (it is off already when output is redirected).",
         )
@@ -144,6 +152,12 @@ class Command(BaseCommand):
             return self._observe(options)
         if options.get("set_tunnel"):
             return self._set_tunnel(options["set_tunnel"])
+        if options.get("symbols"):
+            from seamcheck import queries
+
+            out = queries.symbols(options["repo_root"], options["search"],
+                                  options["kind"], options["limit"], options["cursor"])
+            return self.stdout.write(json.dumps(out, indent=2))
         if options["show_config"]:
             return self._show_config(options["repo_root"])
         if options["triage"]:
