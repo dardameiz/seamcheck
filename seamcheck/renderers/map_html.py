@@ -264,6 +264,19 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overf
 .hud.br { bottom:14px; right:14px; flex-direction:column; }
 
 .menuwrap { position:relative; }
+/* The filter button only exists where the controls do not fit on the glass. */
+.filterwrap { position:relative; }
+.filterbtn .funnel { width:11px; height:9px; flex:none; background:currentColor;
+  clip-path:polygon(0 0, 100% 0, 62% 46%, 62% 100%, 38% 78%, 38% 46%); opacity:.85; }
+.filterbtn .fdot { width:7px; height:7px; border-radius:50%; background:var(--sig);
+                   flex:none; }
+/* Anchored to the corner, not to the button: `right:0` on a wrap that sits 90px from
+   the left edge hangs the sheet off the left of the screen. */
+#filtersheet { left:0; }
+#filterbody { display:grid; gap:9px; padding:0 8px 8px; }
+#filterbody .pagepicks { display:grid; gap:9px; }
+#filterbody .pagepick, #filterbody .funcpick { max-width:none; width:100%; }
+#filterbody .mfilters { padding:0; }
 /* The page picker, on the glass beside the menu, so moving from one page to the next is
    one tap instead of three. Same shape as the menu button: the two read as one strip. */
 /* Capped so the readout, which starts where the pickers end, keeps room to say anything. */
@@ -667,6 +680,10 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
 #cv { position:absolute; left:calc(100% / 3); top:calc(100% / 3);
       width:calc(100% / 3); height:calc(100% / 3); display:block;
       cursor:grab; touch-action:none; overflow:visible; }
+/* A finger dragging the canvas was selecting the labels it passed over - the browser's
+   own text selection, magnifier and all, on top of a map being panned. Nothing on the
+   canvas is text a reader copies; every label is reachable through the card it names. */
+#cv, #cv * { user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; }
 #cv.drag { cursor:grabbing; }
 #cv * { touch-action:none; }
 /* Nothing under a gesture needs hit-testing, and hit-testing is what a pointermove over
@@ -1147,10 +1164,19 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
      So the picker takes its OWN row. It is the widest control here and it carries the
      longest text (a template path), which is exactly the thing that should not be
      squeezed into a corner it has to share. */
-  .hud.tl { top:12px; left:12px; right:12px; flex-wrap:wrap; }
+  /* Two buttons and nothing else. The page, section and function pickers moved into
+     the Filter sheet, which is the whole point of it. */
+  .hud.tl { top:12px; left:12px; right:12px; flex-wrap:wrap; gap:7px; }
   .hud.tl > .menuwrap { flex:none; }
   .pagepicks { flex-basis:100%; order:2; }
   .pagepick, #secwrap { flex:1 1 0; max-width:none; }
+  #filterbody .pagepick select, #filterbody .funcpick input { height:44px; font-size:15px; }
+  #filterbody .pagepicks { flex-basis:auto; }
+  /* The sheet hangs off the whole corner rather than off the button: static positioning
+     hands it .hud.tl as its container, so it opens under the row at the screen's edge
+     and cannot be pushed off the side by where the button happens to sit. */
+  .filterwrap { position:static; }
+  #filtersheet { left:0; right:auto; width:calc(100vw - 24px); max-width:none; }
   /* Clear of the right corner's own controls, which stay on row one. */
   .hud.tr { top:12px; right:12px; gap:6px; z-index:7; }
   .menubtn { max-width:44vw; }
@@ -2487,9 +2513,22 @@ function place(buckets, used, perRow) {
       if (!items || !items.length) return;
       const kind = COLS[c] ? COLS[c][0] : "other";
       const label = COLS[c] ? COLS[c][1] : "Other";
-      // A new kind starts on a fresh row, so the group heading always sits over its own
-      // cards rather than over the tail of the previous kind's.
-      if (x > 44) { x = 44; rowTop += tallest + GAP_Y + KIND_GAP; tallest = 0; }
+      // Kinds sit BESIDE each other and wrap when the row is full, rather than each one
+      // starting a fresh row. Reported from use, filtering on one function: "the sections
+      // are below each other, I am getting lost" - a filtered page is four headings of
+      // two cards each, and stacked they are four screens of scrolling with the answer
+      // spread down all of them. Side by side it is one screen.
+      //
+      // A section still owns its heading, because the heading is placed at the x this
+      // section starts at; what changes is only whether that x is the left margin.
+      const parked = SEGMENTED_KINDS.has(kind) || items.length > AGGREGATE_OVER;
+      const need = parked ? BIG_W
+                          : Math.min(items.length, perRow) * (CARD_W + GAP_X) - GAP_X;
+      if (x > 44 && x + need > 44 + rowWidth) {
+        x = 44; rowTop += tallest + GAP_Y + KIND_GAP; tallest = 0;
+      } else if (x > 44) {
+        x += KIND_GAP;
+      }
       if (laneOf && laneOf.get(c) !== lastLane) {
         lastLane = laneOf.get(c);
         const lane = bandDef.lanes[lastLane];
@@ -3668,6 +3707,7 @@ function applyView() {
 // highlight fighting the first is worse than neither.
 let tracing = null;
 
+window.trace = trace;
 function trace(place) {
   if (tracing === place) return;
   tracing = place;
@@ -3688,7 +3728,7 @@ function trace(place) {
 }
 
 svg.addEventListener("pointerover", e => {
-  if (isolate) return;
+  if (isolate || moved || pinch) return;
   const card = e.target.closest && e.target.closest(".nd[data-p]");
   trace(card ? card.dataset.p : null);
 });
@@ -3700,7 +3740,7 @@ svg.addEventListener("pointerout", e => {
 // A pointer that leaves the canvas entirely, and the synthetic events a test sends.
 svg.addEventListener("pointerleave", () => trace(null));
 svg.addEventListener("pointerenter", e => {
-  if (isolate) return;
+  if (isolate || moved || pinch) return;
   const card = e.target.closest && e.target.closest(".nd[data-p]");
   if (card) trace(card.dataset.p);
 }, true);
@@ -4249,7 +4289,10 @@ window.addEventListener("pointermove", e => {
   // A few pixels between press and release is a tap, not a pan. A finger wobbles more
   // than a mouse, so the threshold is wider than a mouse alone would need.
   if (!moved && Math.abs(e.clientX - drag.sx) + Math.abs(e.clientY - drag.sy) < 6) return;
-  if (!moved) { moved = true; svg.classList.add("drag"); }
+  // A touch fires pointerover on the way down, so the card under the finger lit up and
+  // then STAYED lit for the whole pan: hit-testing is off during a drag, so the
+  // pointerout that would have cleared it never arrives. A pan is not a hover.
+  if (!moved) { moved = true; svg.classList.add("drag"); if (window.trace) trace(null); }
   panBy(e.clientX - drag.x, e.clientY - drag.y);
   drag.x = e.clientX; drag.y = e.clientY;
 });
@@ -4603,7 +4646,7 @@ const rail = document.getElementById("nav");
 rail.innerHTML = VIEWS.map(v =>
   `<div class="nv" role="link" tabindex="0" data-key="${esc(v.key)}">
      <span>${esc(v.title)}</span>
-     <span class="c">${v.count === null ? "—" : v.count}</span></div>`).join("");
+     ${v.count === null ? "" : `<span class="c">${v.count}</span>`}</div>`).join("");
 rail.querySelectorAll(".nv").forEach(el => {
   el.onclick = () => { viewer.value = el.dataset.key; switchTo(el.dataset.key); };
   el.onkeydown = e => { if (e.key === "Enter") el.click(); };
@@ -5538,13 +5581,95 @@ ly.onchange = e => {
         btn.hidden = !counts[st] && !statusFilter.has(st);
       });
     }
+    if (window.syncFilterDot) syncFilterDot();
     if (window.chromeMeasure) requestAnimationFrame(window.chromeMeasure);
   };
+
+  // ── the phone's Filter button ────────────────────────────────────────────
+  // Reported from use: "on mobile the 3 filters are not looking good, they are super
+  // small". They were - three controls sharing the glass beside the menu at 34vw each, a
+  // page path truncated to two words, and a function box narrower than the word
+  // "Function". On a phone they move behind one button next to the menu, and the top row
+  // is two buttons and nothing else.
+  //
+  // MOVED, not copied. A second <select> for the same filter is two controls that can
+  // disagree about what the map is showing, which is a bug this file has already fixed
+  // twice on other controls.
+  const filterwrap = document.getElementById("filterwrap");
+  const filterbtn = document.getElementById("filterbtn");
+  const filtersheet = document.getElementById("filtersheet");
+  const filterbody = document.getElementById("filterbody");
+  const fdot = document.getElementById("fdot");
+  const pgwrap = document.getElementById("pgwrap");
+  const mfilters = mapsheet ? mapsheet.querySelector(".mfilters") : null;
+  const mfiltersLabel = mfilters ? mfilters.previousElementSibling : null;
+  const home = new Map();          // element -> [parent, next sibling] before any move
+  [pgwrap, mfilters, mfiltersLabel].forEach(el => {
+    if (el) home.set(el, [el.parentNode, el.nextSibling]);
+  });
+
+  window.setFilterSheet = open => {
+    if (!filtersheet) return;
+    filtersheet.classList.toggle("open", !!open);
+    filterbtn.setAttribute("aria-expanded", open ? "true" : "false");
+    if (open) mapsheet.classList.remove("open");
+    if (open) menubtn.setAttribute("aria-expanded", "false");
+  };
+  if (filterbtn) {
+    filterbtn.addEventListener("click", e => {
+      e.stopPropagation();
+      setFilterSheet(!filtersheet.classList.contains("open"));
+    });
+    filtersheet.addEventListener("click", e => e.stopPropagation());
+    document.addEventListener("click", () => setFilterSheet(false));
+    document.addEventListener("keydown", e => {
+      if (e.key === "Escape") setFilterSheet(false);
+    });
+    // Opening the menu closes the filters: two sheets over one corner of a phone screen
+    // is one sheet too many.
+    menubtn.addEventListener("click", () => setFilterSheet(false), true);
+  }
+
+  const narrow = window.matchMedia("(max-width: 720px)");
+  let placedNarrow = null;
+  function placeFilters() {
+    const phone = narrow.matches;
+    if (placedNarrow === phone) return;
+    placedNarrow = phone;
+    if (phone) {
+      [mfiltersLabel, mfilters, pgwrap].forEach(el => {
+        if (el) filterbody.appendChild(el);
+      });
+    } else {
+      setFilterSheet(false);
+      [pgwrap, mfilters, mfiltersLabel].forEach(el => {
+        const at = home.get(el);
+        if (el && at) at[0].insertBefore(el, at[1]);
+      });
+    }
+    if (filterwrap) filterwrap.hidden = !phone;
+    if (window.chromeMeasure) requestAnimationFrame(window.chromeMeasure);
+  }
+  // A dot when something is actually narrowing the map, so the button says whether it is
+  // doing anything without having to be opened.
+  window.syncFilterDot = () => {
+    if (!fdot) return;
+    const on = Boolean((typeof funcFilter !== "undefined" && funcFilter)
+      || (typeof fileFilter !== "undefined" && fileFilter)
+      || (typeof statusFilter !== "undefined" && statusFilter.size)
+      || (typeof layer !== "undefined" && layer));
+    fdot.hidden = !on;
+  };
+  placeFilters();
+  syncFilterDot();
+  if (narrow.addEventListener) narrow.addEventListener("change", placeFilters);
 
   syncChrome();
   syncReadout();
   chromeMeasure();
-  window.addEventListener("resize", () => { chromeMeasure(); syncReadout(); });
+  window.addEventListener("resize", () => {
+    placeFilters(); chromeMeasure(); syncReadout();
+  });
   if (window.ResizeObserver) new ResizeObserver(() => chromeMeasure()).observe(menubtn);
 })();
 """
@@ -6191,6 +6316,20 @@ def render_document(connectivity_map: ConnectivityMap, console=None, files=None,
         'route or element"><span id="qn" class="qn"></span></div>'
         # Kept because switchTo() writes to it; the nav above is what a reader touches.
         '<select id="vw" hidden></select>'
+        '</div></div>'
+        # A phone had three filter controls squeezed onto the glass beside the menu -
+        # 34vw each, a page path truncated to two words, and a function box too small to
+        # read what was typed into it. They move in here instead: one button next to the
+        # menu, and everything that narrows the map behind it. The controls are MOVED,
+        # not copied - two of a stateful select is how a filter comes to disagree with
+        # the map it filters.
+        '<div class="menuwrap filterwrap" id="filterwrap" hidden>'
+        '<button type="button" class="menubtn filterbtn" id="filterbtn" '
+        'aria-expanded="false" aria-label="Filter">'
+        '<span class="funnel" aria-hidden="true"></span><span>Filter</span>'
+        '<span class="fdot" id="fdot" hidden></span></button>'
+        '<div class="mapsheet" id="filtersheet">'
+        '<div id="filterbody"></div>'
         '</div></div>'
         # Choosing WHICH page you are looking at is the thing a reader does most often, and
         # it was two taps deep inside a dropdown. It sits on the glass, next to the view.

@@ -878,3 +878,73 @@ class AdapterLabelTests(SimpleTestCase):
     def test_an_adapter_with_no_language_is_still_named(self):
         out = map_html.render(_map(), adapters=[{"name": "rails", "confidence": 0.9}])
         self.assertIn("rails", out)
+
+
+class PhoneFilterButtonTests(SimpleTestCase):
+    """Reported from use: "on mobile the 3 filters are not looking good, super small".
+
+    They were. The page, section and function pickers shared the glass beside the menu at
+    34vw each: a page path truncated to two words, and a function box narrower than the
+    word "Function". On a phone they move behind one button next to the menu.
+    """
+
+    def test_there_is_a_filter_button_beside_the_menu(self):
+        out = map_html.render(_map())
+
+        self.assertIn('id="filterbtn"', out)
+        self.assertIn('id="filtersheet"', out)
+        # Next to the menu, in the same corner - not a second row of chrome.
+        self.assertLess(out.index('id="menubtn"'), out.index('id="filterbtn"'))
+        self.assertLess(out.index('id="filterbtn"'), out.index('id="pgwrap"'))
+
+    def test_the_controls_are_moved_and_never_copied(self):
+        out = map_html.render(_map())
+
+        # One <select> per filter, wherever it currently hangs. Two of a stateful control
+        # is two answers to "what is this map showing", which is the bug the sheet would
+        # otherwise introduce.
+        for control in ('id="pg"', 'id="sec"', 'id="fn"', 'id="cm"', 'id="ly"'):
+            self.assertEqual(out.count(control), 1, control)
+        self.assertIn("filterbody.appendChild(el)", out)
+
+    def test_the_sheet_opens_under_the_corner_not_off_the_side(self):
+        out = map_html.render(_map())
+
+        # `right:0` on a wrap that sits 90px from the left edge hangs the sheet off the
+        # left of the screen, which is what the first cut did.
+        self.assertIn(".filterwrap { position:static; }", out)
+        self.assertIn("#filtersheet { left:0; right:auto;", out)
+
+
+class NavigationLabelTests(SimpleTestCase):
+    def test_overview_and_map_carry_no_dash(self):
+        out = map_html.render(_map())
+
+        # A count column with nothing to count was rendering an em dash beside the two
+        # views that are not lists, so the menu read "Overview —" and "Map —".
+        self.assertNotIn('${v.count === null ? "—" : v.count}', out)
+        self.assertIn('${v.count === null ? "" : `<span class="c">${v.count}</span>`}', out)
+
+
+class SideBySideSectionTests(SimpleTestCase):
+    """Reported from use, filtering on one function: "the sections are below each other,
+    I am getting lost". Every kind started a fresh row, so a filtered page - four
+    headings of two cards each - was four screens of scrolling with the answer spread
+    down all of them."""
+
+    def test_a_kind_wraps_only_when_the_row_is_full(self):
+        out = map_html.render(_map())
+
+        # Kinds flow along the row and wrap when it is full. A lane - a whole store, or
+        # a whole language - still starts its own row: those are containers, not columns.
+        self.assertIn("if (x > 44 && x + need > 44 + rowWidth) {", out)
+        self.assertIn("const need = parked ? BIG_W", out)
+
+    def test_a_dragged_canvas_selects_nothing(self):
+        out = map_html.render(_map())
+
+        # Two halves of the same complaint: the browser's own text selection over the
+        # labels, and the hover highlight that a touch turns on and a pan never turns off.
+        self.assertIn("#cv, #cv * { user-select:none;", out)
+        self.assertIn('svg.classList.add("drag"); if (window.trace) trace(null);', out)
+        self.assertIn("if (isolate || moved || pinch) return;", out)

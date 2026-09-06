@@ -565,6 +565,11 @@ class DirectionAOnAPhone(MapRunsInABrowser):
                 menu: !!document.querySelector('#mapsheet'),
                 page: !!document.querySelector('.hud #pg'),
                 layer: !!document.querySelector('#mapsheet #ly'),
+                layerInFilters: !!document.querySelector('#filtersheet #ly'),
+                pickersInFilters: !!document.querySelector('#filtersheet #pg'),
+                // On the glass means a direct child of the corner - the sheets are
+                // inside that corner too, so `.hud #pg` cannot tell them apart.
+                pageOnGlass: !!document.querySelector('.hud > #pgwrap #pg'),
                 lenses: !!document.querySelector('#mapsheet #nav .nv'),
                 search: !!document.querySelector('#mapsheet #q'),
                 status: !!document.querySelector('.hud #colourkey'),
@@ -579,14 +584,28 @@ class DirectionAOnAPhone(MapRunsInABrowser):
         self.assertEqual(errors, [], f"the phone layout raised: {errors}")
         return state
 
-    def test_every_control_is_in_the_one_menu(self):
+    def test_every_control_is_behind_one_of_the_two_buttons(self):
+        """Superseded, and by a report: "on mobile the 3 filters are not looking good,
+        they are super small". They were - the page, section and function pickers shared
+        the glass beside the menu at 34vw each. On a phone the filters now sit behind a
+        Filter button next to the menu; the view list and the search stay in the menu."""
         state = self._open()
         self.assertTrue(state["menu"], "no menu was built")
-        for control in ("layer", "lenses", "search"):
+        for control in ("lenses", "search"):
             self.assertTrue(state[control], f"the {control} control is not in the menu")
-        # The two filters a reader reaches for most float over the canvas on their own.
-        self.assertTrue(state["page"], "the page picker must sit in a corner, not a menu")
+        self.assertTrue(state["layer"] or state["layerInFilters"],
+                        "the emphasis filter is behind neither button")
+        self.assertTrue(state["page"] or state["pickersInFilters"],
+                        "the page picker is behind neither button")
+        # Still the one filter a reader reaches for most, still on the glass.
         self.assertTrue(state["status"], "the colour key must float over the canvas")
+
+    def test_a_phone_puts_the_filters_behind_the_filter_button(self):
+        state = self._open()
+        self.assertTrue(state["layerInFilters"], "emphasis belongs in the filter sheet")
+        self.assertTrue(state["pickersInFilters"], "the pickers belong in the filter sheet")
+        self.assertFalse(state["pageOnGlass"],
+                         "nothing but the two buttons on the glass")
 
     def test_the_controls_are_moved_not_duplicated(self):
         """Two copies of the page select is two answers to which page is open."""
@@ -1683,7 +1702,11 @@ class TracingAWireTests(SimpleTestCase):
             page.on("pageerror", lambda e: errors.append(str(e)))
             page.goto(self._url(), wait_until="load")
             _open_lens(page, "map")
-            page.wait_for_selector("#cv .ed")
+            # `attached`, not the default `visible`: Playwright calls an element visible
+            # when it has a non-empty bounding box, and a wire between two cards on the
+            # same row is a horizontal line - width 38, height 0. A straight edge is a
+            # correct drawing, so waiting for it to have area waits forever.
+            page.wait_for_selector("#cv .ed", state="attached")
             page.wait_for_timeout(200)
             result = page.evaluate(script)
             browser.close()
@@ -2035,3 +2058,118 @@ class LanguageContainersTests(SimpleTestCase):
         named = " ".join(state["names"])
         self.assertIn("JavaScript", named)
         self.assertIn("TypeScript", named)
+
+
+class SectionsSideBySideTests(SimpleTestCase):
+    """Reported from use, filtering the reference project on one function: "the sections
+    are below each other, I am getting lost".
+
+    Every kind started a fresh row whatever its width, so a filtered page - four headings
+    of two cards each - came out as four screens of scrolling with the answer spread down
+    all of them. They flow along the row now and wrap when it is full.
+
+    And the same session: "when moving the canvas with my fingers it is selecting as long
+    as I am moving". Two halves - the browser's own text selection over the labels, and
+    the hover highlight, which a touch turns on with the pointerdown and a pan never turns
+    off, because hit-testing is disabled for the duration of the drag.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        try:
+            from playwright.sync_api import sync_playwright  # noqa: F401
+        except ImportError:
+            raise unittest.SkipTest("playwright is not installed (the observe extra)") from None
+
+    def _url(self) -> str:
+        from seamcheck.graph import Edge, Graph, Status, Symbol
+        from seamcheck.mapdata import build_map
+        from seamcheck.renderers.map_html import render_document
+
+        def symbol(kind, label, file):
+            return Symbol(id=f"{kind}:{label}", kind=kind, label=label, sub="", file=file,
+                          line=1, status=Status.CONNECTED, snippet=label, chain=[label],
+                          note="")
+
+        # Four kinds of one band, two cards each: the shape of a page filtered to one
+        # function, and the shape that used to cost four rows and four screens.
+        symbols = [
+            symbol("url", "api/orders/", "app/urls.py"),
+            symbol("url", "api/carts/", "app/urls.py"),
+            symbol("view", "orders", "app/views.py"),
+            symbol("view", "carts", "app/views.py"),
+            symbol("signal_receiver", "on_paid", "app/signals.py"),
+            symbol("signal_receiver", "on_shipped", "app/signals.py"),
+            symbol("management_command", "reindex", "app/commands.py"),
+            symbol("management_command", "backfill", "app/commands.py"),
+        ]
+        graph = Graph(symbols=symbols,
+                      edges=[Edge(from_id="url:api/orders/", to_id="view:orders",
+                                  status=Status.CONNECTED)])
+        pages = {"orders-main": {s.id for s in symbols}}
+        document = render_document(build_map(graph, pages, git_sha="0" * 12),
+                                   console=_console_for(graph))
+        path = pathlib.Path(tempfile.mkdtemp()) / "map.html"
+        path.write_text(document.single_file(), encoding="utf-8")
+        return path.as_uri()
+
+    def _on_map(self, script: str, before=None):
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch()
+            except Exception as error:  # pragma: no cover - no browser downloaded
+                raise unittest.SkipTest(f"no chromium: {error}") from None
+            # Wide and short on purpose. The layout picks the shape that fits the
+            # canvas best, so a square viewport can legitimately prefer a tall column;
+            # what must never happen is four narrow kinds costing four rows on a screen
+            # with room for them side by side.
+            page = browser.new_page(has_touch=True,
+                                    viewport={"width": 1600, "height": 420})
+            errors: list[str] = []
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.goto(self._url(), wait_until="load")
+            _open_lens(page, "map")
+            page.wait_for_selector("#cv .nd", state="attached")
+            page.wait_for_timeout(200)
+            if before:
+                before(page)
+            result = page.evaluate(script)
+            browser.close()
+        self.assertEqual(errors, [], "the canvas must not throw")
+        return result
+
+    def test_two_kinds_share_a_row(self):
+        tops = self._on_map("""() => [...document.querySelectorAll('#cv .col')]
+            .map(t => Math.round(Number(t.getAttribute('y'))))""")
+        self.assertGreaterEqual(len(tops), 4, "the page must draw four kind headings")
+        # Not one row necessarily - the layout still picks the shape that fits the
+        # viewport best - but four narrow kinds must never cost four rows.
+        self.assertLess(len(set(tops)), len(tops),
+                        f"every kind still started its own row: {tops}")
+
+    def test_dragging_the_canvas_leaves_nothing_highlighted(self):
+        def drag(page):
+            card = page.query_selector("#cv .nd")
+            box = card.bounding_box()
+            x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+            page.mouse.move(x, y)
+            page.mouse.down()
+            for step in range(1, 9):
+                page.mouse.move(x - step * 18, y + step * 9)
+            page.mouse.up()
+
+        state = self._on_map("""() => ({
+            tracing: document.getElementById('cv').classList.contains('tracing'),
+            hot: document.querySelectorAll('#cv .hot').length,
+            lit: typeof lit !== 'undefined' && lit ? 1 : 0,
+            selected: String(window.getSelection()).trim().length,
+            select: getComputedStyle(document.getElementById('cv')).userSelect,
+        })""", before=drag)
+        self.assertFalse(state["tracing"], "a pan is not a hover")
+        self.assertEqual(state["hot"], 0)
+        self.assertEqual(state["lit"], 0, "a pan must not select the card it started on")
+        self.assertEqual(state["selected"], 0, "the labels are not text to select")
+        self.assertEqual(state["select"], "none")
