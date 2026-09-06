@@ -681,7 +681,7 @@ def _swept_lists(tree: ast.AST, owners: dict[int, str]) -> dict[tuple[str, str],
                 # ...and the same list, one hop later: `names = [k for k in keys]`.
                 over = _comprehended(
                     unwrap(node.value),
-                    lambda one: (found.get((where, one.id), [""])[0]
+                    lambda one, where=where: (found.get((where, one.id), [""])[0]
                                  if isinstance(one, ast.Name) else ""))
                 for target in node.targets:
                     if over and isinstance(target, ast.Name):
