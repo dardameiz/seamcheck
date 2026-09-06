@@ -9,6 +9,7 @@ import os
 import pathlib
 
 from seamcheck.diff import DiffResult, diff_graphs
+from seamcheck.exitcodes import NO_BASELINE
 from seamcheck.extractors.preprocessor_extractor import preprocessor_files
 from seamcheck.graph import Graph, Status, relativise
 from seamcheck.nodetools import report as _notify
@@ -378,7 +379,10 @@ def diff_against(graph: Graph, ref: str, repo_root: str = ".") -> tuple[DiffResu
 
     baseline = load_snapshot(sha, repo_root)
     if baseline is None:
-        return None, sha, f"No baseline snapshot stored for {sha[:12]} yet - nothing to diff against."
+        # The NO_BASELINE prefix is load-bearing: gate_code() reads it to tell "nothing to
+        # compare against" (exit 2, first run) apart from "found something wrong" (exit 1).
+        # Do not reword it without updating seamcheck/exitcodes.py and its tests.
+        return None, sha, f"{NO_BASELINE} for {sha[:12]} yet - nothing to diff against."
     return diff_graphs(baseline, graph, load_triage(repo_root)), sha, ""
 
 

@@ -4,11 +4,13 @@
 non-Django path returned 0 for every project that ever had a finding. Reproduced on redash:
 47 unresolved, 53 unused, exit 0.
 """
+import subprocess
+import tempfile
 from unittest import mock
 
 from django.test import SimpleTestCase
 
-from seamcheck import cli
+from seamcheck import api, cli, exitcodes
 
 
 class NonDjangoGateTests(SimpleTestCase):
@@ -54,3 +56,30 @@ class BaselineExitCodeTests(SimpleTestCase):
             code = cli._run_without_django(["--check"], verbose=False)
 
         self.assertEqual(code, 2, "no baseline is not the same answer as a regression")
+
+    def test_real_api_message_uses_the_constant(self):
+        """The NO_BASELINE prefix is load-bearing: gate_code reads it. If it drifts from
+        exitcodes.NO_BASELINE, CI silently misclassifies first runs as regressions.
+        This test exercises the real api.diff_against to catch the drift."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Initialize a git repo with one commit
+            subprocess.run(["git", "init"], cwd=tmpdir, check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"],
+                          cwd=tmpdir, check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Test User"],
+                          cwd=tmpdir, check=True, capture_output=True)
+            subprocess.run(["touch", "file.txt"], cwd=tmpdir, check=True, capture_output=True)
+            subprocess.run(["git", "add", "."], cwd=tmpdir, check=True, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "initial"], cwd=tmpdir, check=True,
+                          capture_output=True)
+
+            # Create a minimal graph (api.diff_against needs it)
+            from seamcheck.graph import Graph
+            graph = Graph(symbols={}, edges=[])
+
+            # Call the real diff_against with no snapshot stored
+            result, sha, message = api.diff_against(graph, "HEAD", tmpdir)
+
+            # The message must start with the constant
+            self.assertTrue(message.startswith(exitcodes.NO_BASELINE),
+                           f"Message '{message}' does not start with constant '{exitcodes.NO_BASELINE}'")
