@@ -17,6 +17,30 @@ Coverage and precision have **different denominators** and neither is meaningful
 backend that answered `uncertain` everywhere would score 100% precision and be useless.
 `uncertain` is not counted as a claim in precision, because it is not a claim.
 
+## Unreleased
+
+### A test that names a key nothing writes is defending dead code
+
+Removing a dead invalidation from the reference project broke exactly one test, and for
+the wrong reason: it asserted that `delete` had been **called** on a key with no writer,
+rather than that the cache had been **invalidated**. It watched the call, not the effect —
+so it passed for as long as the dead code stood and failed the moment the dead code went,
+which is the one change it should have welcomed.
+
+- **Added** — `redis_dead_assertion`, *"Tests holding a dead key in place"*: a key the
+  product names, with no writer anywhere in the product, spelled out in a test. This is
+  where false confidence is stored, and it is also **why** a delete-only key survives so
+  long — the suite is actively holding it in place. The suite is read separately from the
+  product and never as evidence about it; a test file that lives in the app
+  (`views/test_auth.py`, `conftest.py`) counts by its name, wherever it sits.
+- **Not done, deliberately** — the other half: a test naming a key no product code touches
+  at all. In free text the colon convention identifies nothing — `width: 44px`,
+  `xl:inline`, a regex and a Django tag are all "keys" by that rule, and asking the
+  reference project produced 60 of exactly that. A key has to have been named at a Redis
+  call site before a test can be wrong about it.
+
+Reference project: 28 of them, 20 in one harness reset block.
+
 ## 0.11.0 — 2026-09-05
 
 Measured: coverage 89% across 47 projects and 358,845 symbols (Flask 93%, Django 91%,
