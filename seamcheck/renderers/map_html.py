@@ -2493,9 +2493,20 @@ function place(buckets, used, perRow) {
   let y = 12, width = 0;
 
   [...groups.keys()].sort((m, n) => m - n).forEach(at => {
-    let x = 44, rowTop = y + BAND_TOP, tallest = 0;
     const bandLangs = new Set();
     const bandDef = BANDS[at];
+    // Lanes sit SIDE BY SIDE inside their band. A band is one container and the things
+    // in it - two stores, two languages - are alternatives rather than a sequence:
+    // stacked, a reader scrolls past the whole of Postgres to find out whether Redis is
+    // even on this page. Reported that way: "different languages and databases should be
+    // next to each other in one container rather than under each other."
+    const laneTop = y + BAND_TOP;
+    let laneX = 44, bandBottom = laneTop;
+    let left = 44, x = 44, rowTop = laneTop, tallest = 0, budget = rowWidth;
+    // The furthest right this lane's cards actually reached. `x` is where the NEXT card
+    // would go, which after a wrap is back at the left margin - measuring the lane by it
+    // put the next lane on top of this one's widest row.
+    let runRight = 44;
     // A band with lanes orders its columns by store and heads each run with the store's
     // name and its oracle badge. Everything else keeps the flat kind order.
     let ordered = groups.get(at);
@@ -2522,31 +2533,13 @@ function place(buckets, used, perRow) {
       // A section still owns its heading, because the heading is placed at the x this
       // section starts at; what changes is only whether that x is the left margin.
       const parked = SEGMENTED_KINDS.has(kind) || items.length > AGGREGATE_OVER;
+      const across = Math.max(1, Math.min(perRow, Math.floor(budget / (CARD_W + GAP_X))));
       const need = parked ? BIG_W
-                          : Math.min(items.length, perRow) * (CARD_W + GAP_X) - GAP_X;
-      if (x > 44 && x + need > 44 + rowWidth) {
-        x = 44; rowTop += tallest + GAP_Y + KIND_GAP; tallest = 0;
-      } else if (x > 44) {
+                          : Math.min(items.length, across) * (CARD_W + GAP_X) - GAP_X;
+      if (x > left && x + KIND_GAP + need > left + budget) {
+        x = left; rowTop += tallest + GAP_Y + KIND_GAP; tallest = 0;
+      } else if (x > left) {
         x += KIND_GAP;
-      }
-      if (laneOf && laneOf.get(c) !== lastLane) {
-        lastLane = laneOf.get(c);
-        const lane = bandDef.lanes[lastLane];
-        if (lane) {
-          // Does this scan hold an oracle for this store? Only true if it actually found
-          // declarations - a Supabase project with no migrations checked in has the same
-          // lane and cannot verify a single name in it.
-          const hasOracle = lane.declared.some(k => {
-            const idx = ORDER.get(k);
-            return idx !== undefined && buckets.has(idx) && buckets.get(idx).length;
-          });
-          rowTop += rowTop > y + BAND_TOP ? LANE_GAP : LANE_FIRST_DROP;
-          lanes.push({x: 44, y: rowTop - 30, name: lane.name, id: lane.id,
-                      oracle: hasOracle,
-                      badge: hasOracle ? "SCHEMA IN REPO"
-                                       : "NO SCHEMA \u00b7 PAIRING ONLY"});
-          rowTop += LANE_HEAD;
-        }
       }
       columns.push({x, y: rowTop - 9, kind, label, count: items.length});
       // Which languages this band actually contains. A reader zoomed out wants to know
@@ -2562,7 +2555,9 @@ function place(buckets, used, perRow) {
       const park = (key, name, parked, isOpen) => {
         // One card per kind never reached the edge; one per namespace does, so the
         // parked cards wrap at the same width the small ones do.
-        if (x > 44 && x + BIG_W > 44 + rowWidth) { x = 44; rowTop += tallest + GAP_Y; tallest = 0; }
+        if (x > left && x + BIG_W > left + budget) {
+          x = left; rowTop += tallest + GAP_Y; tallest = 0;
+        }
         const worst = ["unresolved", "unused", "uncertain", "connected"]
           .find(st => parked.some(n => n.status === st)) || "connected";
         const open = parked.filter(n => n.status === "unresolved" || n.status === "unused").length;
@@ -2575,6 +2570,7 @@ function place(buckets, used, perRow) {
           parked.forEach(n => pos.set(n.id, {x, y: rowTop, w: BIG_W, h: BIG_H, agg: true}));
         }
         x += BIG_W + GAP_X;
+        runRight = Math.max(runRight, x);
         tallest = Math.max(tallest, BIG_H);
       };
       const segmented = SEGMENTED_KINDS.has(kind) && items.length > AGGREGATE_OVER;
@@ -2606,7 +2602,7 @@ function place(buckets, used, perRow) {
         });
         if (!opened.length) return;
         opened.forEach(([key, name, parked]) => {
-          if (x > 44) { x = 44; rowTop += tallest + GAP_Y; tallest = 0; }
+          if (x > left) { x = left; rowTop += tallest + GAP_Y; tallest = 0; }
           // A card that says "open - tap to close". Without it an opened group has no
           // card at all, and the only way to close it was to open a different one.
           park(key, name, parked, true);
@@ -2635,12 +2631,24 @@ function place(buckets, used, perRow) {
         shown = items.slice(from, from + EXPAND_PAGE);
         rest = items.slice(0, from).concat(items.slice(from + EXPAND_PAGE));
       }
+      // Related things end up UNDER each other, not scattered across a grid. Reported
+      // that way: "there are so many JS frontend and backend, organise it so things that
+      // belong to each other are under each other rather than all together." Two halves:
+      // the cards are sorted, so `/api/announcement-…` and its four siblings are
+      // neighbours at all; and they are filled COLUMN-first, so neighbours are stacked in
+      // one column instead of being torn apart by the row wrap.
+      shown = [...shown].sort((a, b) =>
+        String(a.label || "").localeCompare(String(b.label || ""), undefined,
+                                            {numeric: true}));
+      const across = Math.max(1, Math.min(perRow, Math.floor(budget / (CARD_W + GAP_X))));
+      const cols = Math.min(across, shown.length);
+      const down = Math.ceil(shown.length / Math.max(cols, 1));
       shown.forEach((n, i) => {
-        const col = i % perRow, row = Math.floor(i / perRow);
+        const col = Math.floor(i / down), row = i % down;
         pos.set(n.id, {x: x + col * (CARD_W + GAP_X),
                        y: rowTop + row * (CARD_H + GAP_Y), w: CARD_W, h: CARD_H});
       });
-      let rows = Math.ceil(shown.length / perRow);
+      let rows = down;
       if (rest.length) {
         const my = rowTop + rows * (CARD_H + GAP_Y);
         aggregates.push({kind, key: openKey, label: openKey, x, y: my, w: BIG_W, h: BIG_H,
@@ -2653,7 +2661,8 @@ function place(buckets, used, perRow) {
       } else {
         tallest = Math.max(tallest, rows * (CARD_H + GAP_Y) - GAP_Y);
       }
-      x += Math.min(shown.length, perRow) * (CARD_W + GAP_X);
+      x += Math.min(shown.length, across) * (CARD_W + GAP_X);
+      runRight = Math.max(runRight, x);
       width = Math.max(width, x);
     };
 
@@ -2672,50 +2681,93 @@ function place(buckets, used, perRow) {
     const bandLangList = [...new Set(
       ordered.flatMap(c => (buckets.get(c) || []).map(langOf)))].filter(Boolean).sort();
 
-    if (!laneOf && bandServices.length <= 1 && bandLangList.length > 1) {
-      const runs = [...bandLangList, ""];
-      runs.forEach(lang => {
-        const slice = new Map(ordered.map(c =>
-          [c, (buckets.get(c) || []).filter(n => langOf(n) === lang)]));
-        if (![...slice.values()].some(v => v.length)) return;
-        if (x > 44) { x = 44; rowTop += tallest + GAP_Y + KIND_GAP; tallest = 0; }
-        rowTop += rowTop > y + BAND_TOP ? LANG_GAP : LANE_FIRST_DROP + 12;
-        const lane = {x: 44, y: rowTop - 30, id: lang || "unknown",
-                      name: lang || "no file to read a language from",
-                      colour: lang ? langColour(lang) : LANG_FALLBACK,
-                      box: true, top: rowTop - 46, oracle: true, badge: ""};
-        lanes.push(lane);
-        rowTop += LANE_HEAD;
-        ordered.forEach(c => layoutColumn(c, slice.get(c)));
-        // The box is drawn round what was just laid out, so its bottom is only known
-        // now. A heading over a run of cards is not the same thing as a container: the
-        // ask was for the band's own border, one level in.
-        lane.bottom = rowTop + tallest + 14;
+    // The runs this band is divided into, whatever divides it: a store, a deployable, a
+    // language. One list, one loop - three copies of "start a lane" was three places for
+    // the geometry to disagree.
+    let runs = [];
+    if (laneOf) {
+      bandDef.lanes.forEach((lane, i) => {
+        const cols = ordered.filter(c => laneOf.get(c) === i);
+        if (!cols.some(c => (buckets.get(c) || []).length)) return;
+        // Does this scan hold an oracle for this store? Only true if it actually found
+        // declarations - a Supabase project with no migrations checked in has the same
+        // lane and cannot verify a single name in it.
+        const hasOracle = lane.declared.some(k => {
+          const idx = ORDER.get(k);
+          return idx !== undefined && buckets.has(idx) && buckets.get(idx).length;
+        });
+        runs.push({name: lane.name, id: lane.id, oracle: hasOracle,
+                   badge: hasOracle ? "SCHEMA IN REPO" : "NO SCHEMA \u00b7 PAIRING ONLY",
+                   drop: LANE_FIRST_DROP,
+                   slice: new Map(cols.map(c => [c, buckets.get(c) || []]))});
       });
-    } else if (!laneOf && bandServices.length > 1) {
+      const rest = ordered.filter(c => laneOf.get(c) < 0);
+      if (rest.some(c => (buckets.get(c) || []).length)) {
+        runs.push({name: "", drop: 0,
+                   slice: new Map(rest.map(c => [c, buckets.get(c) || []]))});
+      }
+    } else if (bandServices.length > 1) {
       // A lane per service, in name order, with anything unattributed last so it is
       // visibly the remainder rather than silently folded into a real service.
-      const runs = [...bandServices, ""];
-      runs.forEach(svc => {
+      [...bandServices, ""].forEach(svc => {
         const slice = new Map(ordered.map(c =>
           [c, (buckets.get(c) || []).filter(n => svcOf(n) === svc)]));
         if (![...slice.values()].some(v => v.length)) return;
-        if (x > 44) { x = 44; rowTop += tallest + GAP_Y + KIND_GAP; tallest = 0; }
-        rowTop += rowTop > y + BAND_TOP ? LANE_GAP : LANE_FIRST_DROP;
         const langs = [...new Set([...slice.values()].flat()
           .map(n => n.lang).filter(Boolean))].sort();
-        lanes.push({x: 44, y: rowTop - 30, id: svc || "unattributed",
-                    name: (svc || "not in any service")
-                          + (langs.length ? "  \u00b7  " + langs.join(", ") : ""),
-                    oracle: true, badge: svc ? "SERVICE" : ""});
-        rowTop += LANE_HEAD;
-        ordered.forEach(c => layoutColumn(c, slice.get(c)));
+        runs.push({id: svc || "unattributed",
+                   name: (svc || "not in any service")
+                         + (langs.length ? "  \u00b7  " + langs.join(", ") : ""),
+                   oracle: true, badge: svc ? "SERVICE" : "", drop: LANE_FIRST_DROP,
+                   slice});
       });
-    } else {
-      ordered.forEach(c => layoutColumn(c, buckets.get(c)));
+    } else if (bandLangList.length > 1) {
+      [...bandLangList, ""].forEach(lang => {
+        const slice = new Map(ordered.map(c =>
+          [c, (buckets.get(c) || []).filter(n => langOf(n) === lang)]));
+        if (![...slice.values()].some(v => v.length)) return;
+        runs.push({id: lang || "unknown",
+                   name: lang || "no file to read a language from",
+                   colour: lang ? langColour(lang) : LANG_FALLBACK,
+                   box: true, oracle: true, badge: "", drop: LANE_FIRST_DROP + 12,
+                   slice});
+      });
     }
-    width = Math.max(width, x, rowWidth + 44);
-    const h = BAND_TOP + (rowTop - (y + BAND_TOP)) + tallest + BAND_BOT;
+    if (!runs.length) {
+      runs = [{name: "", drop: 0,
+               slice: new Map(ordered.map(c => [c, buckets.get(c) || []]))}];
+    }
+
+    // Side by side, each with its share of the row. A lane whose content is wider than
+    // its share simply wraps inside it - what it must not do is start below the last one.
+    const gapX = runs.length > 1 ? LANG_GAP : 0;
+    const share = runs.length > 1
+      ? Math.max(CARD_W + GAP_X,
+                 Math.floor((rowWidth - (runs.length - 1) * gapX) / runs.length))
+      : rowWidth;
+    runs.forEach(run => {
+      left = laneX; x = left; tallest = 0; budget = share; runRight = left;
+      rowTop = laneTop + (run.drop || 0);
+      let lane = null;
+      if (run.name) {
+        lane = {x: left, y: rowTop - 30, id: run.id, name: run.name,
+                colour: run.colour, box: run.box, top: rowTop - 46,
+                left: left, oracle: run.oracle, badge: run.badge};
+        lanes.push(lane);
+        rowTop += LANE_HEAD;
+      }
+      [...run.slice.keys()].forEach(c => layoutColumn(c, run.slice.get(c)));
+      const right = Math.max(runRight, x, left + Math.min(share, CARD_W));
+      if (lane) {
+        lane.bottom = rowTop + tallest + 14;
+        lane.w = Math.max(right - left + 28, 200);
+      }
+      bandBottom = Math.max(bandBottom, rowTop + tallest);
+      laneX = right + gapX;
+      width = Math.max(width, right);
+    });
+    width = Math.max(width, laneX, rowWidth + 44);
+    const h = BAND_TOP + (bandBottom - laneTop) + BAND_BOT;
     const band = BANDS[at] || {id: "other", label: "EVERYTHING ELSE THE SCAN FOUND",
                                short: "EVERYTHING ELSE"};
     bands.push({id: band.id, label: band.label, short: band.short || band.label,
@@ -3579,8 +3631,9 @@ function draw() {
     // one says "and this part of it is Python". Drawn behind its cards, in the language's
     // own colour, so the boundary is visible before a single label is read.
     const box = L.box
-      ? `<rect class="langbox" x="30" y="${L.top}" rx="14"
-               width="${Math.max((bandWidth || 300) - 8, 200)}"
+      ? `<rect class="langbox" x="${L.left !== undefined ? L.left - 14 : 30}"
+               y="${L.top}" rx="14"
+               width="${L.w || Math.max((bandWidth || 300) - 8, 200)}"
                height="${Math.max((L.bottom || L.top) - L.top, 44)}"
                fill="none" stroke="${L.colour || "var(--line-2)"}"/>`
       : "";
@@ -5907,15 +5960,22 @@ def _payload(connectivity_map: ConnectivityMap) -> tuple[str, list[Chunk], dict[
 
     def _row(node):
         # Trailing empties are dropped, not sent as "": most nodes carry no language or
-        # service, and a bucket carries no file.
+        # service, and a bucket carries no file. Empty is judged by the VALUE, never by
+        # the index it was interned at: the first language a table meets is index 0, and
+        # `not row[-1]` read every node in that language as having none - so the map drew
+        # one language lane where there were two, and the one it lost was whichever had
+        # the most files.
         row = [
             node.id, node.label, kinds(node.kind), statuses(node.status),
             files(node.file or ""), node.line,
             langs(node.lang or ""), services(node.service or ""),
             owners(node.owner or ""),
         ]
-        while len(row) > 4 and not row[-1]:
+        blank = [False, False, False, False, not node.file, not node.line,
+                 not node.lang, not node.service, not node.owner]
+        while len(row) > 4 and blank[-1]:
             row.pop()
+            blank.pop()
         return row
 
     # (name, title, where, layer, nodes, edges, group, union): a page is an entry - the

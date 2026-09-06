@@ -137,6 +137,55 @@ class MapRenderTests(SimpleTestCase):
         self.assertIn('"url:x": "added"', out.replace('"url:x":"added"', '"url:x": "added"'))
 
 
+class RowPackingTests(SimpleTestCase):
+    """A node's language, service and owner ride as indices into string tables, and the
+    trailing empties of a row are dropped to keep the payload small.
+    """
+
+    def _rows_and_langs(self, nodes):
+        import json
+
+        # The nodes BEFORE the page node, so the first string each table interns is a
+        # real one and lands at index 0 - the unreached pages list their symbols that way.
+        page = PageMap("home", [*nodes, MapNode("page:home", "home", "page", "connected")],
+                       [MapEdge("page:home", n.id, "connected") for n in nodes])
+        meta, chunks, _ = map_html._payload(_map(pages=[page]))
+        langs = json.loads(meta)["langs"]
+        rows = {}
+        for name, enc, text in chunks:
+            if name.startswith("p") and enc == "json":
+                for row in json.loads(text)["nodes"]:
+                    rows[row[0]] = row
+        return rows, langs
+
+    def test_the_first_language_the_table_met_is_not_dropped_as_empty(self):
+        # The first value interned is index 0, and "drop trailing empties" once tested
+        # `not row[-1]` - so every node in whichever language came first, with no service
+        # and no owner after it, lost its language on the way to the page. The map then
+        # drew one language lane where there were two, and the missing one was always
+        # the one with the most files.
+        rows, langs = self._rows_and_langs([
+            MapNode("module:a.js", "a.js", "module", "connected", file="a.js", line=1,
+                    lang="JavaScript"),
+            MapNode("dom_selector:x", "x", "dom_selector", "connected", file="p.html",
+                    line=1, lang="Template"),
+        ])
+        at = map_html._NODE_FIELDS.index("lang")
+
+        for node_id, want in (("module:a.js", "JavaScript"), ("dom_selector:x", "Template")):
+            row = rows[node_id]
+            self.assertGreater(len(row), at, f"{node_id} lost its language: {row}")
+            self.assertEqual(langs[row[at]], want, f"{node_id}: {row} against {langs}")
+
+    def test_a_row_with_nothing_optional_is_still_trimmed(self):
+        rows, _ = self._rows_and_langs([
+            MapNode("url:x", "/x/", "url", "connected", file="v.py", line=3),
+        ])
+
+        self.assertEqual(len(rows["url:x"]), map_html._NODE_FIELDS.index("lang"),
+                         "no language, no service, no owner: nothing to send")
+
+
 class TouchTests(SimpleTestCase):
     """A phone was left with no pan, no zoom, and an 8px tap target."""
 
@@ -937,7 +986,7 @@ class SideBySideSectionTests(SimpleTestCase):
 
         # Kinds flow along the row and wrap when it is full. A lane - a whole store, or
         # a whole language - still starts its own row: those are containers, not columns.
-        self.assertIn("if (x > 44 && x + need > 44 + rowWidth) {", out)
+        self.assertIn("if (x > left && x + KIND_GAP + need > left + budget) {", out)
         self.assertIn("const need = parked ? BIG_W", out)
 
     def test_a_dragged_canvas_selects_nothing(self):

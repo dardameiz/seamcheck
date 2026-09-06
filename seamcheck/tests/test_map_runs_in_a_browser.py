@@ -2173,3 +2173,112 @@ class SectionsSideBySideTests(SimpleTestCase):
         self.assertEqual(state["lit"], 0, "a pan must not select the card it started on")
         self.assertEqual(state["selected"], 0, "the labels are not text to select")
         self.assertEqual(state["select"], "none")
+
+
+class LanesSideBySideTests(SimpleTestCase):
+    """Reported from use: "different languages and databases should be next to each other
+    in one container, rather than under each other."
+
+    A band is one container and the things inside it are alternatives - JavaScript or
+    Template, Postgres or Redis. Stacked, a reader scrolls past the whole of one to find
+    out whether the other is even on this page.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        try:
+            from playwright.sync_api import sync_playwright  # noqa: F401
+        except ImportError:
+            raise unittest.SkipTest("playwright is not installed (the observe extra)") from None
+
+    def _url(self) -> str:
+        from seamcheck.graph import Graph, Status, Symbol
+        from seamcheck.mapdata import build_map
+        from seamcheck.renderers.map_html import render_document
+
+        def symbol(kind, label, file):
+            return Symbol(id=f"{kind}:{label}", kind=kind, label=label, sub="", file=file,
+                          line=1, status=Status.CONNECTED, snippet=label, chain=[label],
+                          note="")
+
+        # One band, two languages, and inside each one a kind whose cards are named so
+        # that the alphabet says which belong together.
+        symbols = [
+            symbol("module", "cart.js", "static/js/cart.js"),
+            symbol("module", "orders.js", "static/js/orders.js"),
+            symbol("module", "search.js", "static/js/search.js"),
+            symbol("dom_selector", "cart-total", "templates/page.html"),
+            symbol("dom_selector", "cart-count", "templates/page.html"),
+            symbol("dom_selector", "order-total", "templates/page.html"),
+        ]
+        graph = Graph(symbols=symbols, edges=[])
+        pages = {"orders-main": {s.id for s in symbols}}
+        document = render_document(build_map(graph, pages, git_sha="0" * 12),
+                                   console=_console_for(graph))
+        path = pathlib.Path(tempfile.mkdtemp()) / "map.html"
+        path.write_text(document.single_file(), encoding="utf-8")
+        return path.as_uri()
+
+    def _on_map(self, script: str):
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch()
+            except Exception as error:  # pragma: no cover - no browser downloaded
+                raise unittest.SkipTest(f"no chromium: {error}") from None
+            page = browser.new_page(viewport={"width": 1600, "height": 500})
+            errors: list[str] = []
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.goto(self._url(), wait_until="load")
+            _open_lens(page, "map")
+            page.wait_for_selector("#cv .nd", state="attached")
+            page.wait_for_timeout(200)
+            result = page.evaluate(script)
+            browser.close()
+        self.assertEqual(errors, [], "the canvas must not throw")
+        return result
+
+    def test_two_containers_stand_beside_each_other(self):
+        lanes = self._on_map("""() => [...document.querySelectorAll('#cv .lanename')]
+            .map(t => ({name: t.textContent,
+                        x: Math.round(Number(t.getAttribute('x'))),
+                        y: Math.round(Number(t.getAttribute('y')))}))""")
+        self.assertGreaterEqual(len(lanes), 2, f"two languages, two containers: {lanes}")
+        self.assertEqual(len({lane["y"] for lane in lanes}), 1,
+                         f"the containers must start on one line: {lanes}")
+        self.assertEqual(len({lane["x"] for lane in lanes}), len(lanes),
+                         f"each container needs its own column: {lanes}")
+
+    def test_a_container_is_only_as_wide_as_what_is_in_it(self):
+        boxes = self._on_map("""() => [...document.querySelectorAll('#cv .langbox')]
+            .map(b => ({x: Math.round(Number(b.getAttribute('x'))),
+                        w: Math.round(Number(b.getAttribute('width')))}))""")
+        self.assertGreaterEqual(len(boxes), 2)
+        boxes.sort(key=lambda b: b["x"])
+        for near, far in zip(boxes, boxes[1:], strict=False):
+            self.assertLessEqual(near["x"] + near["w"], far["x"] + 1,
+                                 f"the containers overlap: {boxes}")
+
+    def test_neighbours_in_the_alphabet_are_neighbours_on_the_canvas(self):
+        """"Organise it so things that belong to each other are under each other."
+
+        Two halves: the cards are sorted, so `cart.js` and `orders.js` are neighbours at
+        all, and they are filled column-first, so the row wrap cannot tear a family apart.
+        """
+        cards = self._on_map("""() => [...document.querySelectorAll('#cv .nd[data-id]')]
+            .filter(g => g.dataset.id.startsWith('module:'))
+            .map(g => {
+              const r = g.querySelector('rect');
+              return {id: g.dataset.id,
+                      x: Math.round(Number(r.getAttribute('x'))),
+                      y: Math.round(Number(r.getAttribute('y')))};
+            })""")
+        self.assertEqual(len(cards), 3, cards)
+        column = [c for c in cards if c["id"] in ("module:cart.js", "module:orders.js")]
+        self.assertEqual(len({c["x"] for c in column}), 1,
+                         f"cart.js and orders.js belong in one column: {cards}")
+        near, far = sorted(column, key=lambda c: c["y"])
+        self.assertLess(far["y"] - near["y"], 70,
+                        f"and directly under each other: {cards}")

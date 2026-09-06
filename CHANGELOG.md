@@ -19,6 +19,34 @@ backend that answered `uncertain` everywhere would score 100% precision and be u
 
 ## Unreleased
 
+### Two languages in a band stand beside each other, not one under the other
+
+Reported from a phone: *"different languages and databases should be next to each other
+in one container, rather than under each other"* — and, of the browser band, *"there are
+so many JS frontend and backend, organise it so things that belong to each other are
+under each other rather than all together."*
+
+- **Changed** — a band's lanes (Postgres beside Redis in the store; JavaScript beside
+  Template in the browser; one deployable beside the next) now share the row, each with
+  its slice of the width, and a lane wider than its slice wraps inside it. Stacked, a
+  reader scrolled past the whole of Postgres to learn whether Redis was on the page at
+  all. Three copies of "start a lane" — one per thing that divides a band — became one
+  list of runs and one loop, so the geometry cannot disagree with itself.
+- **Changed** — the cards of a kind are sorted by name and filled **column-first**, so
+  `/api/announcement-…` and its four siblings sit in one column under each other
+  instead of being torn across a row wrap.
+- **Fixed** — the map drew one language lane where a project had two, and the missing
+  one was always the language with the most files. Every node's language rides as an
+  index into a string table, and a row's trailing empties are dropped to keep the payload
+  small; "empty" was tested as `not row[-1]`, which is also true of index **0** — the
+  first language the table met. Any page listing that language's files first (the
+  unreached pages do) lost it from every row with no service and no owner after it.
+  Empty is now judged by the value, never by the index.
+- **Seen, not done** — a page past the 2,000-card cap draws its first 2,000 rows and says
+  so, and on the reference project's 7,729-node unreached bucket those rows are all one
+  kind: the store band there shows one parked "selects column" card and no Redis lane,
+  though Redis is on the page. The cap should sample across kinds, not take the head.
+
 ### A test that names a key nothing writes is defending dead code
 
 Removing a dead invalidation from the reference project broke exactly one test, and for
