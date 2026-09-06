@@ -446,8 +446,11 @@ class Command(BaseCommand):
             if item["symbol_id"] not in came_back:
                 self.stdout.write(f"mark outlived its finding: {item['symbol_id']} - {item['note']}")
         self.stdout.write(f"counts: {outcome['counts']}")
-        if not outcome["passed"]:
-            raise SystemExit(1)
+        from seamcheck.exitcodes import EXIT_CLEAN, gate_code
+
+        code = gate_code(outcome)
+        if code != EXIT_CLEAN:
+            raise SystemExit(code)
 
     def _report(self, result):
         for symbol in result.new_unresolved:

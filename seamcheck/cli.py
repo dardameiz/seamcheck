@@ -569,9 +569,10 @@ def _run_without_django(arguments, verbose: bool) -> int:
             # The CI gate. `passed` is the key api.check() actually returns; this asked for
             # `findings`, which it never had, so every non-Django project passed no matter
             # what was in it - measured on redash: 47 unresolved, exit 0.
+            from seamcheck.exitcodes import gate_code
             result = api.check(repo_root=root)
             print(api.report(repo_root=root, fmt="terminal"))
-            return 0 if result.get("passed") else 1
+            return gate_code(result)
         if options["fmt"] in ("map", "console"):
             document = api.map_document(repo_root=root)
         else:

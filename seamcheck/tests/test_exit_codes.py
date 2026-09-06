@@ -33,3 +33,21 @@ class NonDjangoGateTests(SimpleTestCase):
             code = cli._run_without_django(["--check"], verbose=False)
 
         self.assertEqual(code, 0)
+
+
+class BaselineExitCodeTests(SimpleTestCase):
+    """Help, docs/commands.md and llms.txt all promise "2 if no baseline". Reproduced on the
+    reference project with no snapshot: exit 1. A CI job cannot tell a regression from a
+    first run, which is the whole reason that code was documented."""
+
+    def test_no_baseline_exits_two_not_one(self):
+        outcome = {"passed": False,
+                   "message": "No baseline snapshot stored for abc123 yet - nothing to diff against.",
+                   "new_unresolved": [], "new_unused": [], "triage_invalidated": [],
+                   "returned": [], "counts": {}}
+        with mock.patch("seamcheck.api.check", return_value=outcome), \
+             mock.patch("seamcheck.api.report", return_value="digest"), \
+             mock.patch("seamcheck.cli._worth_scanning", return_value=True):
+            code = cli._run_without_django(["--check"], verbose=False)
+
+        self.assertEqual(code, 2, "no baseline is not the same answer as a regression")
