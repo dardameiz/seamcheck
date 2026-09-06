@@ -23,7 +23,10 @@ class NonDjangoGateTests(SimpleTestCase):
 
         self.assertEqual(code, 1, "a project with findings must fail the gate")
 
-    def test_a_clean_project_passes(self):
+    def test_a_clean_project_still_passes_after_the_fix(self):
+        # Guards against the fix inverting the clean case. The next task refactors
+        # this branch to route through a shared `gate_code()` helper, so this test
+        # catches it if that rewrite breaks the passing path.
         outcome = {"passed": True, "message": "clean", "new_unresolved": [],
                    "new_unused": [], "triage_invalidated": [], "returned": [],
                    "counts": {}}
