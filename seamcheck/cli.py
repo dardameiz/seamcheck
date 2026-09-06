@@ -566,10 +566,12 @@ def _run_without_django(arguments, verbose: bool) -> int:
             print(api.explain(api.scan(root), options["explain"]))
             return 0
         if options["check"]:
-            # The CI gate. The exit code is what a build reads; the digest is for a person.
+            # The CI gate. `passed` is the key api.check() actually returns; this asked for
+            # `findings`, which it never had, so every non-Django project passed no matter
+            # what was in it - measured on redash: 47 unresolved, exit 0.
             result = api.check(repo_root=root)
             print(api.report(repo_root=root, fmt="terminal"))
-            return 1 if result.get("findings") else 0
+            return 0 if result.get("passed") else 1
         if options["fmt"] in ("map", "console"):
             document = api.map_document(repo_root=root)
         else:
