@@ -340,7 +340,9 @@ COMMANDS: dict[str, Command] = {
             "The whole graph is 72 MB on a 500k-line project and answers no question by "
             "itself. This answers the one an agent actually has - what is wrong, and "
             "where - narrowed by file, kind, status or owning function, and it says what "
-            "it left out so nothing looks complete when it is not."
+            "it left out so nothing looks complete when it is not. By default it only "
+            "shows what the tool calls broken; pass --status uncertain or --status "
+            "connected to see those too, and the answer names which statuses it searched."
         ),
         examples=[
             ("seamcheck findings --file app/views.py", "what is wrong in the file I am editing"),

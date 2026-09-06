@@ -4,6 +4,7 @@
 the command the code names as the agent interface. These functions exist so that "what is
 this called", "what is wrong in this file" and "what changed" each cost a few hundred tokens.
 """
+import os
 from unittest import mock
 
 from django.test import SimpleTestCase
@@ -89,3 +90,64 @@ class FindingsTests(SimpleTestCase):
         self.assertFalse(out["ok"])
         self.assertEqual(out["error"]["code"], "bad_argument")
         self.assertIn("unresolved", out["error"]["hint"])
+
+    def test_the_answer_names_which_statuses_it_actually_searched(self):
+        out = queries.findings(".")
+
+        self.assertEqual(out["data"]["statuses"], ["unresolved", "unused"])
+
+    def test_an_absolute_path_under_the_repo_root_still_matches(self):
+        absolute = os.path.join(os.getcwd(), "app", "cache.py")
+
+        out = queries.findings(".", file=absolute)
+
+        self.assertEqual([row["id"] for row in out["data"]["findings"]],
+                         ["redis_key:user:*:pushes"])
+        self.assertEqual(out["warnings"], [])
+
+    def test_a_dot_slash_prefixed_path_still_matches(self):
+        out = queries.findings(".", file="./app/cache.py")
+
+        self.assertEqual([row["id"] for row in out["data"]["findings"]],
+                         ["redis_key:user:*:pushes"])
+
+    def test_a_file_that_matches_nothing_gets_a_warning_not_silence(self):
+        out = queries.findings(".", file="no/such/file.py")
+
+        self.assertEqual(out["data"]["findings"], [])
+        self.assertTrue(any("no/such/file.py" in w for w in out["warnings"]),
+                        out["warnings"])
+
+    def test_a_file_with_no_findings_but_a_real_path_gets_no_warning(self):
+        # app/urls.py exists in the graph (as a connected symbol) but has no findings -
+        # that is "clean file", not "wrong path", and must not be reported as the latter.
+        out = queries.findings(".", file="app/urls.py")
+
+        self.assertEqual(out["data"]["findings"], [])
+        self.assertEqual(out["warnings"], [])
+
+    def test_uncertain_and_connected_are_excluded_by_default_but_honoured_when_asked(self):
+        # A local fixture, not the shared GRAPH: adding a 5th symbol there would change the
+        # total SymbolsTests.test_it_is_bounded_and_says_what_it_left_out asserts against.
+        graph = Graph(symbols=[
+            _symbol("view", "submit_push", "app/views.py", Status.CONNECTED),
+            _symbol("redis_key", "user:*:pushes", "app/cache.py", Status.UNRESOLVED),
+            _symbol("dom_selector", ".maybe-dead", "templates/x.html", Status.UNCERTAIN),
+        ], edges=[])
+        with mock.patch("seamcheck.scancache.cached_scan",
+                        return_value=(graph, {"cached": True, "seconds": 0.0})):
+            default_out = queries.findings(".")
+            uncertain_out = queries.findings(".", status="uncertain")
+            connected_out = queries.findings(".", status="connected")
+
+        default_statuses = {row["status"] for row in default_out["data"]["findings"]}
+        self.assertNotIn("uncertain", default_statuses)
+        self.assertNotIn("connected", default_statuses)
+
+        self.assertEqual([row["id"] for row in uncertain_out["data"]["findings"]],
+                         ["dom_selector:.maybe-dead"])
+        self.assertEqual(uncertain_out["data"]["statuses"], ["uncertain"])
+
+        self.assertEqual([row["id"] for row in connected_out["data"]["findings"]],
+                         ["view:submit_push"])
+        self.assertEqual(connected_out["data"]["statuses"], ["connected"])
