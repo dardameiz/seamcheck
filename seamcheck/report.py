@@ -48,6 +48,7 @@ _GROUP_TITLES = {
     # findings, opposite default severity. See the note in redis_extractor.
     "redis_invalidation": "Invalidations that clear nothing",
     "redis_cleanup": "Erasure and teardown deletes (correct, and dead)",
+    "redis_dead_assertion": "Tests holding a dead key in place",
     "redis_ttl": "Cache keys written with no expiry",
     # Background work, outside Celery. Named for the consequence, not the library.
     "job": "Background jobs",

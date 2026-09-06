@@ -138,7 +138,12 @@ _TTL_KWARGS = ("ex", "px", "exat", "pxat", "expire", "ttl", "timeout", "nx", "ke
 # Tests too. A key a test writes with a Lua script and reads back is a fact about the
 # harness; three of one project's "read, never written" keys were exactly that, and a
 # fourth was the Django test client being mistaken for a Redis one.
-_PY_SKIP = SKIP_DIRS | {"test", "tests", "__tests__", "e2e", "spec", "specs", "testing"}
+_TEST_DIRS = {"test", "tests", "__tests__", "e2e", "spec", "specs", "testing"}
+_PY_SKIP = SKIP_DIRS | _TEST_DIRS
+# A test file that lives in the app rather than in a tests/ directory - `views/test_auth.py`
+# is a real Django module of preprod-only endpoints, and `conftest.py` sits wherever pytest
+# needs it. The suite is read separately from the product, never as evidence about it.
+_TEST_FILE = re.compile(r"(^|[\\/])(test_[^\\/]+|[^\\/]+_test|conftest)\.py$")
 # A minified bundle is the same code already read from source, and megabytes of it.
 _MAX_BYTES = 400_000
 # A minified bundle is source already read, and megabytes of it.
@@ -1795,6 +1800,55 @@ def _is_cleanup_context(hit: _Hit) -> bool:
                 or _CLEANUP_CONTEXT.search(os.path.basename(hit.file or "")))
 
 
+def _is_test_path(rel: str) -> bool:
+    parts = rel.replace("\\", "/").split("/")
+    return bool(set(parts[:-1]) & _TEST_DIRS or _TEST_FILE.search(rel))
+
+
+def _keys_named_in_tests(root: str) -> dict[str, tuple[str, int]]:
+    """Every key-shaped string a test spells out -> where it says it first.
+
+    The suite is not evidence about the product, which is why it is not scanned with it.
+    It is evidence about the SUITE, and there is one question worth asking of it: does a
+    test name a key that nothing in the product writes?
+
+    Removing a dead invalidation on the reference project broke exactly one test, and for
+    the wrong reason - it asserted that DELETE had been CALLED on a key with no writer,
+    rather than that the cache had been invalidated. It watched the call, not the effect,
+    so it passed for as long as the dead code stood and failed the moment the dead code
+    went: the one change it should have welcomed. The comment directly above it said the
+    same about a different dead key from an earlier pass. Two dead assertions one line
+    apart, one of them noticed.
+    """
+    found: dict[str, tuple[str, int]] = {}
+    for here, subdirectories, names in os.walk(root):
+        subdirectories[:] = [
+            d for d in subdirectories
+            if (d not in SKIP_DIRS or d in _TEST_DIRS) and not d.startswith(".")
+        ]
+        for name in names:
+            if not name.endswith(".py"):
+                continue
+            path = os.path.join(here, name)
+            rel = os.path.relpath(path, root)
+            if not _is_test_path(rel):
+                continue
+            try:
+                with open(path, encoding="utf-8", errors="replace") as handle:
+                    tree = ast.parse(handle.read())
+            except (OSError, SyntaxError, ValueError):
+                continue
+            for node in ast.walk(tree):
+                if not isinstance(node, (ast.Constant, ast.JoinedStr)):
+                    continue
+                spelt = _py_pattern(node)
+                if not spelt or not _looks_like_key(spelt) or _is_fragment(spelt):
+                    continue
+                key = _normalise(spelt)
+                found.setdefault(key, (rel, node.lineno))
+    return found
+
+
 def extract_redis(root: str) -> tuple[list[Symbol], list[Edge]]:
     hits = _scan_python(root) + _scan_js(root)
     if not hits:
@@ -2158,5 +2212,44 @@ def extract_redis(root: str) -> tuple[list[Symbol], list[Edge]]:
                   f"a job definition or a Lua file. It is not written nowhere; it is "
                   f"written somewhere this cannot follow. " + (symbol.note or "")),
         )
+
+    # A test that names a key nothing writes is defending dead code.
+    #
+    # This is where false confidence is stored, and it is also WHY a delete-only key
+    # survives so long: the suite is actively holding it in place. The assertion that
+    # started this watched the CALL rather than the effect - `delete` was called on a key
+    # with no writer - so it passed for as long as the dead code stood and failed the
+    # moment the dead code went.
+    named_in_tests = _keys_named_in_tests(root)
+    if named_in_tests:
+        verdicts = {sym.label: sym for sym in symbols
+                    if sym.kind in ("redis_key", "redis_invalidation", "redis_cleanup")}
+        for key, (rel, line) in sorted(named_in_tests.items()):
+            # The key has to be one the PRODUCT names. A test file is full of strings with
+            # a colon in them - `width: 44px`, `xl:inline`, a regex, a Django tag - and the
+            # colon convention that identifies a key at a Redis call site identifies
+            # nothing at all in free text. Matching against keys the scan already found
+            # means this cannot invent one: 60 keys of CSS and template noise on the
+            # reference project, every one of them from a literal nobody passed to Redis.
+            product = verdicts.get(key)
+            if product is None or product.status is not Status.UNUSED:
+                continue
+            if product.sub.split()[0] == "0":
+                continue
+            symbols.append(Symbol(
+                id=f"redis_dead_assertion:{key}:{rel}:{line}",
+                kind="redis_dead_assertion", label=key, sub="asserted in a test",
+                file=rel, line=line, status=Status.UNUSED, snippet=key, chain=[key],
+                owner="",
+                note="This test names a key that nothing in the product writes, so the "
+                     "assertion guards a call that clears nothing. It passes for as long "
+                     "as the dead code stands and fails the moment it is removed - the "
+                     "one change it should welcome. Assert the EFFECT, that the cache was "
+                     "invalidated, rather than that a call was made.",
+            ))
+            edges.append(Edge(
+                f"redis_dead_assertion:{key}:{rel}:{line}",
+                f"redis_key:{key}", Status.UNUSED,
+            ))
 
     return symbols, edges

@@ -156,6 +156,13 @@ _SPECIFIC: dict[str, tuple[str, str]] = {
         "is dead, the code is correct. Listed so a dead key is on the record, ranked "
         "below the invalidations that were meant to clear something.",
     ),
+    "redis_dead_assertion|unused": (
+        "A test names a key that nothing in the product writes.",
+        "So the assertion guards a call that clears nothing. It passes for as long as the "
+        "dead code stands and fails the moment the dead code is removed - the one change "
+        "it should welcome. It is also why the dead key survived: the suite defends it. "
+        "Assert the EFFECT, not that a call was made.",
+    ),
     "redis_ttl|unresolved": (
         "A key whose name says it is a cache, written with no expiry.",
         "Redis keeps it forever. Pass `ex=` (or use setex) - this is the leak nobody "

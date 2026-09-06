@@ -2357,3 +2357,97 @@ class OutsideTheRepositoryTests(SimpleTestCase):
             """,
         }))
         self.assertIn("user:*:best_hour_streak", keys)
+
+
+def _assertions(root: str) -> dict[str, tuple[str, int]]:
+    symbols, _ = extract_redis(root)
+    return {s.label: (s.file, s.line) for s in symbols
+            if s.kind == "redis_dead_assertion"}
+
+
+class DeadAssertionTests(SimpleTestCase):
+    """A test that names a key nothing writes is defending dead code.
+
+    This is where false confidence is stored, and it is also WHY a delete-only key
+    survives so long: the suite is holding it in place. The assertion that started this
+    watched the CALL rather than the effect - `delete` was called on a key with no writer
+    - so it passed for as long as the dead code stood and failed the moment it went.
+    """
+
+    def test_a_test_asserting_on_a_writerless_key_is_a_finding(self):
+        found = _assertions(_project({
+            "app/views.py": """
+                import redis
+                r = redis.Redis()
+
+                def rollover(uid):
+                    r.delete(f'user:{uid}:stats_cache')
+            """,
+            "app/tests/test_rollover.py": """
+                def test_rollover_busts_the_cache(fake_redis, uid):
+                    rollover(uid)
+                    assert any(f'user:{uid}:stats_cache' in str(c)
+                               for c in fake_redis.delete.call_args_list)
+            """,
+        }))
+        self.assertIn("user:*:stats_cache", found)
+        self.assertEqual(found["user:*:stats_cache"][0],
+                         "app/tests/test_rollover.py")
+
+    def test_a_key_the_product_reads_and_writes_is_not_one(self):
+        found = _assertions(_project({
+            "app/views.py": """
+                import redis
+                r = redis.Redis()
+
+                def save(uid, v):
+                    r.set(f'user:{uid}:streaks', v)
+
+                def load(uid):
+                    return r.get(f'user:{uid}:streaks')
+            """,
+            "app/tests/test_streaks.py": """
+                def test_streaks_round_trip(uid):
+                    assert load(uid) == f'user:{uid}:streaks'
+            """,
+        }))
+        self.assertEqual(found, {})
+
+    def test_a_key_only_the_suite_has_heard_of_is_not_claimed(self):
+        # Tempting - a test naming a key no product code touches is guarding a feature
+        # that is gone - and not supportable: in free text the colon convention identifies
+        # nothing. `width: 44px`, `xl:inline`, a regex and a Django tag are all "keys" by
+        # that rule, and asking the reference project produced 60 of them. A key has to be
+        # one the product named at a Redis call site before a test can be wrong about it.
+        found = _assertions(_project({
+            "app/views.py": """
+                import redis
+                r = redis.Redis()
+
+                def save(uid, v):
+                    r.set(f'user:{uid}:streaks', v)
+            """,
+            "app/tests/test_warriors.py": """
+                def test_positions_are_cached(fake_redis, uid):
+                    assert fake_redis.get(f'warrior:positions:{uid}') is not None
+            """,
+        }))
+        self.assertEqual(found, {})
+
+    def test_a_test_file_that_lives_in_the_app_counts_too(self):
+        # `views/test_auth.py` is a real module of preprod-only endpoints on the
+        # reference project - a test file by name, wherever it sits.
+        found = _assertions(_project({
+            "app/views.py": """
+                import redis
+                r = redis.Redis()
+
+                def rollover(uid):
+                    r.delete(f'user:{uid}:hourly_base')
+            """,
+            "app/views/test_auth.py": """
+                def reset(uid, r):
+                    assert r.delete(f'user:{uid}:hourly_base') is not None
+            """,
+        }))
+        self.assertIn("user:*:hourly_base", found)
