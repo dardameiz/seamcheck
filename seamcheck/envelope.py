@@ -45,20 +45,26 @@ def answer(command: str, data, *, repo: str = "", sha: str = "",
     }
 
 
-def failure(command: str, code: str, message: str, *, hint: str = "") -> dict:
-    """A failure. `code` must be a key of ERRORS."""
+def failure(command: str, code: str, message: str, *, hint: str = "", repo: str = "",
+            sha: str = "", cost: dict | None = None) -> dict:
+    """A failure. `code` must be a key of ERRORS.
+
+    Carries the same `repo`, `sha` and `cost` `answer()` does: the case that motivated this
+    envelope was a mistyped symbol id that cost 88.5 seconds, and a failure that could not
+    report what it cost could not say that either.
+    """
     if code not in ERRORS:
         raise ValueError(f"undocumented error code {code!r}; add it to envelope.ERRORS")
     return {
         "schema": SCHEMA,
         "ok": False,
         "command": command,
-        "repo": "",
-        "sha": "",
+        "repo": repo,
+        "sha": sha,
         "data": None,
         "truncated": None,
         "warnings": [],
-        "cost": {},
+        "cost": cost or {},
         "error": {"code": code, "message": message, "hint": hint},
     }
 
@@ -69,7 +75,10 @@ def page(rows: list, limit: int, cursor: str = "") -> tuple[list, dict]:
     The cursor is the offset as a string rather than an opaque token: the row order is
     stable within a scan, an agent can read it, and there is nothing to keep server-side.
     An unparseable or out-of-range cursor starts from the beginning rather than raising,
-    so a caller that lost its place gets the first page and not a stack trace.
+    so a caller that lost its place gets the first page and not a stack trace. `limit` is
+    clamped to at least 1: `limit=0` would return zero rows and a cursor equal to the
+    offset it started from, so a caller that paged with it would loop forever, always one
+    page away from the end and never reaching it.
     """
     try:
         start = int(cursor)
@@ -77,6 +86,7 @@ def page(rows: list, limit: int, cursor: str = "") -> tuple[list, dict]:
             start = 0
     except ValueError:
         start = 0
+    limit = max(1, limit)
     shown = rows[start:start + limit]
     following = start + len(shown)
     return shown, {

@@ -32,6 +32,23 @@ class EnvelopeTests(SimpleTestCase):
         self.assertIn("symbols --search", out["error"]["hint"])
         self.assertIsNone(out["data"])
 
+    def test_a_failure_carries_a_cost(self):
+        # The case that motivated the envelope: a mistyped symbol id that cost 88.5
+        # seconds. A failure that could not report `repo`, `sha` or `cost` could not say
+        # that the mistake was expensive, only that it happened.
+        out = envelope.failure("explain", "unknown_symbol", "No symbol with id `x`.",
+                               repo="/x", sha="abc123", cost={"seconds": 88.5})
+
+        self.assertEqual(out["repo"], "/x")
+        self.assertEqual(out["sha"], "abc123")
+        self.assertEqual(out["cost"], {"seconds": 88.5})
+
+    def test_an_undocumented_error_code_is_rejected(self):
+        # The only enforcement of the ERRORS contract: a code that is not in the table is
+        # a string an agent cannot look up, not an interface it can branch on.
+        with self.assertRaises(ValueError):
+            envelope.failure("explain", "not_a_real_code", "whatever")
+
     def test_every_error_code_is_documented(self):
         # A code an agent cannot look up is a string, not an interface.
         for code in ("unknown_symbol", "no_baseline", "no_adapter", "bad_argument"):
@@ -62,6 +79,16 @@ class EnvelopeTests(SimpleTestCase):
         _, cut = envelope.page(rows, limit=10)
 
         self.assertEqual(cut["cursor"], "")
+
+    def test_a_zero_limit_cannot_page_forever(self):
+        # limit=0 returned no rows and a cursor equal to the offset it started from, so a
+        # caller that paged with it never advanced and never stopped - clamped to 1.
+        rows = [{"id": f"x{i}"} for i in range(5)]
+
+        shown, cut = envelope.page(rows, limit=0)
+
+        self.assertEqual(len(shown), 1, "limit=0 must be clamped up to 1, not return nothing")
+        self.assertEqual(cut["cursor"], "1", "the cursor must advance past the offset it started from")
 
     def test_a_cursor_that_cannot_be_parsed_starts_from_the_beginning(self):
         # "²".isdigit() is True and int("²") raises, so the digit check alone was a crash.
