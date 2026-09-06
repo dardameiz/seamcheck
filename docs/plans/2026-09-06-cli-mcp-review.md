@@ -75,6 +75,18 @@ Measured by running each command and counting stdout. Tokens are bytes ÷ 4.
 | `report` | 3.5 KB · ~872 tok | 11.8 KB · ~2,941 tok | 86 s |
 | **`json`** | **595 KB · ~148,851 tok** | **72.6 MB · ~18,158,103 tok** | 90 s |
 
+One more row, because it is the whole problem in a single line. `explain` with a symbol id
+that does not exist:
+
+| | |
+|---|---:|
+| what it returned | `No symbol with id \`urls.py\` in the current scan.` |
+| bytes | 49 |
+| wall time on the reference project | **88.5 s** |
+
+A full scan, ninety seconds, to be told the id was wrong. There is no index to check a name
+against and no way to ask "did you mean", so the cost of a typo is the cost of the answer.
+
 `json` is the command `cli.py:346-349` names as the agent interface. On the smallest project
 in the corpus it does not fit in a context window. On the reference project it is about
 ninety context windows, and an agent that runs it has already lost.
@@ -141,7 +153,7 @@ What is wrong, in the order it hurts:
 | **No enums** | on `status`, `why`, `fmt`, `kind`, though every one has a closed vocabulary in the code. A first call is a guess and recovery costs a round trip. |
 | **No annotations** | so a client cannot tell that seven tools are read-only and `seamcheck_triage` is the only writer. |
 | **`seamcheck_check` is unbounded** | every new finding, every returned mark, no `limit`, no filter. ~499 KB on the reference project. |
-| **Every tool re-scans** | there is no graph cache. `explain` is `api.explain(api.scan(...), id)`. Five explanations on the reference project are five 90-second scans: **7.5 minutes to look at five symbols**. |
+| **Every tool re-scans** | there is no graph cache. `explain` is `api.explain(api.scan(...), id)`. Five explanations on the reference project are five 90-second scans: **7.5 minutes to look at five symbols**, and a mistyped id costs the same 90 seconds as a real one. |
 | **No baseline can be made over MCP** | only `scan` writes a snapshot and there is no `scan` tool, so `seamcheck_check` reports "no baseline" forever until a human runs the CLI. |
 | **No `--since` anywhere** | every tool is hardwired to `HEAD`, so "what did this branch change" is unreachable. |
 | **`passed` does not mean what the description says.** | The description says findings "new since the last snapshot"; `passed` is `has_blocking_findings`, true for any untriaged finding, new or not. On a repo with a backlog an agent draws the wrong conclusion. |
