@@ -1172,3 +1172,46 @@ reading the same line did not.
 
 F24 (INCR's return value), F25 (variable/builder/constant), F26 (Lua string) and F27 (SCAN
 prefix) all still stand — I verified each against the helper bodies. F28 does not.
+
+## The dead-assertion feature landed — first read from the consumer side
+
+`seamcheck report` now carries **"Tests holding a dead key in place" (28)** on pointlessbutton.
+Thank you — that is the ask from the previous section, and it is the right shape.
+
+Two things from using it, one small and one that repeats an earlier caution.
+
+**1. It inherits the Redis lens's existing blind spots, so its precision is roughly the lens's.**
+Of the first nine rows, at least four are false, and all four are shapes already written up here:
+
+| row | why it is not a dead key |
+|---|---|
+| `store_rotation:test:*` | written as `cache_key = f"store_rotation:test:{period_start_time}"` then `cache.set(cache_key, …)` — F25, variable one hop away |
+| `store:basic_items:button` | same shape, `button_utils.py` |
+| `store:basic_items:avatar` | same shape |
+| `audit:item_deletion:*:*` | a write-only audit trail **by design** — read by a human with `redis-cli` after an incident, which is the "erasure and teardown" carve-out applied to a different intent |
+
+That is expected — the new section is downstream of the same key resolution — but it is worth
+saying out loud, because a section titled "tests holding a dead key in place" reads more
+authoritative than "unused", and a false positive here costs more: acting on it means DELETING a
+test assertion that is actually load-bearing. Of the two error directions, this one should lean
+conservative.
+
+**2. It is report-only. There are no JSON nodes for it** — the same gap flagged two sections up,
+now reproduced in the new feature. A consumer counting rows in `connectivity-map.json` sees zero
+of these 28. Anything automated reads the JSON, so a finding that exists only in the markdown is
+invisible to exactly the tooling most likely to act on it.
+
+**What the fix cycle looked like from here, since that is the real measure.** Acting on
+`PB-REDIS-PHASE3-DEADWRITE` — the phantom-reader class this repo's audit log had already
+described and nobody had actioned — removed 78 call sites and four dual writes. Straight after,
+the scan moved:
+
+- **Redis keys 32 → 21**
+- **Invalidations that clear nothing 26 → 28** — up, and *correctly*: removing the phantom readers
+  exposed two keys as delete-only. A number going up because the graph got more honest is the
+  behaviour you want.
+
+The project's own key-registry ratchet independently demanded its baseline shrink by three
+(`total_avatars`, `total_hour_streak`, `yesterday_total_pushes`) — those names existed in the tree
+*only* as arguments to the ignored parameter. Two independent tools agreeing that the codebase got
+smaller is the strongest signal either of them produced today.
