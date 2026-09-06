@@ -132,3 +132,69 @@ class ScanCacheTests(SimpleTestCase):
                 scancache.cached_scan(root)
 
             self.assertFalse((pathlib.Path(root) / ".seamcheck").exists())
+
+    def test_a_file_saved_during_the_scan_forces_the_next_call_to_rescan(self):
+        # A real scan takes on the order of a minute. If the entry's timestamp were read
+        # AFTER api.scan() returns rather than before it starts, a file saved anywhere in
+        # that window would be baked into the graph and then judged OLDER than the entry
+        # that already baked it in - served as fresh forever, until something else changed.
+        # The edit below keeps the file's SIZE identical ("x = 1" -> "x = 2") so nothing
+        # about it looks different except its mtime, isolating exactly the bug this guards.
+        with tempfile.TemporaryDirectory() as root:
+            source = pathlib.Path(root) / "urls.py"
+            source.write_text("x = 1")
+
+            def _scan_that_edits_mid_flight(_repo_root):
+                # Simulate a save landing while the (slow, real) scan is still running.
+                source.write_text("x = 2")
+                return _graph()
+
+            with mock.patch("seamcheck.api.scan", side_effect=_scan_that_edits_mid_flight) as scan:
+                scancache.cached_scan(root)
+                scancache.cached_scan(root)
+
+            self.assertEqual(scan.call_count, 2,
+                              "a file saved during the scan must force the next call to rescan, "
+                              "not be served back as part of the graph that already contains it")
+
+    def test_clear_works_through_a_different_spelling_of_the_same_path(self):
+        # The disk directory was always keyed by the RESOLVED path (_repo_cache_dir), but
+        # the memo used to be keyed by whatever string the caller passed in - so clearing
+        # via "." left the memo entry alive under its own, differently spelled key, and the
+        # next call, even for the very same repository, served it right back.
+        with tempfile.TemporaryDirectory() as root:
+            (pathlib.Path(root) / "urls.py").write_text("x = 1")
+            with mock.patch("seamcheck.api.scan", return_value=_graph()) as scan:
+                scancache.cached_scan(root)
+                cwd = os.getcwd()
+                os.chdir(root)
+                try:
+                    scancache.clear(".")
+                finally:
+                    os.chdir(cwd)
+                scancache.cached_scan(root)
+
+            self.assertEqual(scan.call_count, 2,
+                              "clearing via a different spelling of the same path must still "
+                              "invalidate the memo, not just the disk directory")
+
+    def test_the_memo_keeps_only_the_two_most_recently_used_graphs(self):
+        # Each entry holds a whole graph - tens of thousands of symbols on a real project -
+        # for the life of the process, and the intended consumer is a long-lived MCP server
+        # answering questions about many repositories in one session. Nothing bounded this
+        # before, so a long session's memo only ever grew.
+        with mock.patch("seamcheck.api.scan", return_value=_graph()):
+            roots = []
+            for _ in range(3):
+                tmp = tempfile.TemporaryDirectory()
+                self.addCleanup(tmp.cleanup)
+                (pathlib.Path(tmp.name) / "urls.py").write_text("x = 1")
+                roots.append(str(pathlib.Path(tmp.name).resolve()))
+                scancache.cached_scan(tmp.name)
+
+            memo_repo_roots = {key.split("\0", 1)[0] for key in scancache._MEMO}
+
+            self.assertEqual(len(scancache._MEMO), 2,
+                              "the memo must never hold more than 2 graphs at once")
+            self.assertEqual(memo_repo_roots, set(roots[1:]),
+                              "the least recently used repository must be the one evicted")

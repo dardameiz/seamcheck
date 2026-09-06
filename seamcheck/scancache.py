@@ -4,30 +4,39 @@ Measured before this existed: every command and every MCP tool called `api.scan`
 five explanations on the reference project were five 90-second scans - and a mistyped symbol
 id cost the same 88.5 seconds as a correct one, to be told the id was wrong.
 
-The key is a hash of the file tree's SHAPE - every input file's relative path and size - plus
-the tool version and the Django settings module name. Two things are deliberately left out:
-content, because hashing a 100M-line repository to decide whether to scan it would cost more
-than the scan; and the effective config, because computing it costs about seven seconds on
-the reference project (see `api._config`) and would eat most of the win. The settings module
-name is nearly free and still tells apart two runs that would otherwise build different
-graphs from the same files.
+The key is a hash of the file tree's SHAPE - every input file's relative path, size and
+mtime - plus the tool version and the Django settings module name. Two things are
+deliberately left out: content, because hashing a 100M-line repository to decide whether to
+scan it would cost more than the scan; and the effective config, because computing it costs
+about seven seconds on the reference project (see `api._config`) and would eat most of the
+win. The settings module name is nearly free and still tells apart two runs that would
+otherwise build different graphs from the same files.
 
-mtime is left out of the key on purpose too, and handled separately as a freshness check
-rather than an identity check - the way build tools handle it. A key built from
-(path, size, mtime) looks precise, but two writes landing in the same mtime tick - ordinary
-on a Docker bind mount, overlayfs, NFS, or most CI runners, and not reproducible on APFS's
-nanosecond clock without forcing it - would hash to the very same key and let a stale graph
-be served as a fresh one, because identity alone can't tell the two writes apart. So a cache
-entry is trusted only when every input file's mtime is STRICTLY OLDER than the entry's own
-mtime; if any input is as new as or newer than the entry, it is treated as stale and rescanned
-even though its key still matches. The worst case is an unnecessary rescan inside one tick -
-never a stale graph handed out as a fresh one.
+What this guard actually covers: a cache entry is trusted only when every input file's mtime
+is STRICTLY OLDER than the entry's own timestamp, which is read from the wall clock ONCE,
+before the scan that produced the entry runs - not after. A scan takes on the order of a
+minute on a real project; stamping the entry after it returns would mean any file saved
+during that minute was already baked into the graph and would still be judged OLDER than the
+entry that baked it in, so the stale graph would be served as fresh for as long as nothing
+else changed. Reading the clock first means a file saved mid-scan is, correctly, newer than
+the entry, and forces a rescan the next time anyone asks.
 
-Two layers: a process memo, for an MCP session answering question after question, and a file
-under this machine's own cache directory (`_cache_root` - never inside the scanned
-repository, which this tool exists to scan, not to write into), for the next command in the
-same shell. Both layers are judged by the same freshness rule, so neither can serve a stale
-answer.
+What it does NOT cover: this is an mtime check, not a content hash, so anything that changes
+a file's bytes without advancing its mtime defeats it completely - an mtime-preserving
+restore (`rsync -a`, `tar xpf`, a Docker build context that copies files with their original
+timestamps) or a backwards step of the system clock both produce a tree that looks, by every
+signal this module reads, exactly as old as it did before. There is no fix for this short of
+hashing every byte, which is the cost this module exists to avoid paying. A caller that knows
+its tree was touched by one of these - a fresh checkout, a restored backup, a clock that just
+got corrected - should pass `refresh=True` to `cached_scan`, which skips the cache in both
+directions: it neither reads nor trusts what is already there.
+
+Two layers: a process memo, bounded to the `_MEMO_LIMIT` most recently used graphs so a
+long-lived MCP session answering questions across many repositories cannot grow without
+bound, and a file under this machine's own cache directory (`_cache_root` - never inside the
+scanned repository, which this tool exists to scan, not to write into), for the next command
+in the same shell. Both layers are judged by the same freshness rule, so neither can serve a
+stale answer any differently from the other.
 """
 from __future__ import annotations
 
@@ -37,12 +46,21 @@ import json
 import os
 import pathlib
 import time
+from collections import OrderedDict
 
 from seamcheck.graph import Graph, graph_from_dict, graph_to_dict
 
 # memo_key -> (graph, cached_at_ns). cached_at_ns is judged against a fresh walk's latest
-# input mtime exactly the way a disk entry's own mtime is - see `cached_scan`.
-_MEMO: dict[str, tuple[Graph, int]] = {}
+# input mtime exactly the way a disk entry's own mtime is - see `cached_scan`. An
+# OrderedDict so `_memo_put` can move an entry to the end on every use and evict from the
+# front - a plain dict has no cheap way to know which entry is least recently used.
+_MEMO: OrderedDict[str, tuple[Graph, int]] = OrderedDict()
+
+# Each entry holds a whole graph - about 52,000 symbols, tens of MB, on the reference
+# project - for the life of the process. The intended consumer is a long-lived MCP server
+# answering questions about many repositories over one session, so nothing bounded this
+# before: every repository ever asked about stayed resident until the process exited.
+_MEMO_LIMIT = 2
 
 # How many cache files one repository may keep before the oldest (by mtime) is evicted.
 # Nothing evicted anything before this existed, so a long-lived repo's cache directory only
@@ -64,6 +82,14 @@ def _version() -> str:
         return "0"
 
 
+def _memo_put(memo_key: str, value: tuple[Graph, int]) -> None:
+    """Record the most-recently-used entry, evicting the least-recently-used past the cap."""
+    _MEMO[memo_key] = value
+    _MEMO.move_to_end(memo_key)
+    while len(_MEMO) > _MEMO_LIMIT:
+        _MEMO.popitem(last=False)
+
+
 def _cache_root(env: dict | None = None) -> pathlib.Path:
     """Where this machine keeps every repository's cache - never inside a scanned tree.
 
@@ -82,7 +108,9 @@ def _repo_cache_dir(repo_root: str, env: dict | None = None) -> pathlib.Path:
 
     A hash rather than a mirrored path so two checkouts of the same project - a worktree, a
     second clone, a CI runner - never collide, and a checkout that moves or is renamed just
-    misses its old entries instead of silently reading someone else's.
+    misses its old entries instead of silently reading someone else's. `repo_root` is
+    expected to already be resolved (every public function below resolves it once at the
+    top), but resolving again here is idempotent and costs nothing.
     """
     real = str(pathlib.Path(repo_root).resolve())
     digest = hashlib.sha256(real.encode()).hexdigest()[:16]
@@ -92,9 +120,11 @@ def _repo_cache_dir(repo_root: str, env: dict | None = None) -> pathlib.Path:
 def _scan_tree(repo_root: str) -> tuple[str, int]:
     """The key (identity) and the latest mtime seen (freshness), from one walk.
 
-    Identity is (version, settings module, every file's relative path and size) - nothing a
-    build could touch without changing what it produces. Freshness is judged separately, by
-    the caller, against a cache entry's own mtime; see the module docstring for why.
+    Identity is (version, settings module, every file's relative path, size and mtime) -
+    mtime included so that an edit which does not change a file's size (a route renamed to
+    another name the same length) still changes the key, rather than being invisible to it.
+    Freshness is judged separately, by the caller, against a cache entry's own timestamp;
+    see the module docstring for what that check does and does not catch.
     """
     digest = hashlib.sha256()
     digest.update(_version().encode())
@@ -111,6 +141,7 @@ def _scan_tree(repo_root: str) -> tuple[str, int]:
                 continue
             digest.update(str(path.relative_to(root)).encode())
             digest.update(str(info.st_size).encode())
+            digest.update(str(info.st_mtime_ns).encode())
             latest_mtime_ns = max(latest_mtime_ns, info.st_mtime_ns)
     return digest.hexdigest()[:32], latest_mtime_ns
 
@@ -118,10 +149,9 @@ def _scan_tree(repo_root: str) -> tuple[str, int]:
 def stamp(repo_root: str) -> str:
     """The key: the file tree's shape, the tool version, and the settings module.
 
-    Not the effective config - see the module docstring for why - and not mtime, which is a
-    freshness question answered separately by `cached_scan`, not an identity one answered
-    here.
+    Not the effective config - see the module docstring for why.
     """
+    repo_root = str(pathlib.Path(repo_root).resolve())
     key, _ = _scan_tree(repo_root)
     return key
 
@@ -145,6 +175,7 @@ def cached_scan(repo_root: str, *, refresh: bool = False) -> tuple[Graph, dict]:
     """The graph, from memory, from disk, or from a real scan - and which of the three."""
     from seamcheck import api
 
+    repo_root = str(pathlib.Path(repo_root).resolve())
     key, latest_input_mtime_ns = _scan_tree(repo_root)
     memo_key = f"{repo_root}\0{key}"
 
@@ -153,6 +184,7 @@ def cached_scan(repo_root: str, *, refresh: bool = False) -> tuple[Graph, dict]:
         if memoized is not None:
             graph, cached_at_ns = memoized
             if latest_input_mtime_ns < cached_at_ns:
+                _MEMO.move_to_end(memo_key)  # touched: least likely of the two to be evicted next
                 return graph, {"cached": True, "key": key, "seconds": 0.0, "from": "memory"}
 
     path = _path(repo_root, key)
@@ -167,21 +199,27 @@ def cached_scan(repo_root: str, *, refresh: bool = False) -> tuple[Graph, dict]:
             except (OSError, ValueError):
                 graph = None
             if graph is not None:
-                _MEMO[memo_key] = (graph, cache_mtime_ns)
+                _memo_put(memo_key, (graph, cache_mtime_ns))
                 return graph, {"cached": True, "key": key, "seconds": 0.0, "from": "disk"}
 
+    # The clock is read ONCE, here, before the scan starts - not after it returns. See the
+    # module docstring: stamping the entry post-scan would let a file saved during the scan
+    # be baked into the graph and still be judged older than the entry that baked it in.
+    cached_at_ns = time.time_ns()
     started = time.monotonic()
     graph = api.scan(repo_root)
     took = round(time.monotonic() - started, 2)
-    cached_at_ns = time.time_ns()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(graph_to_dict(graph)), encoding="utf-8")
-        cached_at_ns = path.stat().st_mtime_ns  # the entry's real, comparable timestamp
+        # write_text() stamps the file with "now" - after the scan - which would reintroduce
+        # the same bug for any OTHER process reading this entry from disk instead of the
+        # memo. Force it back to the pre-scan read so both layers agree on one timestamp.
+        os.utime(path, ns=(cached_at_ns, cached_at_ns))
         _evict_oldest(path.parent)
     except OSError:
         pass  # a read-only or missing cache directory still gets the process memo
-    _MEMO[memo_key] = (graph, cached_at_ns)
+    _memo_put(memo_key, (graph, cached_at_ns))
     return graph, {"cached": False, "key": key, "seconds": took, "from": "scan"}
 
 
@@ -193,10 +231,17 @@ def clear(repo_root: str = "") -> None:
     disk wipe was never asked for. With a `repo_root`, both layers are actually emptied: the
     memo entries for it, and the cache directory itself - a caller that clears and then reads
     again, even in a fresh process, gets a real scan, not whatever was left on disk.
+
+    `repo_root` is resolved once, here, before either layer is touched - the disk directory
+    was always keyed by the resolved path (`_repo_cache_dir`), but the memo used to be keyed
+    by whatever string the caller passed in, so clearing via a symlink or via `"."` matched
+    the disk directory but missed the memo entry, which survived under its own, differently
+    spelled key and was served right back on the next read.
     """
     if not repo_root:
         _MEMO.clear()
         return
+    repo_root = str(pathlib.Path(repo_root).resolve())
     for memo_key in [k for k in _MEMO if k.startswith(f"{repo_root}\0")]:
         del _MEMO[memo_key]
     directory = _repo_cache_dir(repo_root)
