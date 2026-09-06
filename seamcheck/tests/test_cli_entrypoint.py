@@ -369,3 +369,32 @@ class TunnelSettingArgumentTests(SimpleTestCase):
 
             self.assertIn("--tunnel", run.args)
             self.assertNotIn("--set-tunnel", run.args)
+
+
+class LimitFlagParityTests(SimpleTestCase):
+    """`--limit` must mean the same thing on both front doors.
+
+    The Django management command parses `--limit` with argparse's `type=int`, which
+    accepts a negative value and leaves clamping to `envelope.page()`. The hand-rolled
+    `_plain_args` used to guard with `following.isdigit()`, which is False for "-5" - so
+    the flag was silently dropped and the default 25 used instead, and the same command
+    line answered with a different row count depending on which project type it ran
+    against. That is exactly what `_plain_args`'s own docstring warns a divergent flag
+    would do.
+    """
+
+    def test_a_negative_limit_is_parsed_not_dropped(self):
+        from seamcheck.cli import _plain_args
+
+        options = _plain_args(["--limit", "-5"])
+
+        # page() does the clamping (see its own test for that half); this half only
+        # guards that _plain_args does not throw the value away before page() sees it.
+        self.assertEqual(options["limit"], -5)
+
+    def test_a_non_numeric_limit_keeps_the_default(self):
+        from seamcheck.cli import _plain_args
+
+        options = _plain_args(["--limit", "banana"])
+
+        self.assertEqual(options["limit"], 25)

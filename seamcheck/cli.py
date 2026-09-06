@@ -20,6 +20,7 @@ It also owns the two things that make the front door usable rather than merely p
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import pathlib
@@ -791,8 +792,14 @@ def _plain_args(arguments) -> dict:
             options["search"] = following
         elif item == "--kind" and following:
             options["kind"] = following
-        elif item == "--limit" and following and following.isdigit():
-            options["limit"] = int(following)
+        elif item == "--limit" and following:
+            # argparse's `type=int` on the Django path accepts a negative value and lets
+            # envelope.page() clamp it to 1 - `following.isdigit()` here rejected "-5"
+            # outright and silently kept the default 25 instead, so the same flag answered
+            # two different row counts depending on which door you came in. int() accepts
+            # exactly what argparse's type=int does; the clamp stays the one in page().
+            with contextlib.suppress(ValueError):
+                options["limit"] = int(following)
         elif item == "--cursor" and following:
             options["cursor"] = following
         elif item == "--triage" and following:
