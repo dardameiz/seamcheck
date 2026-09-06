@@ -138,7 +138,10 @@ COMMANDS: dict[str, Command] = {
             "much of a link: VS Code's terminal opens it inside VS Code, and a phone "
             "cannot use it at all. An http:// one gets handed to a real browser.\n\n"
             "Nothing is uploaded and nothing leaves your machine - but while it runs, "
-            "anyone on this network holding the link can read the report. `--local-only` "
+            "anyone on this network holding the link can read the report. A phone that is "
+            "NOT on this wifi cannot open the second link at all; "
+            "`seamcheck config --tunnel always` remembers, for this machine, that every "
+            "run should also print a public HTTPS one. `--local-only` "
             "binds loopback instead, at the cost of the phone link. `--tunnel` goes the "
             "other way and opens a temporary public HTTPS address for a device that is "
             "not on this wifi."
@@ -228,9 +231,20 @@ COMMANDS: dict[str, Command] = {
             "difference between a real report and an invented one - a CSS root set narrow "
             "enough to exclude stylesheets whose templates are still being read will report "
             "working CSS as broken, and the only way to catch that is to look at the paths."
+            "\n\n"
+            "One setting here is not about this project at all. `--tunnel always` is "
+            "remembered for this MACHINE, and every later `map` or `serve` on it also "
+            "prints a public HTTPS link - the one that works on a phone that is not on "
+            "this wifi, which is where a link usually gets opened. It is stored rather "
+            "than defaulted because it is the one thing seamcheck does that leaves the "
+            "machine: anyone holding that link can read the report while the command "
+            "runs. `--tunnel never` puts it back, and `--local-only` overrules it for a "
+            "single run."
         ),
         examples=[
             ("seamcheck config", "what this project resolved to"),
+            ("seamcheck config --tunnel always", "every map also gets a link that works off this wifi"),
+            ("seamcheck config --tunnel never", "...turn that back off"),
             ("seamcheck config --repo-root ../other", "for a project you are not standing in"),
         ],
     ),
@@ -497,6 +511,13 @@ def _resolve(known, parser, passthrough: list[str] | None = None) -> tuple[str, 
         return 0
 
     arguments = list(entry.args)
+    if name == "config":
+        # `seamcheck config --tunnel always` is the sentence a person types; the flag
+        # that STORES the answer has to be spelled differently from the one that opens a
+        # tunnel for a single run, or `map --tunnel` and `config --tunnel always` would
+        # be the same word meaning two things. Translated here so only one of them is
+        # ever typed.
+        rest = ["--set-tunnel" if item == "--tunnel" else item for item in rest]
     if entry.takes_number:
         # A bare number is the count. Without this, `seamcheck backfill` forwarded a
         # valueless --backfill and argparse answered "expected one argument" - a front
@@ -531,6 +552,8 @@ def _run_without_django(arguments, verbose: bool) -> int:
         return 2
 
     options = _plain_args(arguments)
+    if options["set_tunnel"]:
+        return _set_tunnel_plain(options["set_tunnel"])
     if options["show_config"]:
         return _show_config_plain(root)
     with quiet(not verbose):
@@ -630,16 +653,31 @@ def _serve_plain(rendered: str, root: str, options: dict, assets=None) -> int:
     if "lan" in addresses:
         print(f"  phone  {addresses['lan']}")
     proxy = None
-    if options["tunnel"]:
+    # The flag is one rung of a ladder that starts at --local-only and ends at this
+    # machine's stored answer, so a person who turned the public link on once gets it
+    # here too. The two serving paths must never disagree about that.
+    from seamcheck.usersettings import wants_tunnel
+
+    tunnel, why = wants_tunnel(flag=options["tunnel"], local_only=options["local_only"])
+    opened = False
+    if tunnel:
         try:
             proxy, public = public_tunnel(server.server_port)
         except RuntimeError as error:
             # A tunnel that will not open must not take the local server down with it.
             print(str(error), file=sys.stderr)
+            print("  no public link; the addresses above still work.", file=sys.stderr)
         else:
             path = addresses["local"][addresses["local"].index("/", 8):]
-            print(f"  public {public}{path}")
+            print(f"  public {public}{path}   ({why})")
+            opened = True
     print("")
+    if opened:
+        print("  The public link is readable by ANYONE who has it, from anywhere, while"
+              "\n  this runs. `seamcheck config --tunnel never` turns it off for good.")
+    elif not options["local_only"] and not tunnel:
+        print("  A phone off this wifi cannot reach that address:"
+              "\n  `seamcheck config --tunnel always` gives every run a link that can.")
     # The link must reach the terminal now, not when the buffer fills: stdout is block-
     # buffered when it goes to a file, and serve_forever never lets it fill. A run whose
     # output was redirected served for hours with its address unseen.
@@ -676,7 +714,7 @@ def _plain_args(arguments) -> dict:
         # `json` and `explain` as the agent-facing interface. The MCP server got them
         # right, so the two surfaces disagreed, which is the one thing they must never do.
         "explain": None, "show_config": False, "triage": None, "status": None,
-        "reason": "", "why": "", "undo": False,
+        "reason": "", "why": "", "undo": False, "set_tunnel": None,
     }
     items = list(arguments)
     for index, item in enumerate(items):
@@ -685,6 +723,8 @@ def _plain_args(arguments) -> dict:
             options["fmt"] = "json"
         elif item == "--show-config":
             options["show_config"] = True
+        elif item == "--set-tunnel" and following:
+            options["set_tunnel"] = following
         elif item == "--explain" and following:
             options["explain"] = following
         elif item == "--triage" and following:
@@ -729,6 +769,10 @@ def _show_config_plain(root: str) -> int:
     config, why = effective(root)
     if not config:
         print("No config, and nothing detected.")
+        # Still printed: the phone-link setting belongs to the MACHINE, so it is the one
+        # answer this command can always give, including in a directory that is not a
+        # project at all.
+        _print_tunnel_setting()
         return 0
     width = max(len(key) for key in config)
     print("The config this scan will use:\n")
@@ -738,6 +782,38 @@ def _show_config_plain(root: str) -> int:
             value = f"[{len(value)} items] {value[:3]} ..."
         print(f"  {key:<{width}}  {value}")
         print(f"  {'':<{width}}  \u2514\u2500 {why.get(key, 'default')}")
+    _print_tunnel_setting()
+    return 0
+
+
+def _print_tunnel_setting() -> None:
+    """The one setting that belongs to the machine rather than to this project.
+
+    Shown beside the detected paths because a person looking for "why is there no public
+    link" looks here, and because a setting that is invisible is one nobody can undo.
+    """
+    from seamcheck.usersettings import wants_tunnel
+
+    wanted, why = wants_tunnel()
+    print(f"\n  public link on this machine: {'yes' if wanted else 'no'}")
+    print(f"  \u2514\u2500 {why}")
+    print("  seamcheck config --tunnel always|never   changes it")
+
+
+def _set_tunnel_plain(when: str) -> int:
+    """Store this machine's answer, the same way the Django path stores it."""
+    from seamcheck.usersettings import ALWAYS, NEVER, settings_path, write
+
+    if when not in (ALWAYS, NEVER):
+        print(f"seamcheck: --set-tunnel takes {ALWAYS} or {NEVER}, not {when!r}.",
+              file=sys.stderr)
+        return 2
+    write("tunnel", when, None)
+    print(f"  tunnel {when}   written to {settings_path()}")
+    if when == ALWAYS:
+        print("  Every `seamcheck map` on this machine now also prints a public HTTPS"
+              "\n  link, readable by anyone who has it while the command runs."
+              "\n  --local-only still overrules it, run by run.")
     return 0
 
 

@@ -17,6 +17,13 @@ pip install seamcheck && seamcheck map
 It reads your source. It never runs your code, and it makes no network call — no API key,
 no account, nothing to sign up for.
 
+The report is served from your machine: one link for this computer, one to type on a phone
+on the same wifi. A phone usually is not on that wifi, so
+`seamcheck config --tunnel always` remembers, for this machine, that every run should also
+print a public HTTPS link. That is the one thing here that leaves the machine — anyone
+holding the link can read the report while the command runs, and it dies when you stop it.
+It is off until you ask for it, and `--local-only` overrules it for a single run.
+
 ## Why I made it
 
 I was building a game — a fairly large Django app with a lot of hand-written JavaScript —

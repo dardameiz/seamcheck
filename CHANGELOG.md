@@ -19,6 +19,32 @@ backend that answered `uncertain` everywhere would score 100% precision and be u
 
 ## Unreleased
 
+### The phone link, for the phone that is not on this wifi
+
+Reported from use: *"seamcheck should serve always a link for phone, because people and
+LLMs have the links on the phone outside."* Outside the wifi, where the LAN address the
+map prints is just a number that times out.
+
+- **Added** — `seamcheck config --tunnel always`, remembered for this MACHINE and every
+  project on it, in `~/.config/seamcheck/settings.json`. Every later `map` or `serve` also
+  prints a public HTTPS address that works from anywhere. `--tunnel never` puts it back.
+- **Why a setting and not a default.** This is the one thing seamcheck does that leaves
+  your machine. A default would mean that on a consultant's laptop, `seamcheck map` on a
+  client's private codebase puts a readable report on the public internet without anyone
+  choosing that. Opting in once is the difference between a tool you can hand to someone
+  and one you have to warn them about.
+- **The ladder, highest first**: `--local-only`, then `--tunnel` typed for this run, then
+  `SEAMCHECK_TUNNEL` for one shell, then the machine's setting, then off. `--local-only`
+  can never be overruled by a stored preference, or the flag would be a lie. A value
+  nobody defined — `SEAMCHECK_TUNNEL=maybe` — is not a decision to publish a codebase, so
+  it reads as unset.
+- **`seamcheck config` says which answer is in force and where it came from**, on both the
+  Django and the non-Django path, and now says it even in a directory with no project
+  config to show. Both renderers used to return early there, hiding the machine's own
+  setting in exactly the place somebody goes to look for it.
+- A tunnel that will not open no longer leaves a person guessing: the wifi and loopback
+  links are printed as always, followed by the reason there is no public one.
+
 ### The map reads left to right in the order the code runs
 
 Reported from a phone, of the browser band: *"base and the main should be on the left

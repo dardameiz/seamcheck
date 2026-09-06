@@ -58,6 +58,12 @@ class Command(BaseCommand):
                  "the report; it dies with the command.",
         )
         parser.add_argument(
+            "--set-tunnel", choices=["always", "never"], default=None, metavar="WHEN",
+            help="Remember, for this machine and every project on it, whether `map` and "
+                 "`serve` open the public link: `always` or `never`. Written to "
+                 "~/.config/seamcheck/settings.json. `seamcheck config` shows it.",
+        )
+        parser.add_argument(
             "--serve", action="store_true",
             help="Serve the report from this machine so a browser (and a phone on the "
                  "same network) can open it. Nothing is uploaded; the server stops when "
@@ -136,6 +142,8 @@ class Command(BaseCommand):
             raise CommandError("--out only applies together with --format (or --json).")
         if options["observe"] is not None:
             return self._observe(options)
+        if options.get("set_tunnel"):
+            return self._set_tunnel(options["set_tunnel"])
         if options["show_config"]:
             return self._show_config(options["repo_root"])
         if options["triage"]:
@@ -298,6 +306,30 @@ class Command(BaseCommand):
             urls.append(f"{base}/{path}" if path else f"{base}/")
         return sorted(set(urls))
 
+    def _set_tunnel(self, when: str):
+        """Store the answer for this machine, and say where it went.
+
+        Per machine rather than per project because that is the shape of the question:
+        the phone is the same phone in every repository, and the wifi is the same wifi.
+        """
+        from seamcheck.usersettings import settings_path, wants_tunnel, write
+
+        write("tunnel", when, None)
+        wanted, why = wants_tunnel()
+        self.stdout.write(f"  tunnel {when}   written to {settings_path()}")
+        if wanted != (when == "always"):
+            # Something above the file is answering instead. Silence here would leave a
+            # person editing the file again and again while an environment variable wins.
+            self.stderr.write(
+                f"  ...but this shell answers {'always' if wanted else 'never'}: {why}")
+        elif when == "always":
+            self.stdout.write(
+                "  Every `seamcheck map` on this machine now also prints a public HTTPS"
+                "\n  link, readable by anyone who has it while the command runs."
+                "\n  --local-only still overrules it, run by run.")
+        else:
+            self.stdout.write("  `seamcheck map --tunnel` still opens one for a single run.")
+
     def _show_config(self, repo_root):
         """What the scan will use, and why - because detection must not be a black box.
 
@@ -316,7 +348,11 @@ class Command(BaseCommand):
                 "URLconf, templates and static files, so it needs at least "
                 "settings.ROOT_URLCONF to be set."
             )
-            return
+            # Still printed: the phone-link setting belongs to the MACHINE, so it is the
+            # one answer this command can always give, including in a directory that is
+            # not a project at all. Returning early hid it exactly where somebody would
+            # go looking for it.
+            return self._show_tunnel_setting()
         width = max(len(key) for key in config)
         self.stdout.write("The config this scan will use:\n")
         for key in sorted(config):
@@ -330,6 +366,20 @@ class Command(BaseCommand):
             f"\n  {declared} from SEAMCHECK_CONFIG, {len(config) - declared} detected from "
             "the project.\n  Anything you set in SEAMCHECK_CONFIG wins over detection."
         )
+        self._show_tunnel_setting()
+
+    def _show_tunnel_setting(self):
+        """The one setting that is not about this project.
+
+        Shown by `config` because that is where a person goes to ask "why is there no
+        public link", and a setting nobody can see is one nobody can undo.
+        """
+        from seamcheck.usersettings import wants_tunnel
+
+        wanted, why = wants_tunnel()
+        self.stdout.write(f"\n  public link on this machine: {'yes' if wanted else 'no'}")
+        self.stdout.write(f"  \u2514\u2500 {why}")
+        self.stdout.write("  seamcheck config --tunnel always|never   changes it")
 
     def _triage(self, options):
         if options.get("undo"):
@@ -588,9 +638,15 @@ class Command(BaseCommand):
                sources=None, repo_root: str = "", assets=None):
         """Hold the report open until interrupted, and name every way in."""
         from seamcheck.serve import public_tunnel, serve_addresses
+        from seamcheck.usersettings import wants_tunnel
 
         if fmt == "json":
             raise CommandError("--serve renders a page; use --format map or html.")
+
+        # The flag is one rung of a ladder, not the whole answer. A phone is usually not
+        # on this wifi, so a person who said `--tunnel always` once should not have to
+        # remember the flag on every run for the rest of the year.
+        tunnel, why = wants_tunnel(flag=tunnel, local_only=local_only)
 
         server, addresses = serve_addresses(
             text, host="127.0.0.1" if local_only else "0.0.0.0",
@@ -601,23 +657,41 @@ class Command(BaseCommand):
         if "lan" in addresses:
             self.stdout.write(f"  phone  {addresses['lan']}")
         proxy = None
+        opened = False
         if tunnel:
             try:
                 proxy, public = public_tunnel(server.server_port)
             except RuntimeError as error:
-                # A tunnel that will not open must not take the local server down with it.
+                # A tunnel that will not open must not take the local server down with
+                # it, and must not leave a person staring at two addresses wondering
+                # which one was supposed to be the public one.
                 self.stderr.write(str(error))
+                self.stderr.write("  no public link; the addresses above still work.")
             else:
                 path = addresses["local"][addresses["local"].index("/", 8):]
-                self.stdout.write(f"  public {public}{path}")
+                self.stdout.write(f"  public {public}{path}   ({why})")
+                opened = True
         self.stdout.write("")
-        self.stdout.write(
-            "  Served from this machine only, for as long as this command runs."
-            if local_only else
-            "  Served from this machine, reachable by anyone on this network holding"
-            "\n  the link. Nothing is uploaded. --local-only drops the phone link and"
-            "\n  binds loopback instead."
-        )
+        if opened:
+            self.stdout.write(
+                "  The public link is readable by ANYONE who has it, from anywhere, for"
+                "\n  as long as this command runs. It dies when you stop it. Turn it off"
+                "\n  for good with `seamcheck config --tunnel never`, or for this run"
+                "\n  with --local-only."
+            )
+        else:
+            self.stdout.write(
+                "  Served from this machine only, for as long as this command runs."
+                if local_only else
+                "  Served from this machine, reachable by anyone on this network holding"
+                "\n  the link. Nothing is uploaded. --local-only drops the phone link and"
+                "\n  binds loopback instead."
+            )
+            if not local_only and not tunnel:
+                self.stdout.write(
+                    "  A phone off this wifi cannot reach that address:"
+                    "\n  `seamcheck config --tunnel always` gives every run a link that can."
+                )
         self.stdout.write("  Ctrl-C to stop.")
         # Block-buffered when redirected, and serve_forever never lets the buffer fill;
         # a run served for hours once with its address unseen in the log.

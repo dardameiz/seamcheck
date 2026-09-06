@@ -133,6 +133,18 @@ It reads on a phone, because that is where you end up looking at it.
 
 <img src="images/phone.png" width="320" alt="The map on a phone">
 
+`seamcheck map` prints two addresses: one for this computer and one to type on a phone on
+the same wifi. The phone is often somewhere else — a link gets sent, opened on a train,
+opened by whoever you sent it to — and the wifi address is then just a number that times
+out. `seamcheck config --tunnel always` remembers, for this machine and every project on
+it, that each run should also print a public HTTPS address that works from anywhere.
+
+It is stored rather than defaulted because it is the one thing seamcheck does that leaves
+your machine. While the command runs, anyone holding that link can read the report; it
+dies with the command. `seamcheck config --tunnel never` puts it back, `--local-only`
+overrules it for one run, and `seamcheck config` always says which answer is in force and
+where it came from.
+
 Five looks, if you care. Aurora is the default.
 
 ![The design packs](images/packs.png)

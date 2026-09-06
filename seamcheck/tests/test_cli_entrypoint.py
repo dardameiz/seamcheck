@@ -337,3 +337,35 @@ class UndoFlagTests(SimpleTestCase):
             self.assertEqual(load_triage(tmp), [])
             self.assertEqual(again, 2)
             scan.assert_not_called()
+
+
+class TunnelSettingArgumentTests(SimpleTestCase):
+    """`seamcheck config --tunnel always` is the sentence a person types.
+
+    The management command cannot spell that flag `--tunnel`: there it is the per-run
+    boolean that opens a tunnel now. Two meanings behind one word is how somebody ends up
+    publishing a report they meant to configure, so the front door translates it into
+    `--set-tunnel` and only one of the two is ever typed.
+    """
+
+    def test_config_tunnel_always_stores_rather_than_opening_one(self):
+        with _Dispatch() as run:
+            self.assertEqual(main(["config", "--tunnel", "always"]), 0)
+
+            self.assertEqual(
+                run.args, ("seamcheck", "--show-config", "--set-tunnel", "always"))
+
+    def test_config_tunnel_never_is_translated_the_same_way(self):
+        with _Dispatch() as run:
+            main(["config", "--tunnel", "never"])
+
+            self.assertEqual(
+                run.args, ("seamcheck", "--show-config", "--set-tunnel", "never"))
+
+    def test_the_per_run_flag_on_map_is_left_alone(self):
+        # It keeps its own meaning: open one NOW, store nothing.
+        with _Dispatch() as run:
+            main(["map", "--tunnel"])
+
+            self.assertIn("--tunnel", run.args)
+            self.assertNotIn("--set-tunnel", run.args)
