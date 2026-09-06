@@ -2682,3 +2682,107 @@ class NoPullToRefreshTests(SimpleTestCase):
 
         self.assertNotEqual(measured["sheetTouch"], "none",
                             f"the sheet has to keep its own scrolling: {measured}")
+
+
+class AFunctionAcrossItsPagesTests(SimpleTestCase):
+    """Reported from a phone, having filtered on `submit_push`: "I filter on submit_push
+    but I can filter on different html and then it says nothing to do with that. When I
+    choose the html part it should show all html separated, like the different containers
+    we did today - and the dropdown should only show those htmls which belong to that
+    function."
+
+    Two halves of one mistake. The Page picker offered every page in the project while a
+    function was picked, so almost any choice narrowed the function to a page it was never
+    on and drew an empty canvas. And the function's own view unioned its pages into one
+    heap, so the only way to ask "where does this happen" was to narrow, one page at a
+    time, losing the rest.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        try:
+            from playwright.sync_api import sync_playwright  # noqa: F401
+        except ImportError:
+            raise unittest.SkipTest("playwright is not installed (the observe extra)") from None
+
+    def _url(self) -> str:
+        from seamcheck.graph import Graph
+        from seamcheck.mapdata import ConnectivityMap, MapEdge, MapNode, PageMap
+        from seamcheck.renderers.map_html import render_document
+
+        # `push()` lives in a shared module that TWO pages load, and a third page has
+        # nothing to do with it. That third page is the one that must not be offered.
+        def page_of(name, file):
+            nodes = [
+                MapNode(f"page:{name}", name, "page", "connected"),
+                MapNode(f"module:{file}", file, "module", "connected",
+                        file=f"static/js/{file}", line=1, lang="JavaScript"),
+            ]
+            edges = [MapEdge(f"page:{name}", f"module:{file}", "connected")]
+            return nodes, edges
+
+        nodes, edges = [], []
+        for name, file, owner in (("cart", "cart.js", "push"),
+                                  ("orders", "orders.js", "push"),
+                                  ("about", "about.js", "spin")):
+            page_nodes, page_edges = page_of(name, file)
+            call = MapNode(f"js_call:{name}", f"/api/{name}/", "js_call", "connected",
+                           file=f"static/js/{file}", line=2, lang="JavaScript", owner=owner)
+            page_nodes.append(call)
+            page_edges.append(MapEdge(f"module:{file}", call.id, "connected"))
+            nodes.append((name, page_nodes, page_edges))
+            edges.append(page_edges)
+        document = render_document(
+            ConnectivityMap(
+                git_sha="0" * 12, generated_at="2026-09-06T00:00:00",
+                pages=[PageMap(name, ns, es) for name, ns, es in nodes],
+                defined={"push": "static/js/cart.js", "spin": "static/js/about.js"},
+                calls={"push": [], "spin": []}),
+            console=_console_for(Graph(symbols=[], edges=[])))
+        path = pathlib.Path(tempfile.mkdtemp()) / "map.html"
+        path.write_text(document.single_file(), encoding="utf-8")
+        return path.as_uri()
+
+    def _after_picking(self, name: str):
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch()
+            except Exception as error:  # pragma: no cover - no browser downloaded
+                raise unittest.SkipTest(f"no chromium: {error}") from None
+            page = browser.new_page(viewport={"width": 1400, "height": 900})
+            errors: list[str] = []
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.goto(self._url(), wait_until="load")
+            _open_lens(page, "map")
+            page.wait_for_selector("#cv .nd", state="attached")
+            page.evaluate("(name) => pickFunction(name)", name)
+            page.wait_for_function("() => current === FN_PAGE", timeout=5000)
+            page.wait_for_timeout(250)
+            state = page.evaluate("""() => ({
+                options: [...document.getElementById('pg').options].map(o => o.textContent),
+                lanes: [...document.querySelectorAll('#cv .lanename')].map(t => t.textContent),
+            })""")
+            browser.close()
+        self.assertEqual(errors, [], "the canvas must not throw")
+        return state
+
+    def test_the_picker_offers_only_the_pages_the_function_is_on(self):
+        state = self._after_picking("push")
+        offered = " | ".join(state["options"])
+
+        self.assertIn("push()", offered, offered)
+        self.assertIn("cart", offered, offered)
+        self.assertIn("orders", offered, offered)
+        self.assertNotIn("about", offered,
+                         f"push() was never on that page, so narrowing to it can only "
+                         f"draw an empty canvas: {offered}")
+
+    def test_each_page_the_function_touches_is_its_own_container(self):
+        state = self._after_picking("push")
+
+        self.assertIn("cart", state["lanes"], state["lanes"])
+        self.assertIn("orders", state["lanes"],
+                      f"both pages at once, separated - not one at a time: {state['lanes']}")

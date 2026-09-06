@@ -19,6 +19,29 @@ backend that answered `uncertain` everywhere would score 100% precision and be u
 
 ## Unreleased
 
+### A function, and the pages it happens on
+
+Reported from a phone, having filtered on `submit_push`: *"I filter on submit_push but I
+can filter on different html and then it says nothing to do with that. When I choose the
+html part it should show all html separated, like the different containers we did today -
+and the dropdown should only show those htmls which belong to that function."*
+
+Two halves of one mistake, and the empty canvas came from the pair of them.
+
+- **Fixed** — the Page picker offered every page in the project while a function was
+  picked, and each one narrowed the function to that page. Almost none of them held any
+  of it: `submit_push` on `base.html` drew an empty canvas and a sentence about a function
+  that had simply never been there. It now offers the pages the function IS on, and the
+  count beside each is how much of the function is there rather than how big the page is.
+- **Changed** — the function's own view divides the browser band by PAGE, one container
+  each, the way the store band divides by store. A function that runs on four pages is
+  four containers side by side, all at once, instead of a heap that could only be taken
+  apart by narrowing to one page and losing the other three.
+- **Not divided that way**: the seam, the server and the store. A route, a handler and a
+  Redis key are not ON an HTML page, they are reached FROM one, and a key reached from
+  three pages would have to be drawn three times or assigned to one of them by a coin
+  toss.
+
 ### Panning the map upward reloaded the page
 
 Reported from a phone: *"when I move down on the map with one finger it's possible,

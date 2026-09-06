@@ -1772,6 +1772,15 @@ function fillPages(counts) {
   // heading is the first thing to truncate, so the only legible part named nothing.
   const tail = i => {
     if (counts) return `${counts[i]} changed`;
+    if (funcFilter && i !== FN_PAGE && PAGES[FN_PAGE].per) {
+      // How much of the function is on that page, which is the only number that helps
+      // a reader decide whether to narrow to it.
+      let here = 0;
+      PAGES[FN_PAGE].per.forEach((count, at) => {
+        if ((PAGES[at] || EMPTY_PAGE).g === (PAGES[i] || EMPTY_PAGE).g) here += count;
+      });
+      return `${here} of ${funcFilter}()`;
+    }
     const drawn = !PAGED_LAYERS.has(layer) ? lensedCount(PAGES[i])
       : i === currentPageIndex() ? wholeCount() : reachedCount(i);
     return `${drawn} node${drawn === 1 ? "" : "s"}`;
@@ -1784,8 +1793,19 @@ function fillPages(counts) {
     ? [`<option value="all">Every page — ${tail(currentPageIndex())}</option>`] : [];
   // Under a store, a page that reaches none of it is not offered: a hundred rows of
   // "0 nodes" is a list of things the picker cannot do. The page already picked stays.
+  // While a function is picked, the pages offered are the ones that function is ON, and
+  // the count beside each is how much of the FUNCTION is there - not how big the page
+  // is. Every page in the project was offered before, and picking almost any of them
+  // narrowed the function to nothing: `submit_push` on `base.html` drew an empty canvas
+  // and a sentence about a function that had simply never been on that page. Reported as
+  // "I filter on submit_push but I can filter on different html and then it says nothing
+  // to do with that".
+  const world = funcFilter ? (PAGES[FN_PAGE].per || new Map()) : null;
+  const worldGroups = world
+    ? new Set([...world.keys()].map(i => (PAGES[i] || EMPTY_PAGE).g)) : null;
   const listed = [...GROUP_WHOLE].filter(([g, i]) =>
-    !store || g === here.g || reachedCount(i) > 0);
+    (!store || g === here.g || reachedCount(i) > 0)
+    && (!worldGroups || worldGroups.has(g) || g === here.g));
   // A picked function has a page of its own, unioned across everywhere it reaches. It
   // is offered first and only while it is picked, so the picker never has a row nobody
   // can get back to - and picking a real page underneath it narrows the function to that
@@ -2748,7 +2768,31 @@ function place(buckets, used, perRow, depth) {
     // language. One list, one loop - three copies of "start a lane" was three places for
     // the geometry to disagree.
     let runs = [];
-    if (laneOf) {
+    // A function's world is unioned across every page that holds part of it, so in that
+    // view the question "which page" is the one a reader is actually asking - and the
+    // answer used to be available only by narrowing to one page at a time and losing the
+    // rest. The browser band is divided by PAGE here, one container each, the way the
+    // store band is divided by store. Reported as "when I choose the html part it should
+    // show all html separated, like the different containers we did today".
+    //
+    // The browser band only: a route, a handler and a Redis key are not ON an HTML page,
+    // they are reached FROM one, and a key reached from three pages would have to be
+    // drawn three times or assigned to one of them by a coin toss. Those bands keep the
+    // containers they have.
+    const pageOf = n => (n._on === undefined ? -1 : n._on);
+    const onPages = (current === FN_PAGE && bandDef && bandDef.id === "browser")
+      ? [...new Set(ordered.flatMap(c => (buckets.get(c) || []).map(pageOf)))]
+          .filter(i => i >= 0 && PAGES[i])
+      : [];
+    if (onPages.length > 1) {
+      onPages.forEach(i => {
+        const slice = new Map(ordered.map(c =>
+          [c, (buckets.get(c) || []).filter(n => pageOf(n) === i)]));
+        if (![...slice.values()].some(v => v.length)) return;
+        runs.push({id: "page:" + i, name: pageLabel(PAGES[i]), box: true, oracle: true,
+                   badge: "", drop: LANE_FIRST_DROP + 12, slice});
+      });
+    } else if (laneOf) {
       bandDef.lanes.forEach((lane, i) => {
         const cols = ordered.filter(c => laneOf.get(c) === i);
         if (!cols.some(c => (buckets.get(c) || []).length)) return;
@@ -3191,9 +3235,15 @@ function buildFunctionPage(name, on, hops) {
   // no snippet is a card that cannot be acted on.
   return Promise.all(pages.map(i => ensureDetail(i))).then(() => {
     const known = new Map(), seeds = new Set(), edges = [], seen = new Set();
+    // Which page each symbol was read on. A function's world is unioned across every
+    // page that holds any of it, and without this the union forgets where each half came
+    // from - so the view could only ever be "all of it at once" or "narrow to one page
+    // and hope". The first page wins for a symbol on several, so a card has one home.
+    const cameFrom = new Map();
     pages.forEach(i => {
       (PAGES[i].nodes || []).forEach(node => {
         known.set(node.id, node);
+        if (!cameFrom.has(node.id)) cameFrom.set(node.id, i);
         if (node.owner && family.has(node.owner)) seeds.add(node.id);
       });
       (PAGES[i].edges || []).forEach(e => {
@@ -3289,6 +3339,19 @@ function buildFunctionPage(name, on, hops) {
       downstream = next;
     }
     const nodes = [...keep].map(id => known.get(id)).filter(Boolean);
+    // Tagged on the node, because `place()` divides a band by what its nodes say they
+    // are - a language, a service, a store - and this is one more of those.
+    nodes.forEach(node => { node._on = cameFrom.get(node.id); });
+    // The pages this world actually covers, and how much of it each one holds. The Page
+    // picker reads them: offering all 60 pages of a project while a function is picked
+    // meant almost every one of them narrowed the function to nothing, which is what
+    // `submit_push` on base.html did - the function is real, the page is real, and the
+    // two have nothing to do with each other.
+    const per = new Map();
+    nodes.forEach(node => {
+      if (node._on === undefined) return;
+      per.set(node._on, (per.get(node._on) || 0) + 1);
+    });
     const st = {};
     nodes.forEach(node => { st[node.status] = (st[node.status] || 0) + 1; });
     const p = PAGES[FN_PAGE];
@@ -3299,6 +3362,7 @@ function buildFunctionPage(name, on, hops) {
       ? `and the ${helpers} function${helpers === 1 ? "" : "s"} it calls`
       : "everywhere this function reaches";
     p.family = family;
+    p.per = per;
     p.n = nodes.length;
     p.st = st;
     p.ks = [];
