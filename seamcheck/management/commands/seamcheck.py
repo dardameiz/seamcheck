@@ -131,6 +131,12 @@ class Command(BaseCommand):
         parser.add_argument("--file", default="", help="Only findings in this file.")
         parser.add_argument("--owner", default="", help="Only findings owned by this function.")
         parser.add_argument(
+            "--refresh", action="store_true",
+            help="Skip the scan cache in both directions, for --symbols/--findings/--diff - "
+                 "the escape for a tree the cache cannot judge on its own (a fresh checkout, "
+                 "a restored backup, a clock that just got corrected).",
+        )
+        parser.add_argument(
             "--no-progress", action="store_true",
             help="Never draw the progress bar (it is off already when output is redirected).",
         )
@@ -172,14 +178,16 @@ class Command(BaseCommand):
             from seamcheck import queries
 
             out = queries.symbols(options["repo_root"], options["search"],
-                                  options["kind"], options["limit"], options["cursor"])
+                                  options["kind"], options["limit"], options["cursor"],
+                                  refresh=options["refresh"])
             return self.stdout.write(json.dumps(out, indent=2))
         if options.get("findings"):
             from seamcheck import queries
 
             out = queries.findings(options["repo_root"], options["file"], options["kind"],
                                    options["status"] or "", options["owner"],
-                                   options["limit"], options["cursor"])
+                                   options["limit"], options["cursor"],
+                                   refresh=options["refresh"])
             self.stdout.write(json.dumps(out, indent=2))
             return None
         if options["show_config"]:

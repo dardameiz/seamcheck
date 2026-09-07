@@ -58,6 +58,22 @@ class SymbolsTests(SimpleTestCase):
         # The 88.5-second "No symbol with id `urls.py`" is the thing this kills.
         self.assertIn("url:api/submit/", queries.near(".", "url:api/submit"))
 
+    def test_near_uses_a_graph_handed_in_instead_of_scanning_again(self):
+        # `explain`, on a miss, already paid for a scan - `near()` must not pay for a
+        # second cache lookup right behind the first just to answer the same question.
+        with mock.patch("seamcheck.scancache.cached_scan") as cached_scan:
+            matches = queries.near(".", "url:api/submit", graph=GRAPH)
+
+        cached_scan.assert_not_called()
+        self.assertIn("url:api/submit/", matches)
+
+    def test_refresh_reaches_the_scan_cache(self):
+        with mock.patch("seamcheck.scancache.cached_scan",
+                        return_value=(GRAPH, {"cached": False, "seconds": 1.0})) as cached_scan:
+            queries.symbols(".", refresh=True)
+
+        cached_scan.assert_called_once_with(".", refresh=True)
+
 
 class FindingsTests(SimpleTestCase):
     def setUp(self):
@@ -153,6 +169,13 @@ class FindingsTests(SimpleTestCase):
                          ["view:submit_push"])
         self.assertEqual(connected_out["data"]["statuses"], ["connected"])
 
+    def test_refresh_reaches_the_scan_cache(self):
+        with mock.patch("seamcheck.scancache.cached_scan",
+                        return_value=(GRAPH, {"cached": False, "seconds": 1.0})) as cached_scan:
+            queries.findings(".", refresh=True)
+
+        cached_scan.assert_called_once_with(".", refresh=True)
+
 
 class DiffTests(SimpleTestCase):
     """"What did this commit break" is the question CI and an agent both ask, and there was
@@ -219,6 +242,15 @@ class DiffTests(SimpleTestCase):
         self.assertEqual(out["data"]["counts"], {"appeared": 3, "vanished": 2, "changed": 0})
         self.assertEqual(out["data"]["vanished"], [],
                          "nothing vanished on THIS page - counts says 2 total, not 0")
+
+    def test_refresh_reaches_the_scan_cache(self):
+        with mock.patch("seamcheck.scancache.cached_scan",
+                        return_value=(GRAPH, {"cached": False, "seconds": 1.0})) as cached_scan, \
+             mock.patch("seamcheck.snapshot.load_snapshot", return_value=GRAPH), \
+             mock.patch("seamcheck.queries._resolve", return_value="abc123"):
+            queries.diff(".", since="main", refresh=True)
+
+        cached_scan.assert_called_once_with(".", refresh=True)
 
 
 class DeterminismTests(SimpleTestCase):

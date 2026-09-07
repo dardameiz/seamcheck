@@ -511,3 +511,27 @@ class SinceFlagParityTests(SimpleTestCase):
 
         self.assertIsNone(_plain_args([])["since"])
         self.assertIsNone(self._django_since())
+
+
+class RefreshFlagParityTests(SimpleTestCase):
+    """`--refresh` - the scan cache's escape hatch for a tree it cannot judge on its own
+    (a fresh checkout, a restored backup, a clock that just got corrected) - must exist and
+    mean the same thing on both front doors, the same way `--since` above had to.
+    """
+
+    def _django_refresh(self, *argv):
+        from seamcheck.management.commands.seamcheck import Command
+
+        parser = Command().create_parser("manage.py", "seamcheck")
+        return parser.parse_args(list(argv)).refresh
+
+    def test_the_same_argv_parses_to_the_same_refresh_value(self):
+        from seamcheck.cli import _plain_args
+
+        self.assertEqual(_plain_args(["--refresh"])["refresh"], self._django_refresh("--refresh"))
+
+    def test_neither_door_turns_it_on_by_default(self):
+        from seamcheck.cli import _plain_args
+
+        self.assertFalse(_plain_args([])["refresh"])
+        self.assertFalse(self._django_refresh())

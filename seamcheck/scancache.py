@@ -28,8 +28,10 @@ timestamps) or a backwards step of the system clock both produce a tree that loo
 signal this module reads, exactly as old as it did before. There is no fix for this short of
 hashing every byte, which is the cost this module exists to avoid paying. A caller that knows
 its tree was touched by one of these - a fresh checkout, a restored backup, a clock that just
-got corrected - should pass `refresh=True` to `cached_scan`, which skips the cache in both
-directions: it neither reads nor trusts what is already there.
+got corrected - should pass `refresh=True` to `cached_scan` from library code. From a
+terminal that is `--refresh`, on `symbols`, `findings` and `diff` (wired in cli.py and the
+management command, the two places that own that vocabulary) - the actual escape a person can
+type, where the library keyword argument alone was not.
 
 Two layers: a process memo, bounded to the `_MEMO_LIMIT` most recently used graphs so a
 long-lived MCP session answering questions across many repositories cannot grow without
@@ -48,7 +50,11 @@ import pathlib
 import time
 from collections import OrderedDict
 
+from seamcheck.adapters.discovery import SKIP_DIRS
+from seamcheck.autoconfig import EXCLUDED_DIRS
 from seamcheck.graph import Graph, graph_from_dict, graph_to_dict
+from seamcheck.snapshot import _SCANS_DIR
+from seamcheck.triage import _TRIAGE_FILE
 
 # memo_key -> (graph, cached_at_ns). cached_at_ns is judged against a fresh walk's latest
 # input mtime exactly the way a disk entry's own mtime is - see `cached_scan`. An
@@ -67,9 +73,33 @@ _MEMO_LIMIT = 2
 # ever grew.
 _KEEP_PER_REPO = 3
 
-# Directories whose contents never change what a scan says.
-_SKIP = {".git", "node_modules", "__pycache__", ".venv", "venv", ".seamcheck", "dist",
-         "build", ".mypy_cache", ".ruff_cache", ".pytest_cache"}
+# Directories whose contents never change what a scan says - derived from the two sets the
+# SCAN ITSELF actually honours, not a third, hand-maintained list. `EXCLUDED_DIRS`
+# (autoconfig.py) is what `roots.py`'s CSS discovery and autoconfig's own file-finding walk
+# skip; `SKIP_DIRS` (adapters/discovery.py) is what `find_js_files` - the walk that supplies
+# every scan's "extra" JavaScript - and adapter/manifest detection skip. Between them they
+# cover every directory-pruning walk a real scan runs.
+#
+# This used to be its own set that blanket-skipped every dot-directory and `dist`/`build` by
+# name. `dist` and `build` are still here - both sets already name them, because the scanner
+# genuinely never reads inside either - but the blanket dot-rule is gone: a project's own
+# `js_entry_files` or `templates_root` can point INTO a dot-directory (`.storybook/`,
+# `.output/`) on purpose, and a walk that skipped it by convention alone made the cache key
+# and the freshness mtime both blind to edits there - a stale graph looked fresh forever.
+# `.git` stays excluded because both sets already name it explicitly, not through a rule.
+_SCANNER_EXCLUDED = EXCLUDED_DIRS | SKIP_DIRS
+
+# The tool's OWN state, which is not scanner input at all and must never feed the key or the
+# freshness check - it is written to by `seamcheck scan` (`_SCANS_DIR`) and rewritten by a
+# read that finds an expired mark (`_TRIAGE_FILE`, via `api._marks`), so treating either as
+# an input file meant the documented "scan, then ask a question" sequence never hit the
+# cache: the scan's own snapshot write, or the read that stamped an expired triage entry,
+# changed the key out from under the very answer it just produced. Matched by RELATIVE PATH,
+# not by directory name - `_TRIAGE_FILE` sits inside a directory literally named
+# `seamcheck`, which is this project's own source when this tool scans itself, and skipping
+# that whole directory would skip the product it exists to scan.
+_TOOL_STATE_DIR = _SCANS_DIR.parts
+_TOOL_STATE_FILE = _TRIAGE_FILE.parts
 
 
 def _version() -> str:
@@ -132,9 +162,22 @@ def _scan_tree(repo_root: str) -> tuple[str, int]:
     root = pathlib.Path(repo_root)
     latest_mtime_ns = 0
     for current, directories, files in os.walk(root):
-        directories[:] = sorted(d for d in directories if d not in _SKIP and not d.startswith("."))
+        here = pathlib.Path(current)
+        directories[:] = sorted(
+            d for d in directories
+            if d not in _SCANNER_EXCLUDED
+            and (here / d).relative_to(root).parts != _TOOL_STATE_DIR
+        )
         for name in sorted(files):
-            path = pathlib.Path(current) / name
+            path = here / name
+            if path.relative_to(root).parts == _TOOL_STATE_FILE:
+                # The triage file itself: read by every command that judges a scan against
+                # marks, and REWRITTEN by `api._marks` the moment a scan finds one expired -
+                # a read that busts the very cache it just read from. Not scanner input
+                # either way, so it is excluded by path rather than by directory name (its
+                # parent, `seamcheck/`, is this project's own source when the tool scans
+                # itself).
+                continue
             try:
                 info = path.stat()
             except OSError:
@@ -146,7 +189,7 @@ def _scan_tree(repo_root: str) -> tuple[str, int]:
     return digest.hexdigest()[:32], latest_mtime_ns
 
 
-def stamp(repo_root: str) -> str:
+def _stamp(repo_root: str) -> str:
     """The key: the file tree's shape, the tool version, and the settings module.
 
     Not the effective config - see the module docstring for why.

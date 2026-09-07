@@ -326,7 +326,9 @@ COMMANDS: dict[str, Command] = {
             "Every other command takes a symbol id, and getting one wrong used to cost a "
             "full scan to be told so - 88 seconds on a 500k-line project, to read `No "
             "symbol with id ...`. This answers from the cached scan in a fraction of a "
-            "second, and it is the right first call before explain or triage."
+            "second, and it is the right first call before explain or triage.\n\n"
+            "`--refresh` skips that cache in both directions, for a tree it cannot judge on "
+            "its own - a fresh checkout, a restored backup, a clock that just got corrected."
         ),
         examples=[
             ("seamcheck symbols --search push", "everything whose id or label says push"),
@@ -342,7 +344,9 @@ COMMANDS: dict[str, Command] = {
             "where - narrowed by file, kind, status or owning function, and it says what "
             "it left out so nothing looks complete when it is not. By default it only "
             "shows what the tool calls broken; pass --status uncertain or --status "
-            "connected to see those too, and the answer names which statuses it searched."
+            "connected to see those too, and the answer names which statuses it searched.\n\n"
+            "`--refresh` skips the scan cache in both directions - the escape for a tree "
+            "it cannot judge on its own."
         ),
         examples=[
             ("seamcheck findings --file app/views.py", "what is wrong in the file I am editing"),
@@ -595,14 +599,16 @@ def _run_without_django(arguments, verbose: bool) -> int:
         from seamcheck import queries
 
         print(json.dumps(queries.symbols(root, options["search"], options["kind"],
-                                         options["limit"], options["cursor"]), indent=2))
+                                         options["limit"], options["cursor"],
+                                         refresh=options["refresh"]), indent=2))
         return 0
     if options["findings"]:
         from seamcheck import queries
 
         print(json.dumps(queries.findings(root, options["file"], options["kind"],
                                           options["status"] or "", options["owner"],
-                                          options["limit"], options["cursor"]), indent=2))
+                                          options["limit"], options["cursor"],
+                                          refresh=options["refresh"]), indent=2))
         return 0
     if options["show_config"]:
         return _show_config_plain(root)
@@ -813,6 +819,9 @@ def _plain_args(arguments) -> dict:
         "reason": "", "why": "", "undo": False, "set_tunnel": None,
         "symbols": False, "search": "", "kind": "", "limit": 25, "cursor": "",
         "findings": False, "file": "", "owner": "",
+        # Same name, same meaning as the management command's --refresh: skip the scan
+        # cache in both directions for --symbols/--findings/--diff.
+        "refresh": False,
         # Same names, same meaning as the management command's --full/--yes: --full alone
         # still refuses to print the whole graph, on this path too.
         "full": False, "yes": False,
@@ -894,6 +903,8 @@ def _plain_args(arguments) -> dict:
             options["full"] = True
         elif item == "--yes":
             options["yes"] = True
+        elif item == "--refresh":
+            options["refresh"] = True
     return options
 
 

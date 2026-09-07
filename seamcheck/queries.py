@@ -25,15 +25,20 @@ def _row(symbol) -> dict:
             "owner": symbol.owner or "", "note": symbol.note or ""}
 
 
-def _scan(repo_root: str):
-    graph, how = scancache.cached_scan(repo_root)
+def _scan(repo_root: str, refresh: bool = False):
+    graph, how = scancache.cached_scan(repo_root, refresh=refresh)
     return graph, {"scan_seconds": how.get("seconds", 0.0), "cached": how.get("cached", False)}
 
 
 def symbols(repo_root: str = ".", search: str = "", kind: str = "", limit: int = 25,
-            cursor: str = "") -> dict:
-    """Find a symbol by substring. The cheap way to turn a name into an id."""
-    graph, cost = _scan(repo_root)
+            cursor: str = "", refresh: bool = False) -> dict:
+    """Find a symbol by substring. The cheap way to turn a name into an id.
+
+    `refresh` skips the scan cache in both directions - the escape for a tree the cache
+    cannot judge on its own (a fresh checkout, a restored backup, a clock that just got
+    corrected); see `scancache`'s module docstring.
+    """
+    graph, cost = _scan(repo_root, refresh=refresh)
     needle = search.lower()
     rows = [_row(s) for s in graph.symbols
             if (not needle or needle in s.id.lower() or needle in (s.label or "").lower())
@@ -44,9 +49,15 @@ def symbols(repo_root: str = ".", search: str = "", kind: str = "", limit: int =
                            truncated=cut, cost=cost)
 
 
-def near(repo_root: str = ".", symbol_id: str = "", limit: int = 5) -> list[str]:
-    """Ids close to one that does not exist, for the hint on a miss."""
-    graph, _ = _scan(repo_root)
+def near(repo_root: str = ".", symbol_id: str = "", limit: int = 5, graph=None) -> list[str]:
+    """Ids close to one that does not exist, for the hint on a miss.
+
+    `graph` lets a caller that already paid for a scan (`explain`, on a miss) pass it
+    straight through rather than paying for a second cache lookup right behind the first -
+    resolved via `_scan(repo_root)` only when nothing was handed in.
+    """
+    if graph is None:
+        graph, _ = _scan(repo_root)
     return difflib.get_close_matches(symbol_id, [s.id for s in graph.symbols],
                                      n=limit, cutoff=0.5)
 
@@ -82,7 +93,7 @@ def _normalize_file(file: str, repo_root: str) -> str:
 
 
 def findings(repo_root: str = ".", file: str = "", kind: str = "", status: str = "",
-             owner: str = "", limit: int = 25, cursor: str = "") -> dict:
+             owner: str = "", limit: int = 25, cursor: str = "", refresh: bool = False) -> dict:
     """What is wrong, narrowed by file, kind, status or owning function.
 
     By default this returns only what the tool is willing to call broken - `unresolved` and
@@ -91,12 +102,14 @@ def findings(repo_root: str = ".", file: str = "", kind: str = "", status: str =
     honoured exactly as asked, uncertain and connected included: a caller triaging one file
     may genuinely want to see them. Either way `data["statuses"]` names the statuses actually
     searched, so the answer can never be misread as the default set when it is not.
+
+    `refresh` skips the scan cache in both directions - see `symbols`' docstring.
     """
     if status and status not in ALL_STATUSES:
         return envelope.failure(
             "findings", "bad_argument", f"Unknown status {status!r}.",
             hint="One of: " + ", ".join(ALL_STATUSES))
-    graph, cost = _scan(repo_root)
+    graph, cost = _scan(repo_root, refresh=refresh)
     wanted = (status,) if status else FINDING_STATUSES
     file = _normalize_file(file, repo_root)
     warnings = []
@@ -132,7 +145,7 @@ def _resolve(repo_root: str, ref: str) -> str:
 
 
 def diff(repo_root: str = ".", since: str = "HEAD~1", limit: int = 25,
-         cursor: str = "") -> dict:
+         cursor: str = "", refresh: bool = False) -> dict:
     """What appeared, what vanished and what changed status since a ref.
 
     "What did this commit break" is a question CI and an agent both ask, and until now the
@@ -140,6 +153,8 @@ def diff(repo_root: str = ".", since: str = "HEAD~1", limit: int = 25,
     there was no way to just SEE the list. A separate comparison from the one `check`
     uses, not a shared implementation: this is unfiltered by triage, so a caller diffing
     two arbitrary points sees the raw graph difference rather than a CI-gate's opinion.
+
+    `refresh` skips the scan cache in both directions - see `symbols`' docstring.
     """
     from seamcheck import snapshot
 
@@ -163,7 +178,7 @@ def diff(repo_root: str = ".", since: str = "HEAD~1", limit: int = 25,
         return envelope.failure(
             "diff", "no_baseline", f"No snapshot for {sha[:12]}.",
             hint=f"Run `seamcheck scan` at {since} once, or `seamcheck backfill 20`.")
-    graph, cost = _scan(repo_root)
+    graph, cost = _scan(repo_root, refresh=refresh)
     was = {s.id: s for s in before.symbols}
     now = {s.id: s for s in graph.symbols}
     appeared = [_row(now[i]) for i in now.keys() - was.keys()]
