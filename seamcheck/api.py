@@ -23,6 +23,7 @@ from seamcheck.triage import (
     apply_triage,
     fingerprint_for_symbol,
     has_blocking_findings,
+    judged_ids,
     load_triage,
     note_expired,
     remove_mark,
@@ -522,6 +523,16 @@ def _report(repo_root, fmt, ref, graph, progress, full=False) -> str:
         # The review sections live inside the map now: one document, one link, one render
         # of the same scan. Kept as an alias so an existing caller does not break.
         return _render_map(repo_root, ref, progress)
+    if fmt not in renderers and fmt not in ("map", "console", "sarif", "github", "json"):
+        raise ValueError(f"Unknown format {fmt!r}. Use one of: {', '.join(sorted(renderers))}.")
+
+    # Resolved BEFORE the sarif/github branch below, not just before json/the renderers -
+    # `--check --format sarif` (the exact command docs/ci.md prescribes) already built this
+    # graph to answer the exit code, and returning early here used to discard it, paying for
+    # a second ~168-second scan through `_findings_report` -> `queries.findings` just to
+    # render the digest the first scan could already answer.
+    if graph is None:
+        graph = scan(repo_root, progress)
     if fmt in ("sarif", "github"):
         # A different question from the other formats: not "what changed since ref" but
         # "what is wrong right now" - GitHub's own code-scanning baseline does the
@@ -530,12 +541,7 @@ def _report(repo_root, fmt, ref, graph, progress, full=False) -> str:
         # than the snapshot-diff Report the other formats build. Kept here rather than in
         # just one caller for the same reason `json` moved here: a format that only works
         # through the Django management command is the one an agent's own script hits.
-        return _findings_report(repo_root, fmt)
-    if fmt not in renderers and fmt not in ("map", "console", "sarif", "github", "json"):
-        raise ValueError(f"Unknown format {fmt!r}. Use one of: {', '.join(sorted(renderers))}.")
-
-    if graph is None:
-        graph = scan(repo_root, progress)
+        return _findings_report(repo_root, fmt, graph)
     if fmt == "json":
         # The whole graph, for a script or an agent. Used to live only in the Django
         # management command, so `seamcheck json` on any other backend printed the
@@ -570,17 +576,24 @@ def _report(repo_root, fmt, ref, graph, progress, full=False) -> str:
     return renderers[fmt](built)
 
 
-def _findings_report(repo_root: str, fmt: str) -> str:
+def _findings_report(repo_root: str, fmt: str, graph: Graph | None = None) -> str:
     """SARIF or GitHub workflow-command text, from the current findings list.
 
     A high limit rather than none: a pull request that would annotate 10,000 lines is
     telling you something other than what any one line says.
+
+    `graph` - when the caller already has one - is passed straight through to
+    `queries.findings()` instead of letting it scan again; see `_report()`.
     """
     from seamcheck import queries
     from seamcheck.renderers import github as github_renderer
     from seamcheck.renderers import sarif as sarif_renderer
 
-    rows = queries.findings(repo_root, limit=10_000)["data"]["findings"]
+    # include_triaged defaults to False: an APPROVED finding does not block `check`'s exit
+    # code (has_blocking_findings), and it must not silently reappear here as an "error"
+    # GitHub Code Scanning has no way to suppress - "what is wrong" has to mean one thing
+    # whichever format renders it.
+    rows = queries.findings(repo_root, limit=10_000, graph=graph)["data"]["findings"]
     try:
         sha = current_git_sha(repo_root)
     except Exception:  # noqa: BLE001 - a directory that is not a git checkout still has
@@ -605,7 +618,7 @@ def unverified(repo_root: str = ".", limit: int = 25, kind: str = "") -> dict:
     queue of three thousand is closed.
     """
     graph = scan(repo_root)
-    judged = {entry.symbol_id for entry in load_triage(repo_root)}
+    judged = judged_ids(load_triage(repo_root))
     claims = [
         symbol for symbol in graph.symbols
         if symbol.status in (Status.UNRESOLVED, Status.UNUSED)

@@ -535,3 +535,28 @@ class RefreshFlagParityTests(SimpleTestCase):
 
         self.assertFalse(_plain_args([])["refresh"])
         self.assertFalse(self._django_refresh())
+
+
+class IncludeTriagedFlagParityTests(SimpleTestCase):
+    """`--include-triaged` - the opt-out from `findings()`'s default of hiding anything
+    carrying a triage mark - must exist and mean the same thing on both front doors."""
+
+    def _django_include_triaged(self, *argv):
+        from seamcheck.management.commands.seamcheck import Command
+
+        parser = Command().create_parser("manage.py", "seamcheck")
+        return parser.parse_args(list(argv)).include_triaged
+
+    def test_the_same_argv_parses_to_the_same_value(self):
+        from seamcheck.cli import _plain_args
+
+        argv = ["--include-triaged"]
+
+        self.assertEqual(_plain_args(argv)["include_triaged"],
+                         self._django_include_triaged(*argv))
+
+    def test_neither_door_turns_it_on_by_default(self):
+        from seamcheck.cli import _plain_args
+
+        self.assertFalse(_plain_args([])["include_triaged"])
+        self.assertFalse(self._django_include_triaged())

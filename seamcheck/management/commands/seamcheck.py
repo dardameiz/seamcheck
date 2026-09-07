@@ -131,6 +131,12 @@ class Command(BaseCommand):
         parser.add_argument("--file", default="", help="Only findings in this file.")
         parser.add_argument("--owner", default="", help="Only findings owned by this function.")
         parser.add_argument(
+            "--include-triaged", action="store_true",
+            help="With --findings: also list findings carrying a triage mark (approved, "
+                 "confirmed or deferred). Left out by default - 'what is wrong' means the "
+                 "same thing here as in --check and --format sarif/github.",
+        )
+        parser.add_argument(
             "--refresh", action="store_true",
             help="Skip the scan cache in both directions, for --symbols/--findings/--diff - "
                  "the escape for a tree the cache cannot judge on its own (a fresh checkout, "
@@ -187,7 +193,8 @@ class Command(BaseCommand):
             out = queries.findings(options["repo_root"], options["file"], options["kind"],
                                    options["status"] or "", options["owner"],
                                    options["limit"], options["cursor"],
-                                   refresh=options["refresh"])
+                                   refresh=options["refresh"],
+                                   include_triaged=options["include_triaged"])
             self.stdout.write(json.dumps(out, indent=2))
             return None
         if options["show_config"]:

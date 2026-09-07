@@ -206,6 +206,19 @@ def valid_triage_ids(graph: Graph, entries: list[TriageEntry]) -> set[str]:
     return {entry.symbol_id for entry in valid_triage_entries(graph, entries)}
 
 
+def judged_ids(entries: list[TriageEntry]) -> set[str]:
+    """Every symbol id carrying ANY mark at all, valid or not.
+
+    Deliberately looser than `valid_triage_ids`: this answers "has a person recorded an
+    opinion about this symbol", which stays true even after the code moved out from under
+    the mark, not "and does that opinion still match the evidence". `unverified`'s queue
+    wants exactly that - a claim someone already looked at must not resurface in the queue
+    just because a line shifted - and `findings()` reuses the same predicate so "what is
+    wrong" answers the same question everywhere it is asked, no graph required.
+    """
+    return {entry.symbol_id for entry in entries}
+
+
 def _valid_entries(graph: Graph, entries: list[TriageEntry]) -> dict[str, TriageEntry]:
     """Entries whose stored fingerprint still matches the symbol as it is now.
 

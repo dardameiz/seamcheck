@@ -344,7 +344,10 @@ COMMANDS: dict[str, Command] = {
             "where - narrowed by file, kind, status or owning function, and it says what "
             "it left out so nothing looks complete when it is not. By default it only "
             "shows what the tool calls broken; pass --status uncertain or --status "
-            "connected to see those too, and the answer names which statuses it searched.\n\n"
+            "connected to see those too, and the answer names which statuses it searched. "
+            "A finding carrying any triage mark is also left out by default - the same "
+            "'what is wrong' as --check and --format sarif/github answer - "
+            "--include-triaged lists everything, marks included.\n\n"
             "`--refresh` skips the scan cache in both directions - the escape for a tree "
             "it cannot judge on its own."
         ),
@@ -608,7 +611,9 @@ def _run_without_django(arguments, verbose: bool) -> int:
         print(json.dumps(queries.findings(root, options["file"], options["kind"],
                                           options["status"] or "", options["owner"],
                                           options["limit"], options["cursor"],
-                                          refresh=options["refresh"]), indent=2))
+                                          refresh=options["refresh"],
+                                          include_triaged=options["include_triaged"]),
+                         indent=2))
         return 0
     if options["show_config"]:
         return _show_config_plain(root)
@@ -822,6 +827,9 @@ def _plain_args(arguments) -> dict:
         # Same name, same meaning as the management command's --refresh: skip the scan
         # cache in both directions for --symbols/--findings/--diff.
         "refresh": False,
+        # Same name, same meaning as the management command's --include-triaged: without
+        # it, a finding carrying any triage mark is left out of --findings.
+        "include_triaged": False,
         # Same names, same meaning as the management command's --full/--yes: --full alone
         # still refuses to print the whole graph, on this path too.
         "full": False, "yes": False,
@@ -905,6 +913,8 @@ def _plain_args(arguments) -> dict:
             options["yes"] = True
         elif item == "--refresh":
             options["refresh"] = True
+        elif item == "--include-triaged":
+            options["include_triaged"] = True
     return options
 
 

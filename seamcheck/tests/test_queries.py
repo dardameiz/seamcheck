@@ -176,6 +176,31 @@ class FindingsTests(SimpleTestCase):
 
         cached_scan.assert_called_once_with(".", refresh=True)
 
+    def test_a_triaged_finding_is_absent_by_default_and_present_with_the_flag(self):
+        # `check --format sarif` could exit 0 because everything was approved, while
+        # uploading every one of those approved findings to GitHub Code Scanning as an
+        # error with no way to suppress them - because `findings()` never looked at triage
+        # at all. "What is wrong" has to mean the same thing everywhere it is asked.
+        from seamcheck.triage import TriageEntry, TriageStatus
+
+        entry = TriageEntry(symbol_id="redis_key:user:*:pushes", fingerprint="f",
+                            status=TriageStatus.APPROVED, who="t", when="2026-01-01",
+                            reason="")
+        with mock.patch("seamcheck.queries.load_triage", return_value=[entry]):
+            default_out = queries.findings(".")
+            everything_out = queries.findings(".", include_triaged=True)
+
+        self.assertNotIn(
+            "redis_key:user:*:pushes",
+            [row["id"] for row in default_out["data"]["findings"]],
+            "a triaged finding must not appear by default",
+        )
+        self.assertIn(
+            "redis_key:user:*:pushes",
+            [row["id"] for row in everything_out["data"]["findings"]],
+            "--include-triaged / include_triaged=True must still show it",
+        )
+
 
 class DiffTests(SimpleTestCase):
     """"What did this commit break" is the question CI and an agent both ask, and there was

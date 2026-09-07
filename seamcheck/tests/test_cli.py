@@ -241,6 +241,33 @@ class ReportFormatTests(SimpleTestCase):
 
         self.assertEqual(len(calls), 1)
 
+    def test_check_composes_with_sarif_format_scans_once(self):
+        # `check --format sarif` is the exact Gate step docs/ci.md prescribes. `_report()`
+        # used to return early through the sarif/github branch BEFORE the `if graph is
+        # None: graph = scan(...)` line, discarding the graph `--check` had already built
+        # and paying for a second ~168-second scan through `_findings_report` ->
+        # `queries.findings` to render the very digest the first scan could answer. Count
+        # calls rather than asserting "it still works", which would not catch a
+        # regression back to two scans.
+        calls = []
+        real_scan = api.scan
+
+        def counting_scan(*args, **kwargs):
+            calls.append(1)
+            return real_scan(*args, **kwargs)
+
+        with (
+            override_settings(SEAMCHECK_CONFIG=_CONFIG),
+            mock.patch("seamcheck.api.scan", side_effect=counting_scan),
+            self.assertRaises(SystemExit),
+        ):
+            call_command(
+                "seamcheck", "--check", "--format", "sarif",
+                stdout=StringIO(), stderr=StringIO(),
+            )
+
+        self.assertEqual(len(calls), 1)
+
 
 @override_settings(SEAMCHECK_CONFIG=_CONFIG)
 class CheckSinceExitCodeTests(SimpleTestCase):

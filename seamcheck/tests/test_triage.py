@@ -11,6 +11,7 @@ from seamcheck.triage import (
     apply_triage,
     fingerprint_for_symbol,
     has_blocking_findings,
+    judged_ids,
     load_triage,
     note_expired,
     remove_mark,
@@ -144,6 +145,28 @@ class BlockingTests(SimpleTestCase):
 
         annotated = apply_triage(graph, [stale, valid])
         self.assertIn("[triage:approved]", annotated.symbols[0].note)
+
+
+class JudgedIdsTests(SimpleTestCase):
+    """`unverified()`'s queue and `queries.findings()` both reuse this one predicate for
+    "has a person recorded an opinion about this symbol", so the two answers can never
+    silently drift into disagreeing about what "judged" means."""
+
+    def test_a_marked_symbol_is_judged(self):
+        symbol = _symbol()
+
+        self.assertEqual(judged_ids([_entry(symbol)]), {symbol.id})
+
+    def test_an_unmarked_symbol_is_not(self):
+        self.assertEqual(judged_ids([]), set())
+
+    def test_a_mark_whose_evidence_has_since_changed_is_still_judged(self):
+        # Looser than valid_triage_ids/has_blocking_findings on purpose: a stale mark
+        # still means a person looked at this id at some point, which is exactly what a
+        # "nobody has judged this yet" queue must not re-offer.
+        stale = _entry(_symbol(snippet="old code"))
+
+        self.assertEqual(judged_ids([stale]), {stale.symbol_id})
 
 
 class ReturnedTests(SimpleTestCase):
