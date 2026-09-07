@@ -78,7 +78,8 @@ webstorm, none).
 ## MCP
 
 Ships an MCP server: `seamcheck-mcp` over stdio. Tools: `seamcheck_check`,
-`seamcheck_report`, `seamcheck_explain`, `seamcheck_triage`.
+`seamcheck_report`, `seamcheck_explain`, `seamcheck_triage`, `seamcheck_findings`,
+`seamcheck_symbols`, `seamcheck_diff`, `seamcheck_snapshot`.
 
 ## The rule for agents
 

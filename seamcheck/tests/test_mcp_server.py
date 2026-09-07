@@ -70,17 +70,23 @@ class McpToolFunctionTests(SimpleTestCase):
         self.assertEqual(
             registered,
             {"seamcheck_check", "seamcheck_explain", "seamcheck_triage", "seamcheck_report",
-             "seamcheck_services", "seamcheck_unverified", "seamcheck_share", "seamcheck_why_wrong"},
+             "seamcheck_services", "seamcheck_unverified", "seamcheck_share", "seamcheck_why_wrong",
+             "seamcheck_findings", "seamcheck_symbols", "seamcheck_diff", "seamcheck_snapshot"},
         )
 
 
 class ReportSizeGateTests(SimpleTestCase):
     """A tool call must return an answer, never an exception - `TooLarge` escaping here
-    would crash the whole server process, not just refuse one oversized request."""
+    would crash the whole server process, not just refuse one oversized request.
+
+    `fmt="html"`, not `fmt="json"`: json (and map) are now refused by seamcheck_report
+    itself before api.report is ever called (see test_mcp_protocol.ReportFormatGateTests),
+    so json can no longer reach the `except TooLarge` branch this test exists to cover.
+    """
 
     def test_too_large_becomes_a_coded_failure_not_an_escaped_exception(self):
         with mock.patch("seamcheck.api.report", side_effect=TooLarge(72_800_000, 18_200_000)):
-            result = seamcheck_report(fmt="json", repo_root=".")
+            result = seamcheck_report(fmt="html", repo_root=".")
 
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"]["code"], "too_large")

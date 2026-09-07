@@ -42,6 +42,10 @@ claude mcp add seamcheck -- seamcheck-mcp
 | `seamcheck_services` | which services this repository declares, and which are deployable |
 | `seamcheck_share` | the code-free scan report, for an agent to show you before you send it |
 | `seamcheck_why_wrong` | the nine fixed reasons, so an agent can pick one when it triages |
+| `seamcheck_findings` | what is wrong, filtered by file/kind/status/owner and bounded - the other place to start |
+| `seamcheck_symbols` | find a symbol id by name, before spending a call on explain or triage |
+| `seamcheck_diff` | what appeared, vanished or changed status since a ref - "what did this commit break" |
+| `seamcheck_snapshot` | write the baseline `check`/`diff` compare against - previously only the CLI could |
 
 The server talks over stdin/stdout — no port, no daemon. Run it with the agent's working
 directory set to the project root. **For a Django project it has to run inside that
