@@ -595,11 +595,39 @@ def _run_without_django(arguments, verbose: bool) -> int:
     templates, matching, classification all read the graph and never the backend. The only
     thing Django was providing was the settings module the management command needed, so
     this path goes to the API directly and skips the management layer entirely.
+
+    Flags are read from `_plain_args`, which parses against the SAME table
+    (`seamcheck.cliflags.FLAGS`) the Django door's `add_arguments` generates its parser
+    from - see that module's docstring. A flag this door cannot honour (a typo, or one of
+    the few real flags that genuinely need Django - `--backfill`, `--observe`) is refused
+    with EXIT_USAGE rather than silently dropped: silently dropping is how `--since` came
+    to read as working on every non-Django project while comparing against nothing.
     """
     from seamcheck import api
-    from seamcheck.exitcodes import EXIT_ENVIRONMENT
+    from seamcheck.exitcodes import EXIT_ENVIRONMENT, EXIT_USAGE
 
-    root = str(pathlib.Path.cwd())
+    options = _plain_args(arguments)
+    if options["unknown"]:
+        flags = ", ".join(options["unknown"])
+        verb = "is" if len(options["unknown"]) == 1 else "are"
+        print(
+            f"seamcheck: {flags} {verb} not supported on this project type "
+            "(no Django settings module found).",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    # `--repo-root` used to be ignored outright here - every call below read
+    # `pathlib.Path.cwd()` instead, so `seamcheck scan --repo-root ../other` silently
+    # scanned the wrong project. Resolved against the current directory (a relative
+    # --repo-root is relative to where the command was run) and checked, so a typo'd path
+    # fails clearly instead of quietly scanning nothing.
+    root = _resolve_repo_root(options["repo_root"])
+    if root is None:
+        print(f"seamcheck: --repo-root {options['repo_root']!r} does not exist.",
+              file=sys.stderr)
+        return EXIT_USAGE
+
     if not _worth_scanning(root):
         print(
             "seamcheck: nothing here that this knows how to read.\n\n"
@@ -614,7 +642,6 @@ def _run_without_django(arguments, verbose: bool) -> int:
         # even start. EXIT_ENVIRONMENT is the one nothing else was using for exactly this.
         return EXIT_ENVIRONMENT
 
-    options = _plain_args(arguments)
     if options["set_tunnel"]:
         return _set_tunnel_plain(options["set_tunnel"])
     if options["symbols"]:
@@ -666,12 +693,12 @@ def _run_without_django(arguments, verbose: bool) -> int:
                 # is EXIT_USAGE, not the gate_code() ladder at all.
                 print(result["message"], file=sys.stderr)
                 return EXIT_USAGE
-            if options["fmt"] in ("sarif", "github"):
+            if options["format"] in ("sarif", "github"):
                 # A CI gate wants the annotation format it asked for, not the terminal
                 # digest - this branch used to ignore --format entirely, so `seamcheck
                 # check --format sarif --out FILE` on a non-Django project (redash: 47
                 # unresolved) printed the terminal report and never wrote FILE.
-                text = api.report(repo_root=root, fmt=options["fmt"])
+                text = api.report(repo_root=root, fmt=options["format"])
                 if options["out"]:
                     pathlib.Path(options["out"]).write_text(text, encoding="utf-8")
                     print(f"seamcheck: wrote {options['out']}", file=sys.stderr)
@@ -680,7 +707,7 @@ def _run_without_django(arguments, verbose: bool) -> int:
             else:
                 print(api.report(repo_root=root, fmt="terminal", ref=since or "HEAD"))
             return gate_code(result, comparing=bool(since))
-        if options["fmt"] in ("map", "console"):
+        if options["format"] in ("map", "console"):
             document = api.map_document(repo_root=root)
         else:
             from seamcheck.envelope import TooLarge
@@ -691,7 +718,7 @@ def _run_without_django(arguments, verbose: bool) -> int:
             going_to_disk = bool(options["out"])
             try:
                 rendered = api.report(
-                    repo_root=root, fmt=options["fmt"], ref=options["since"] or "HEAD",
+                    repo_root=root, fmt=options["format"], ref=options["since"] or "HEAD",
                     full=going_to_disk or (options["full"] and options["yes"]),
                 )
             except TooLarge as error:
@@ -708,7 +735,7 @@ def _run_without_django(arguments, verbose: bool) -> int:
                 )
                 return EXIT_USAGE
 
-    if options["fmt"] in ("map", "console"):
+    if options["format"] in ("map", "console"):
         return _map_plain(document, root, options)
     if options["out"]:
         pathlib.Path(options["out"]).write_text(rendered, encoding="utf-8")
@@ -815,7 +842,7 @@ def _serve_plain(rendered: str, root: str, options: dict, assets=None) -> int:
     # buffered when it goes to a file, and serve_forever never lets it fill. A run whose
     # output was redirected served for hours with its address unseen.
     print("  Ctrl-C to stop.", flush=True)
-    if options["open"]:
+    if options["open_it"]:
         import webbrowser
 
         webbrowser.open(addresses["local"])
@@ -830,123 +857,138 @@ def _serve_plain(rendered: str, root: str, options: dict, assets=None) -> int:
     return 0
 
 
-def _plain_args(arguments) -> dict:
-    """The flags this path understands, read without Django's parser.
+def _parse_against_table(arguments) -> tuple[dict, list[str]]:
+    """Parse argv against `seamcheck.cliflags.FLAGS` - the same table `add_arguments`
+    builds the Django door's parser from - instead of a second, hand-written `elif`
+    ladder that has to be kept in sync with it by hand.
 
-    Deliberately the same names the management command uses. A flag that works on a Django
-    project and is silently ignored on an Express one is worse than one that does not exist.
+    Returns `(parsed, unknown)`. `parsed` is keyed by each flag's `dest` (the same name
+    argparse's `Namespace` would use), holding only the flags actually seen - a
+    store_true flag maps to `True`, a value flag to the last value it was given (later
+    occurrence wins, same as argparse). `unknown` is every `--flag`-shaped token this call
+    could not resolve to a plain-supported entry: either genuinely unrecognised, or
+    recognised in the table but marked `plain=False` because honouring it needs Django.
+    Neither case may be silently absorbed - see `_run_without_django`'s refusal.
     """
-    options = {
-        "fmt": "terminal", "out": None, "serve": False, "check": False,
-        "tunnel": False, "local_only": False, "open": False, "bundle": False,
-        # The four that were missing. Each has a branch in the management command and
-        # none had one here, so on an Express or Next repository `seamcheck explain X`,
-        # `seamcheck config`, `seamcheck triage X` and `seamcheck json` all printed the
-        # default report and exited 0 - byte-identical to `check`, with no warning. The
-        # docstring above promised exactly that would not happen, and cli.py names
-        # `json` and `explain` as the agent-facing interface. The MCP server got them
-        # right, so the two surfaces disagreed, which is the one thing they must never do.
-        "explain": None, "show_config": False, "triage": None, "status": None,
-        "reason": "", "why": "", "undo": False, "set_tunnel": None,
-        "symbols": False, "search": "", "kind": "", "limit": 25, "cursor": "",
-        "findings": False, "file": "", "owner": "",
-        # What appeared, vanished or changed status since --since (default HEAD~1) - the
-        # same names the management command's --diff uses.
-        "diff": False,
-        # Same name, same meaning as the management command's --refresh: skip the scan
-        # cache in both directions for --symbols/--findings/--diff.
-        "refresh": False,
-        # Same name, same meaning as the management command's --include-triaged: without
-        # it, a finding carrying any triage mark is left out of --findings.
-        "include_triaged": False,
-        # Same names, same meaning as the management command's --full/--yes: --full alone
-        # still refuses to print the whole graph, on this path too.
-        "full": False, "yes": False,
-        # Missing entirely until now: --since was parsed by argparse on the Django door
-        # and simply absent here, so `seamcheck check --since REF` on a non-Django project
-        # silently ran a bare check against HEAD - no error, no warning, just the wrong
-        # question answered. Third time this exact drift has bitten (--limit, --format,
-        # now this) - see LimitFlagParityTests for the same shape of bug.
-        "since": None,
-    }
+    from seamcheck.cliflags import FLAGS
+
+    by_name = {name: flag for flag in FLAGS for name in flag.names}
+    parsed: dict = {}
+    unknown: list[str] = []
     items = list(arguments)
     for index, item in enumerate(items):
+        flag = by_name.get(item)
+        if flag is None:
+            if item.startswith("--"):
+                unknown.append(item)
+            continue
+        if not flag.plain:
+            unknown.append(item)
+            continue
+        if flag.kind == "flag":
+            parsed[flag.dest] = True
+            continue
         following = items[index + 1] if index + 1 < len(items) else None
-        if item == "--json":
-            options["fmt"] = "json"
-        elif item == "--show-config":
-            options["show_config"] = True
-        elif item == "--set-tunnel" and following:
-            options["set_tunnel"] = following
-        elif item == "--explain" and following:
-            options["explain"] = following
-        elif item == "--symbols":
-            options["symbols"] = True
-        elif item == "--findings":
-            options["findings"] = True
-        elif item == "--diff":
-            options["diff"] = True
-        elif item == "--file" and following:
-            options["file"] = following
-        elif item == "--owner" and following:
-            options["owner"] = following
-        elif item == "--search" and following:
-            options["search"] = following
-        elif item == "--kind" and following:
-            options["kind"] = following
-        elif item == "--limit" and following:
-            # argparse's `type=int` on the Django path accepts a negative value and lets
-            # envelope.page() clamp it to 1 - `following.isdigit()` here rejected "-5"
-            # outright and silently kept the default 25 instead, so the same flag answered
-            # two different row counts depending on which door you came in. int() accepts
-            # exactly what argparse's type=int does; the clamp stays the one in page().
+        if following is None:
+            # A known flag with no value given - silently a no-op, same as before rather
+            # than a new way to be "unknown": a missing value is a different mistake from
+            # a flag that does not exist at all.
+            continue
+        if flag.kind == "int":
+            # argparse's `type=int` on the Django door accepts a negative value and lets
+            # envelope.page() clamp it to 1; a non-numeric value there raises inside
+            # argparse and the run never starts. Here a non-numeric value silently keeps
+            # the default instead (see LimitFlagParityTests - only the negative-number
+            # case is pinned to agree between doors; int() accepts exactly what
+            # argparse's type=int does, so it does for --limit too).
             with contextlib.suppress(ValueError):
-                options["limit"] = int(following)
-        elif item == "--since" and following:
-            options["since"] = following
-        elif item == "--cursor" and following:
-            options["cursor"] = following
-        elif item == "--triage" and following:
-            options["triage"] = following
-        elif item == "--status" and following:
-            options["status"] = following
-        elif item == "--undo":
-            options["undo"] = True
-        elif item == "--reason" and following:
-            options["reason"] = following
-        elif item in ("--why", "--wrong") and following:
-            # `--wrong X` is the short way to say "approved because X": the reason a
-            # finding was wrong is the whole point of marking it.
-            options["why"] = following
+                parsed[flag.dest] = int(following)
+        else:
+            parsed[flag.dest] = following
             if item == "--wrong":
-                options["status"] = options["status"] or "approved"
-        elif item == "--format" and following:
-            options["fmt"] = following
-        elif item == "--out" and following:
-            options["out"] = following
-        elif item == "--serve":
-            options["serve"] = True
-        elif item == "--bundle":
-            options["bundle"] = True
-        elif item == "--no-serve":
-            options["serve"] = False
-        elif item == "--check":
-            options["check"] = True
-        elif item == "--tunnel":
-            options["tunnel"] = True
-        elif item == "--local-only":
-            options["local_only"] = True
-        elif item == "--open":
-            options["open"] = True
-        elif item == "--full":
-            options["full"] = True
-        elif item == "--yes":
-            options["yes"] = True
-        elif item == "--refresh":
-            options["refresh"] = True
-        elif item == "--include-triaged":
-            options["include_triaged"] = True
-    return options
+                # `--wrong X` is the short way to say "approved because X": the reason a
+                # finding was wrong is the whole point of marking it. Only a default -
+                # an explicit --status elsewhere on the line still wins, in either order,
+                # since this is keyed by dest rather than applied token-by-token.
+                parsed.setdefault("status", "approved")
+    return parsed, unknown
+
+
+def _resolve_repo_root(value: str) -> str | None:
+    """`--repo-root`, resolved against the current directory and checked - the flag
+    `_run_without_django` used to ignore outright (every call there read
+    `pathlib.Path.cwd()` directly), so `seamcheck scan --repo-root ../other` silently
+    scanned the wrong project. `None` means the path does not exist, so the caller can
+    fail clearly instead of scanning nothing under a typo'd path.
+    """
+    root_path = (pathlib.Path.cwd() / value).resolve()
+    if not root_path.is_dir():
+        return None
+    return str(root_path)
+
+
+def _plain_args(arguments) -> dict:
+    """The flags this path understands, parsed against `seamcheck.cliflags.FLAGS` - the
+    same table the Django door's `add_arguments` builds its parser from (see that
+    module's docstring). Keys match each flag's `dest`, so `_plain_args(...)["since"]`
+    reads the same name the Django parser's `Namespace.since` does.
+
+    `options["unknown"]` lists every `--flag` this call could not resolve - genuinely
+    unrecognised, or a real seamcheck flag this door cannot honour without Django
+    (`plain=False` in the table). `_run_without_django` refuses rather than guessing: a
+    flag that works on a Django project and is silently ignored on an Express one is
+    worse than one that does not exist at all - that is exactly how `--since` came to
+    read as working on every non-Django project while comparing against nothing.
+    """
+    parsed, unknown = _parse_against_table(arguments)
+
+    # --json is --format json under another name (kept for existing callers) - the SAME
+    # fold the Django door's handle() applies, computed once here rather than inside the
+    # token loop, so it no longer depends on which of the two flags came first on the
+    # command line the way the old per-token version did.
+    fmt = parsed.get("format")
+    if parsed.get("json") and fmt is None:
+        fmt = "json"
+
+    # --no-serve always wins over --serve regardless of order, the same
+    # `serve and not no_serve` the Django door computes in _format_report/_write_map.
+    serve = bool(parsed.get("serve")) and not bool(parsed.get("no_serve"))
+
+    return {
+        "format": fmt if fmt is not None else "terminal",
+        "out": parsed.get("out"),
+        "serve": serve,
+        "check": bool(parsed.get("check")),
+        "tunnel": bool(parsed.get("tunnel")),
+        "local_only": bool(parsed.get("local_only")),
+        "open_it": bool(parsed.get("open_it")),
+        "bundle": bool(parsed.get("bundle")),
+        "explain": parsed.get("explain"),
+        "show_config": bool(parsed.get("show_config")),
+        "triage": parsed.get("triage"),
+        "status": parsed.get("status"),
+        "reason": parsed.get("reason", ""),
+        "why": parsed.get("why", ""),
+        "undo": bool(parsed.get("undo")),
+        "set_tunnel": parsed.get("set_tunnel"),
+        "symbols": bool(parsed.get("symbols")),
+        "search": parsed.get("search", ""),
+        "kind": parsed.get("kind", ""),
+        "limit": parsed.get("limit", 25),
+        "cursor": parsed.get("cursor", ""),
+        "findings": bool(parsed.get("findings")),
+        "file": parsed.get("file", ""),
+        "owner": parsed.get("owner", ""),
+        "diff": bool(parsed.get("diff")),
+        "refresh": bool(parsed.get("refresh")),
+        "include_triaged": bool(parsed.get("include_triaged")),
+        "full": bool(parsed.get("full")),
+        "yes": bool(parsed.get("yes")),
+        "since": parsed.get("since"),
+        "repo_root": parsed.get("repo_root", "."),
+        "no_progress": bool(parsed.get("no_progress")),
+        "unknown": unknown,
+    }
 
 
 def _show_config_plain(root: str) -> int:

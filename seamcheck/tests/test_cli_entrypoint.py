@@ -582,3 +582,172 @@ class DiffFlagParityTests(SimpleTestCase):
 
         self.assertFalse(_plain_args([])["diff"])
         self.assertFalse(self._django_diff())
+
+
+class FlagTableParityTests(SimpleTestCase):
+    """The two doors must accept the SAME flag set - derived from
+    `seamcheck.cliflags.FLAGS` and from argparse's own parser introspection, not from a
+    second hand-written list of names (that would just be another copy of the thing that
+    kept drifting: `--since`, then `--limit`, then `--format`, each added to one door and
+    silently absent from the other).
+    """
+
+    def _our_own_option_strings(self) -> set[str]:
+        # Diffed against a VANILLA BaseCommand's parser rather than a hand-typed
+        # exclusion list, so Django's own --settings/--verbosity/--version/etc. never
+        # have to be named here by hand either - only what `add_arguments` itself
+        # registers survives the subtraction.
+        from django.core.management.base import BaseCommand
+
+        from seamcheck.management.commands.seamcheck import Command
+
+        ours = Command().create_parser("manage.py", "seamcheck")
+        vanilla = BaseCommand().create_parser("manage.py", "seamcheck")
+        return set(ours._option_string_actions) - set(vanilla._option_string_actions)
+
+    def test_the_table_is_exactly_what_add_arguments_registers(self):
+        from seamcheck.cliflags import FLAGS
+
+        table_names = {name for flag in FLAGS for name in flag.names}
+
+        self.assertEqual(table_names, self._our_own_option_strings())
+
+    def test_every_table_flag_is_either_understood_or_explicitly_refused(self):
+        # Nothing may fall through silently: a plain=True flag must be recognised (not
+        # collected into "unknown"), and a plain=False flag - real, but one the plain
+        # door cannot honour without Django - must land in "unknown" by name, not vanish.
+        from seamcheck.cli import _plain_args
+        from seamcheck.cliflags import FLAGS
+
+        for flag in FLAGS:
+            for name in flag.names:
+                argv = [name] if flag.kind == "flag" else [name, "x"]
+                with self.subTest(flag=name):
+                    unknown = _plain_args(argv)["unknown"]
+                    if flag.plain:
+                        self.assertNotIn(name, unknown)
+                    else:
+                        self.assertIn(name, unknown)
+
+
+class UnknownFlagTests(SimpleTestCase):
+    """A flag that works on Django and is silently ignored on Express is worse than one
+    that does not exist: `check --since $BASE` used to read as working and compare
+    against nothing. `_since` itself is fixed now (see SinceFlagParityTests above) - these
+    exercise the general refusal with flags that still cannot be honoured here: an
+    outright typo, and `--backfill`, a real seamcheck flag the plain door genuinely
+    cannot run without Django (seamcheck.cliflags.FLAGS marks it plain=False - it needs
+    django.setup() to read SEAMCHECK_CONFIG, twice over).
+    """
+
+    def test_a_typo_is_refused_not_silently_ignored(self):
+        from seamcheck.cli import _run_without_django
+        from seamcheck.exitcodes import EXIT_USAGE
+
+        with mock.patch("seamcheck.cli._worth_scanning", return_value=True):
+            code = _run_without_django(["--frobnicate", "x"], verbose=False)
+
+        self.assertEqual(code, EXIT_USAGE)
+
+    def test_a_real_django_only_flag_is_refused_not_silently_ignored(self):
+        from seamcheck.cli import _run_without_django
+        from seamcheck.exitcodes import EXIT_USAGE
+
+        err = io.StringIO()
+        with (
+            mock.patch("seamcheck.cli._worth_scanning", return_value=True),
+            redirect_stderr(err),
+        ):
+            code = _run_without_django(["--backfill", "30"], verbose=False)
+
+        self.assertEqual(code, EXIT_USAGE)
+        self.assertIn("--backfill", err.getvalue())
+        self.assertIn("not supported on this project type", err.getvalue())
+
+    def test_nothing_reaches_stdout_when_the_run_is_refused(self):
+        # A refusal that also prints a report is a mixed signal - CI or an agent parsing
+        # stdout must never see a report next to an EXIT_USAGE.
+        from seamcheck.cli import _run_without_django
+
+        out = io.StringIO()
+        with (
+            mock.patch("seamcheck.cli._worth_scanning", return_value=True),
+            redirect_stdout(out),
+            redirect_stderr(io.StringIO()),
+        ):
+            _run_without_django(["--frobnicate"], verbose=False)
+
+        self.assertEqual(out.getvalue(), "")
+
+
+class RepoRootPlainDoorTests(SimpleTestCase):
+    """`--repo-root` used to be silently ignored on the plain (non-Django) door - every
+    call in `_run_without_django` read `pathlib.Path.cwd()` directly, so
+    `seamcheck scan --repo-root ../other` scanned the CURRENT directory instead, with no
+    warning. Now that it is in the shared flag table, the plain door has to honour it
+    properly: resolve it, and refuse clearly when the path does not exist.
+    """
+
+    def test_a_relative_repo_root_is_resolved_against_the_cwd_not_ignored(self):
+        import os
+
+        from seamcheck.cli import _resolve_repo_root
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "project").mkdir()
+            cwd = os.getcwd()
+            os.chdir(tmp)
+            try:
+                resolved = _resolve_repo_root("project")
+            finally:
+                os.chdir(cwd)
+
+        self.assertEqual(resolved, str((root / "project").resolve()))
+
+    def test_a_nonexistent_repo_root_resolves_to_none(self):
+        from seamcheck.cli import _resolve_repo_root
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertIsNone(_resolve_repo_root(str(pathlib.Path(tmp) / "nope")))
+
+    def test_the_plain_door_actually_scans_the_named_repo_root_not_the_cwd(self):
+        # The behavioural version of the test above: --repo-root ../other must change
+        # WHICH project gets scanned, not just parse without error.
+        import os
+
+        from seamcheck.cli import _run_without_django
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd_dir = pathlib.Path(tmp) / "cwd"
+            other_dir = pathlib.Path(tmp) / "other"
+            cwd_dir.mkdir()
+            other_dir.mkdir()
+            (other_dir / "package.json").write_text("{}")
+            cwd = os.getcwd()
+            os.chdir(cwd_dir)
+            try:
+                with (
+                    mock.patch("seamcheck.cli._worth_scanning", return_value=True),
+                    mock.patch("seamcheck.api.report", return_value="RENDERED") as report,
+                    redirect_stdout(io.StringIO()) as out,
+                ):
+                    code = _run_without_django(["--repo-root", "../other"], verbose=False)
+            finally:
+                os.chdir(cwd)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(report.call_args.kwargs["repo_root"], str(other_dir.resolve()))
+        self.assertIn("RENDERED", out.getvalue())
+
+    def test_a_repo_root_that_does_not_exist_is_refused_clearly(self):
+        from seamcheck.cli import _run_without_django
+        from seamcheck.exitcodes import EXIT_USAGE
+
+        err = io.StringIO()
+        with redirect_stderr(err):
+            code = _run_without_django(["--repo-root", "definitely-not-here"], verbose=False)
+
+        self.assertEqual(code, EXIT_USAGE)
+        self.assertIn("--repo-root", err.getvalue())
+        self.assertIn("does not exist", err.getvalue())

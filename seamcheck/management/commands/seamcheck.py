@@ -10,6 +10,7 @@ import sys
 from django.core.management.base import BaseCommand, CommandError
 
 from seamcheck import api
+from seamcheck.cliflags import add_django_arguments
 from seamcheck.progress import Progress
 from seamcheck.renderers.terminal import returned_line
 from seamcheck.scancache import resolve_map_output, resolve_report_output
@@ -27,140 +28,11 @@ class Command(BaseCommand):
     help = "Scan the project's connectivity graph and report on it."
 
     def add_arguments(self, parser):
-        parser.add_argument("--json", action="store_true", help="Print the graph as JSON.")
-        parser.add_argument("--check", action="store_true", help="Diff against HEAD; exit 1 on findings.")
-        parser.add_argument("--since", metavar="REF", help="Diff against the snapshot for REF.")
-        parser.add_argument("--explain", metavar="SYMBOL_ID", help="Explain one symbol.")
-        parser.add_argument("--triage", metavar="SYMBOL_ID", help="Record a disposition.")
-        parser.add_argument("--status", help="Triage status: approved, confirmed, deferred, untriaged.")
-        parser.add_argument("--reason", default="", help="Why this disposition, in your own words.")
-        parser.add_argument("--why", "--wrong", dest="why", default="",
-                            help="Why it was wrong, as a fixed word - the only part "
-                                 "`seamcheck share` can pass on. See `help triage`.")
-        parser.add_argument("--undo", action="store_true",
-                            help="Take the mark off --triage's symbol; it is raised again.")
-        parser.add_argument("--repo-root", default=".", help="Repo to read snapshots/triage from.")
-        parser.add_argument(
-            "--backfill", type=int, metavar="N", default=None,
-            help="Scan the last N commits into snapshots, so the map's commit picker has "
-                 "history to show. Each commit is scanned in its own temporary worktree; "
-                 "roughly 30s per commit.",
-        )
-        parser.add_argument(
-            "--backfill-ref", default="HEAD", metavar="REF",
-            help="Which branch --backfill walks. Defaults to HEAD.",
-        )
-        parser.add_argument(
-            "--tunnel", action="store_true",
-            help="With --serve, also open a temporary public HTTPS link via cloudflared, "
-                 "for a device that is not on this network. Anyone with the link can read "
-                 "the report; it dies with the command.",
-        )
-        parser.add_argument(
-            "--set-tunnel", choices=["always", "never"], default=None, metavar="WHEN",
-            help="Remember, for this machine and every project on it, whether `map` and "
-                 "`serve` open the public link: `always` or `never`. Written to "
-                 "~/.config/seamcheck/settings.json. `seamcheck config` shows it.",
-        )
-        parser.add_argument(
-            "--serve", action="store_true",
-            help="Serve the report from this machine so a browser (and a phone on the "
-                 "same network) can open it. Nothing is uploaded; the server stops when "
-                 "you do.",
-        )
-        parser.add_argument(
-            "--no-serve", action="store_true",
-            help="With --format map: write the file and stop, instead of serving it. "
-                 "For CI and scripts, which want the artifact and not a running server.",
-        )
-        parser.add_argument(
-            "--local-only", action="store_true",
-            help="With --serve: bind loopback only, so nothing on the network can reach "
-                 "it. You lose the phone link.",
-        )
-        parser.add_argument(
-            "--format", default=None,
-            # No choices=: Django's CommandParser.error() raises CommandError (not
-            # SystemExit) for call_command() invocations, so argparse-level validation
-            # can't produce the SystemExit callers of an invalid --format expect.
-            # _format_report() validates instead, via api.report()'s ValueError.
-            help="Output format: terminal, markdown, html, json, map, console, sarif, "
-                 "github. json emits the whole graph, as --json does.",
-        )
-        parser.add_argument("--out", default=None, help="Write to PATH instead of stdout ('-' for stdout).")
-        parser.add_argument(
-            "--bundle", action="store_true",
-            help="Write the map as a folder (small index.html + data/ loaded as needed) "
-                 "rather than one file. Automatic above 50 MB.",
-        )
-        parser.add_argument(
-            "--open", action="store_true", dest="open_it",
-            help="Open the written file in your browser when it is done.",
-        )
-        parser.add_argument(
-            "--observe", nargs="*", metavar="URL",
-            help="Drive the running app in a browser and record what it actually queried "
-                 "and fetched. With no URLs, visits the pages the graph knows about at "
-                 "--base-url.",
-        )
-        parser.add_argument(
-            "--base-url", default="http://127.0.0.1:8080",
-            help="Where the application is running, for --observe.",
-        )
-        parser.add_argument(
-            "--shots", default=None, metavar="DIR",
-            help="With --observe, also screenshot each page into DIR.",
-        )
-        parser.add_argument(
-            "--show-config", action="store_true",
-            help="Print the config a scan would use, and where each value came from.",
-        )
-        parser.add_argument(
-            "--symbols", action="store_true",
-            help="Find symbols by name; --search and --kind narrow it.",
-        )
-        parser.add_argument("--search", default="", help="Substring to look for.")
-        parser.add_argument("--kind", default="", help="Restrict to one kind.")
-        parser.add_argument("--limit", type=int, default=25, help="How many rows at most.")
-        parser.add_argument("--cursor", default="", help="Continue a previous page.")
-        parser.add_argument(
-            "--findings", action="store_true",
-            help="List findings; --file, --kind, --status and --owner narrow it.",
-        )
-        parser.add_argument("--file", default="", help="Only findings in this file.")
-        parser.add_argument("--owner", default="", help="Only findings owned by this function.")
-        parser.add_argument(
-            "--include-triaged", action="store_true",
-            help="With --findings: also list findings carrying a triage mark (approved, "
-                 "confirmed or deferred). Left out by default - 'what is wrong' means the "
-                 "same thing here as in --check and --format sarif/github.",
-        )
-        parser.add_argument(
-            "--diff", action="store_true",
-            help="What appeared, vanished or changed status since --since (default "
-                 "HEAD~1). Unfiltered by triage - the raw graph difference, not check's "
-                 "pass/fail opinion.",
-        )
-        parser.add_argument(
-            "--refresh", action="store_true",
-            help="Skip the scan cache in both directions, for --symbols/--findings/--diff - "
-                 "the escape for a tree the cache cannot judge on its own (a fresh checkout, "
-                 "a restored backup, a clock that just got corrected).",
-        )
-        parser.add_argument(
-            "--no-progress", action="store_true",
-            help="Never draw the progress bar (it is off already when output is redirected).",
-        )
-        parser.add_argument(
-            "--full", action="store_true",
-            help="With --json, print the whole graph even past the size warning. Needs "
-                 "--yes too - one flag alone still refuses.",
-        )
-        parser.add_argument(
-            "--yes", action="store_true",
-            help="Confirms --full. Two separate flags, not one, so printing 18 million "
-                 "tokens to an agent's context takes a deliberate second keystroke.",
-        )
+        # Every flag's name, default and shape lives in seamcheck.cliflags.FLAGS - the
+        # single source of truth `seamcheck.cli._plain_args` (the plain, non-Django door)
+        # reads too, instead of a second hand-written copy of this list. See that
+        # module's docstring for why this used to be two lists that drifted.
+        add_django_arguments(parser)
 
     def _progress(self, options, total: int) -> Progress:
         """One bar for the whole run, or a silent one.
