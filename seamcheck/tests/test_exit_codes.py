@@ -220,3 +220,147 @@ class TriageExitCodeTests(SimpleTestCase):
         code = int(str(raised.exception.code))
         self.assertEqual(code, exitcodes.EXIT_USAGE)
         self.assertNotEqual(code, exitcodes.EXIT_NO_BASELINE)
+
+
+class UnknownCommandExitCodeTests(SimpleTestCase):
+    """`_resolve()` refusing an unrecognised command word (`seamcheck frobnicate`) used
+    to return the same bare `2` as everything else in this family. Both doors are the
+    SAME code here - `_resolve` is shared by `main()` regardless of which door it then
+    dispatches to - so there is only one call site to test, not two to compare."""
+
+    def test_an_unrecognised_command_reports_usage_not_no_baseline(self):
+        err = StringIO()
+        with mock.patch("sys.stderr", err):
+            code = cli.main(["frobnicate"])
+
+        self.assertEqual(code, exitcodes.EXIT_USAGE)
+        self.assertNotEqual(code, exitcodes.EXIT_NO_BASELINE)
+        self.assertIn("no command named 'frobnicate'", err.getvalue())
+
+
+class HelpBadNameExitCodeTests(SimpleTestCase):
+    """`seamcheck help <bad-name>` - also `_resolve`-adjacent, shared `main()` logic,
+    one call site for both doors."""
+
+    def test_help_for_an_unknown_command_reports_usage_not_no_baseline(self):
+        err = StringIO()
+        with mock.patch("sys.stderr", err), mock.patch("sys.stdout", StringIO()):
+            code = cli.main(["help", "frobnicate"])
+
+        self.assertEqual(code, exitcodes.EXIT_USAGE)
+        self.assertNotEqual(code, exitcodes.EXIT_NO_BASELINE)
+
+
+class SetTunnelExitCodeTests(SimpleTestCase):
+    """`--set-tunnel` outside `always`/`never` on the plain door - the Django door never
+    reaches this code at all (argparse's own `choices=` on the shared flag table refuses
+    it first, as a `CommandError` - see `CommandErrorExitCodeTests` below), so there is
+    no second door to compare against here."""
+
+    def test_plain_door_bad_value_reports_usage_not_no_baseline(self):
+        code = cli._set_tunnel_plain("sometimes")
+
+        self.assertEqual(code, exitcodes.EXIT_USAGE)
+        self.assertNotEqual(code, exitcodes.EXIT_NO_BASELINE)
+
+
+class CommandErrorExitCodeTests(SimpleTestCase):
+    """`main()`'s generic `except CommandError` wrapper around `call_command()` - the
+    plain `seamcheck` executable's own dispatch to a Django project, not `manage.py
+    seamcheck` invoked directly (that goes through Django's OWN `run_from_argv`, whose
+    `CommandError` handling is entirely Django's, outside anything `seamcheck.exitcodes`
+    can reach - a pre-existing, separate fact about that entry point, not something this
+    fix changes or claims to unify)."""
+
+    def test_a_command_error_from_call_command_reports_usage_not_no_baseline(self):
+        from django.core.management.base import CommandError
+
+        with (
+            mock.patch("seamcheck.cli.find_project", return_value=None),
+            mock.patch.dict("os.environ", {"DJANGO_SETTINGS_MODULE": "x.settings"}),
+            mock.patch("django.setup"),
+            mock.patch("django.core.management.call_command",
+                       side_effect=CommandError("--format was given an empty value")),
+        ):
+            code = cli.main(["check"])
+
+        self.assertEqual(code, exitcodes.EXIT_USAGE)
+        self.assertNotEqual(code, exitcodes.EXIT_NO_BASELINE)
+
+
+class ObserveBrowserUnavailableExitCodeTests(SimpleTestCase):
+    """`--observe`'s `BrowserUnavailable` (Playwright missing, or no browser downloaded)
+    used to be wrapped as a `CommandError` - reading identically to "you typed this
+    wrong" once that generic handler above was fixed to EXIT_USAGE, even though a
+    missing browser is the MACHINE being wrong, exactly like the ModuleNotFoundError
+    case `EXIT_ENVIRONMENT` already exists for. `--observe` is Django-only
+    (`cliflags.FLAGS`'s `plain=False`), so there is no plain-door equivalent to compare."""
+
+    def test_a_missing_browser_reports_environment_not_usage_or_no_baseline(self):
+        from seamcheck.browser import BrowserUnavailable
+
+        with (
+            mock.patch("seamcheck.api.scan", side_effect=RuntimeError("no scan needed")),
+            mock.patch("seamcheck.browser.observe_pages",
+                       side_effect=BrowserUnavailable("no chromium downloaded")),
+            self.assertRaises(SystemExit) as raised,
+        ):
+            call_command("seamcheck", "--observe", "http://example.com/",
+                         stdout=StringIO(), stderr=StringIO())
+
+        code = int(str(raised.exception.code))
+        self.assertEqual(code, exitcodes.EXIT_ENVIRONMENT)
+        self.assertNotEqual(code, exitcodes.EXIT_USAGE)
+        self.assertNotEqual(code, exitcodes.EXIT_NO_BASELINE)
+
+
+class BadFormatValueExitCodeTests(SimpleTestCase):
+    """An unrecognised `--format` value (`api._report`'s own `ValueError`) - the Django
+    door already caught this (`_format_report`'s `except ValueError`, previously a bare
+    `SystemExit(2)`); the plain door did not catch it AT ALL, so this reached the
+    interpreter as an uncaught traceback rather than any controlled exit code - arguably
+    worse than the raw-`2` bug, found only by checking whether the two doors could even
+    be compared here."""
+
+    def test_django_door_reports_usage_not_no_baseline(self):
+        with (
+            mock.patch("seamcheck.api.report",
+                       side_effect=ValueError("Unknown format 'bogus'.")),
+            self.assertRaises(SystemExit) as raised,
+        ):
+            call_command("seamcheck", "--format", "bogus",
+                         stdout=StringIO(), stderr=StringIO())
+
+        code = int(str(raised.exception.code))
+        self.assertEqual(code, exitcodes.EXIT_USAGE)
+        self.assertNotEqual(code, exitcodes.EXIT_NO_BASELINE)
+
+    def test_plain_door_no_longer_crashes_uncaught_and_reports_usage(self):
+        with (
+            mock.patch("seamcheck.cli._worth_scanning", return_value=True),
+            mock.patch("seamcheck.api.report",
+                       side_effect=ValueError("Unknown format 'bogus'.")),
+        ):
+            code = cli._run_without_django(["--format", "bogus"], verbose=False)
+
+        self.assertEqual(code, exitcodes.EXIT_USAGE)
+        self.assertNotEqual(code, exitcodes.EXIT_NO_BASELINE)
+
+    def test_the_two_doors_agree(self):
+        with (
+            mock.patch("seamcheck.cli._worth_scanning", return_value=True),
+            mock.patch("seamcheck.api.report",
+                       side_effect=ValueError("Unknown format 'bogus'.")),
+        ):
+            plain_code = cli._run_without_django(["--format", "bogus"], verbose=False)
+
+        with (
+            mock.patch("seamcheck.api.report",
+                       side_effect=ValueError("Unknown format 'bogus'.")),
+            self.assertRaises(SystemExit) as raised,
+        ):
+            call_command("seamcheck", "--format", "bogus",
+                         stdout=StringIO(), stderr=StringIO())
+        django_code = int(str(raised.exception.code))
+
+        self.assertEqual(plain_code, django_code)

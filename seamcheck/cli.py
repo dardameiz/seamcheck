@@ -555,9 +555,11 @@ def _resolve(known, parser, passthrough: list[str] | None = None) -> tuple[str, 
         # An unknown word is far more likely a typo than a flag for the default command,
         # and guessing wrong here runs a scan the user did not ask for.
         if not name.startswith("-"):
+            from seamcheck.exitcodes import EXIT_USAGE
+
             print(f"seamcheck: no command named {name!r}\n", file=sys.stderr)
             parser.print_help(sys.stderr)
-            return 2
+            return EXIT_USAGE
         return "scan", [name, *known.rest, *passthrough]
 
     entry = COMMANDS[name]
@@ -767,6 +769,16 @@ def _run_without_django(arguments, verbose: bool) -> int:
                     "to do this. `--out FILE` writes it to disk instead.",
                     file=sys.stderr,
                 )
+                return EXIT_USAGE
+            except ValueError as error:
+                # An unrecognised --format value ("Unknown format 'bogus'...", raised by
+                # api._report's own choices check). Previously uncaught here - a Python
+                # traceback instead of a clean refusal - while the Django door already
+                # caught the identical ValueError and exited cleanly. The command was
+                # wrong, not the machine: EXIT_USAGE, matching the Django door.
+                from seamcheck.exitcodes import EXIT_USAGE
+
+                print(f"seamcheck: {error}", file=sys.stderr)
                 return EXIT_USAGE
 
     if options["format"] in ("map", "console"):
@@ -1169,12 +1181,13 @@ def _print_tunnel_setting() -> None:
 
 def _set_tunnel_plain(when: str) -> int:
     """Store this machine's answer, the same way the Django path stores it."""
+    from seamcheck.exitcodes import EXIT_USAGE
     from seamcheck.usersettings import ALWAYS, NEVER, settings_path, write
 
     if when not in (ALWAYS, NEVER):
         print(f"seamcheck: --set-tunnel takes {ALWAYS} or {NEVER}, not {when!r}.",
               file=sys.stderr)
-        return 2
+        return EXIT_USAGE
     write("tunnel", when, None)
     print(f"  tunnel {when}   written to {settings_path()}")
     if when == ALWAYS:
@@ -1257,6 +1270,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 0
     if argv[0] == "help":
+        from seamcheck.exitcodes import EXIT_USAGE
+
         name = argv[1] if len(argv) > 1 else ""
         if name in COMMANDS:
             print(command_help(name))
@@ -1264,7 +1279,7 @@ def main(argv: list[str] | None = None) -> int:
         if name:
             print(f"seamcheck: no command named {name!r}\n", file=sys.stderr)
         parser.print_help()
-        return 0 if not name else 2
+        return 0 if not name else EXIT_USAGE
 
     if argv[0] == "share":
         # Handled here rather than through the management command: it needs no server and
@@ -1347,8 +1362,18 @@ def main(argv: list[str] | None = None) -> int:
         try:
             call_command("seamcheck", *arguments)
         except CommandError as error:
+            # Everything that reaches here as a CommandError - argparse's own validation
+            # (an unrecognised flag, a bad --set-tunnel choice), or an explicit
+            # `raise CommandError(...)` in handle() (--out without --format, an empty
+            # --format, --serve on a non-renderable format, --observe finding no page
+            # URLs) - is the command being wrong. The one exception, --observe's
+            # BrowserUnavailable (the machine has no Playwright browser, not a usage
+            # error), no longer raises CommandError at all - see its own SystemExit(
+            # EXIT_ENVIRONMENT) in _observe - so it never reaches this branch.
+            from seamcheck.exitcodes import EXIT_USAGE
+
             print(f"seamcheck: {error}", file=sys.stderr)
-            return 2
+            return EXIT_USAGE
         except SystemExit as exit_code:  # --check and friends signal through the exit code
             return int(exit_code.code or 0)
     return 0

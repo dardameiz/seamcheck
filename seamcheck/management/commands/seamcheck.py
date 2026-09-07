@@ -162,7 +162,15 @@ class Command(BaseCommand):
         try:
             observations = observe_pages(urls, shots_dir=options["shots"], watch=watch)
         except BrowserUnavailable as error:
-            raise CommandError(str(error)) from error
+            # Playwright missing, or no browser downloaded - the machine is wrong, not
+            # the invocation. Previously raised as CommandError, which reads identically
+            # to "you typed this wrong" (--out without --format, a bad --format value) -
+            # SystemExit(EXIT_ENVIRONMENT) instead, matching the ModuleNotFoundError
+            # handling in cli.main() for the same class of problem.
+            from seamcheck.exitcodes import EXIT_ENVIRONMENT
+
+            self.stderr.write(str(error))
+            raise SystemExit(EXIT_ENVIRONMENT) from error
 
         try:
             sha = current_git_sha(repo_root)
@@ -464,9 +472,11 @@ class Command(BaseCommand):
                     repo_root, fmt, ref=options["since"] or "HEAD", graph=graph, progress=bar
                 )
             except ValueError as error:
+                from seamcheck.exitcodes import EXIT_USAGE
+
                 bar.finish()
                 self.stderr.write(str(error))
-                raise SystemExit(2) from error
+                raise SystemExit(EXIT_USAGE) from error
         bar.finish()
 
         serving = options["serve"] and not options["no_serve"]

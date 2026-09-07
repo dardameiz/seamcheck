@@ -79,9 +79,11 @@ class ProjectDiscoveryTests(SimpleTestCase):
 class DispatchTests(SimpleTestCase):
     def test_an_unknown_word_is_a_typo_not_a_flag(self):
         # Falling through to the default command would run a scan nobody asked for.
+        # A typo is the command being wrong - EXIT_USAGE, not the bare `2` that used to
+        # collide with EXIT_NO_BASELINE (check --since's own, unrelated question).
         err = io.StringIO()
         with redirect_stderr(err):
-            self.assertEqual(main(["chekc"]), 2)
+            self.assertEqual(main(["chekc"]), exitcodes.EXIT_USAGE)
 
         self.assertIn("no command named 'chekc'", err.getvalue())
 
@@ -206,10 +208,12 @@ class PerCommandHelpTests(SimpleTestCase):
             self.assertEqual(run.args, ("seamcheck", "--format", "map", "--serve", "--help"))
 
     def test_help_for_a_command_that_does_not_exist_says_so(self):
+        # A typo naming a bad command is the command being wrong - EXIT_USAGE, not the
+        # bare `2` that used to collide with EXIT_NO_BASELINE.
         err = io.StringIO()
         out = io.StringIO()
         with redirect_stderr(err), redirect_stdout(out):
-            self.assertEqual(main(["help", "mpa"]), 2)
+            self.assertEqual(main(["help", "mpa"]), exitcodes.EXIT_USAGE)
 
         self.assertIn("no command named 'mpa'", err.getvalue())
 
