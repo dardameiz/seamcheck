@@ -59,13 +59,19 @@ class Command(BaseCommand):
             return self._set_tunnel(options["set_tunnel"])
         if options.get("symbols"):
             from seamcheck import queries
+            from seamcheck.exitcodes import EXIT_CLEAN, envelope_exit_code
 
             out = queries.symbols(options["repo_root"], options["search"],
                                   options["kind"], options["limit"], options["cursor"],
                                   refresh=options["refresh"])
-            return self.stdout.write(json.dumps(out, indent=2))
+            self.stdout.write(json.dumps(out, indent=2))
+            code = envelope_exit_code(out)
+            if code != EXIT_CLEAN:
+                raise SystemExit(code)
+            return None
         if options.get("findings"):
             from seamcheck import queries
+            from seamcheck.exitcodes import EXIT_CLEAN, envelope_exit_code
 
             out = queries.findings(options["repo_root"], options["file"], options["kind"],
                                    options["status"] or "", options["owner"],
@@ -73,14 +79,21 @@ class Command(BaseCommand):
                                    refresh=options["refresh"],
                                    include_triaged=options["include_triaged"])
             self.stdout.write(json.dumps(out, indent=2))
+            code = envelope_exit_code(out)
+            if code != EXIT_CLEAN:
+                raise SystemExit(code)
             return None
         if options.get("diff"):
             from seamcheck import queries
+            from seamcheck.exitcodes import EXIT_CLEAN, envelope_exit_code
 
             out = queries.diff(options["repo_root"], options["since"] or "HEAD~1",
                                options["limit"], options["cursor"],
                                refresh=options["refresh"])
             self.stdout.write(json.dumps(out, indent=2))
+            code = envelope_exit_code(out)
+            if code != EXIT_CLEAN:
+                raise SystemExit(code)
             return None
         if options["show_config"]:
             return self._show_config(options["repo_root"])

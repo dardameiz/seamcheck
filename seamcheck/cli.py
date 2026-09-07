@@ -685,28 +685,33 @@ def _run_without_django(arguments, verbose: bool) -> int:
         return _set_tunnel_plain(options["set_tunnel"])
     if options["symbols"]:
         from seamcheck import queries
+        from seamcheck.exitcodes import envelope_exit_code
 
-        print(json.dumps(queries.symbols(root, options["search"], options["kind"],
-                                         options["limit"], options["cursor"],
-                                         refresh=options["refresh"]), indent=2))
-        return 0
+        out = queries.symbols(root, options["search"], options["kind"],
+                              options["limit"], options["cursor"],
+                              refresh=options["refresh"])
+        print(json.dumps(out, indent=2))
+        return envelope_exit_code(out)
     if options["findings"]:
         from seamcheck import queries
+        from seamcheck.exitcodes import envelope_exit_code
 
-        print(json.dumps(queries.findings(root, options["file"], options["kind"],
-                                          options["status"] or "", options["owner"],
-                                          options["limit"], options["cursor"],
-                                          refresh=options["refresh"],
-                                          include_triaged=options["include_triaged"]),
-                         indent=2))
-        return 0
+        out = queries.findings(root, options["file"], options["kind"],
+                               options["status"] or "", options["owner"],
+                               options["limit"], options["cursor"],
+                               refresh=options["refresh"],
+                               include_triaged=options["include_triaged"])
+        print(json.dumps(out, indent=2))
+        return envelope_exit_code(out)
     if options["diff"]:
         from seamcheck import queries
+        from seamcheck.exitcodes import envelope_exit_code
 
-        print(json.dumps(queries.diff(root, options["since"] or "HEAD~1",
-                                      options["limit"], options["cursor"],
-                                      refresh=options["refresh"]), indent=2))
-        return 0
+        out = queries.diff(root, options["since"] or "HEAD~1",
+                           options["limit"], options["cursor"],
+                           refresh=options["refresh"])
+        print(json.dumps(out, indent=2))
+        return envelope_exit_code(out)
     if options["show_config"]:
         return _show_config_plain(root)
     with quiet(not verbose):

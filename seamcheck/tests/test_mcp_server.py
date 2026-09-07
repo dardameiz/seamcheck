@@ -109,9 +109,13 @@ class ReportSizeGateTests(SimpleTestCase):
         with mock.patch("seamcheck.api.report", side_effect=TooLarge(72_800_000, 18_200_000)):
             result = seamcheck_report(fmt="html", repo_root=".")
 
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["error"]["code"], "too_large")
-        self.assertIn("seamcheck_findings", result["error"]["hint"])
+        # A coded failure is a CallToolResult with isError set (mcp_server._tool_result),
+        # not a plain dict a caller has to parse to notice - see FailedEnvelopeIsErrorTests
+        # for why that distinction is the whole point of this fix.
+        self.assertTrue(result.isError)
+        self.assertFalse(result.structuredContent["ok"])
+        self.assertEqual(result.structuredContent["error"]["code"], "too_large")
+        self.assertIn("seamcheck_findings", result.structuredContent["error"]["hint"])
 
 
 class UndoTests(SimpleTestCase):

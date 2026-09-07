@@ -364,3 +364,113 @@ class BadFormatValueExitCodeTests(SimpleTestCase):
         django_code = int(str(raised.exception.code))
 
         self.assertEqual(plain_code, django_code)
+
+
+class EnvelopeExitCodeMappingTests(SimpleTestCase):
+    """`exitcodes.envelope_exit_code()` - the table `findings`/`symbols`/`diff` were
+    missing entirely: a correct `{"ok": false, "error": {...}}` body, unconditional
+    `return 0` either door. Unit coverage of the mapping itself; door-level reproductions
+    of the review's own two examples are below."""
+
+    def test_ok_true_is_clean(self):
+        self.assertEqual(exitcodes.envelope_exit_code({"ok": True}), exitcodes.EXIT_CLEAN)
+
+    def test_bad_argument_is_usage(self):
+        out = {"ok": False, "error": {"code": "bad_argument"}}
+        self.assertEqual(exitcodes.envelope_exit_code(out), exitcodes.EXIT_USAGE)
+
+    def test_no_git_is_usage_matching_checks_own_bad_ref_handling(self):
+        # queries.diff()'s no_git is the same "the command was wrong" question
+        # check --since <bad ref> already answers with EXIT_USAGE - must not be weaker.
+        out = {"ok": False, "error": {"code": "no_git"}}
+        self.assertEqual(exitcodes.envelope_exit_code(out), exitcodes.EXIT_USAGE)
+
+    def test_no_baseline_is_the_soft_no_baseline_code(self):
+        out = {"ok": False, "error": {"code": "no_baseline"}}
+        self.assertEqual(exitcodes.envelope_exit_code(out), exitcodes.EXIT_NO_BASELINE)
+
+    def test_stale_snapshot_is_also_the_soft_no_baseline_code(self):
+        # Nothing usable to diff against either way - same remedial action (run scan
+        # again) docs/ci.md's own recipe already treats as "not a failure".
+        out = {"ok": False, "error": {"code": "stale_snapshot"}}
+        self.assertEqual(exitcodes.envelope_exit_code(out), exitcodes.EXIT_NO_BASELINE)
+
+    def test_no_adapter_and_missing_dependency_are_environment(self):
+        for code in ("no_adapter", "missing_dependency"):
+            with self.subTest(code=code):
+                out = {"ok": False, "error": {"code": code}}
+                self.assertEqual(exitcodes.envelope_exit_code(out), exitcodes.EXIT_ENVIRONMENT)
+
+    def test_too_large_is_usage(self):
+        out = {"ok": False, "error": {"code": "too_large"}}
+        self.assertEqual(exitcodes.envelope_exit_code(out), exitcodes.EXIT_USAGE)
+
+    def test_every_documented_error_code_is_mapped(self):
+        # envelope.ERRORS is the closed set of codes that may ever be emitted - the
+        # mapping must have an opinion about every one of them, not just the ones a
+        # test happens to exercise.
+        from seamcheck import envelope
+
+        for code in envelope.ERRORS:
+            with self.subTest(code=code):
+                out = {"ok": False, "error": {"code": code}}
+                # Must not raise, and must not silently fall through to EXIT_CLEAN.
+                self.assertNotEqual(exitcodes.envelope_exit_code(out), exitcodes.EXIT_CLEAN)
+
+
+class EnvelopeFailureExitCodeDoorTests(SimpleTestCase):
+    """The review's own two live reproductions: `findings --status wobbly` and
+    `diff --since totally-bogus-ref-xyz` printed a correct coded failure and exited 0
+    on both doors - the exact bug class Task 1 fixed for `check`, reopened for the
+    newer commands built on top of the same envelope."""
+
+    def test_findings_bad_status_plain_door(self):
+        with mock.patch("seamcheck.cli._worth_scanning", return_value=True):
+            code = cli._run_without_django(["--findings", "--status", "wobbly"], verbose=False)
+
+        self.assertEqual(code, exitcodes.EXIT_USAGE)
+        self.assertNotEqual(code, exitcodes.EXIT_CLEAN)
+
+    def test_findings_bad_status_django_door(self):
+        with self.assertRaises(SystemExit) as raised:
+            call_command("seamcheck", "--findings", "--status", "wobbly",
+                         stdout=StringIO(), stderr=StringIO())
+
+        self.assertEqual(int(str(raised.exception.code)), exitcodes.EXIT_USAGE)
+
+    def test_diff_bad_ref_plain_door(self):
+        with mock.patch("seamcheck.cli._worth_scanning", return_value=True):
+            code = cli._run_without_django(
+                ["--diff", "--since", "totally-bogus-ref-xyz"], verbose=False)
+
+        self.assertEqual(code, exitcodes.EXIT_USAGE)
+        self.assertNotEqual(code, exitcodes.EXIT_CLEAN)
+
+    def test_diff_bad_ref_django_door(self):
+        with self.assertRaises(SystemExit) as raised:
+            call_command("seamcheck", "--diff", "--since", "totally-bogus-ref-xyz",
+                         stdout=StringIO(), stderr=StringIO())
+
+        self.assertEqual(int(str(raised.exception.code)), exitcodes.EXIT_USAGE)
+
+    def test_a_clean_findings_call_still_exits_0_on_both_doors(self):
+        # Guards against the fix inverting the success path. Mocked rather than a real
+        # scan of whatever CWD the suite happens to run from - `findings` always exits 0
+        # on `ok: True` regardless of whether the findings LIST is empty, so a real scan
+        # would prove nothing this mock does not already prove faster and deterministically.
+        clean = {"ok": True, "error": None}
+        with (
+            mock.patch("seamcheck.cli._worth_scanning", return_value=True),
+            mock.patch("seamcheck.queries.findings", return_value=clean),
+        ):
+            plain_code = cli._run_without_django(["--findings"], verbose=False)
+
+        with mock.patch("seamcheck.queries.findings", return_value=clean):
+            try:
+                call_command("seamcheck", "--findings", stdout=StringIO(), stderr=StringIO())
+                django_code = 0
+            except SystemExit as exc:
+                django_code = int(str(exc.code))
+
+        self.assertEqual(plain_code, 0)
+        self.assertEqual(django_code, 0)

@@ -83,6 +83,63 @@ class ProtocolTests(SimpleTestCase):
                               "seamcheck_snapshot"}, names)
 
 
+@override_settings(SEAMCHECK_CONFIG=_CONFIG)
+class FailedEnvelopeIsErrorTests(SimpleTestCase):
+    """`isError=True` is set by `mcp.server.lowlevel.server.Server.call_tool()`'s own
+    handler only when the tool function RAISES or output validation fails - never by
+    inspecting a returned dict's own `ok` field (read directly from the installed SDK).
+    `findings`/`symbols`/`diff` used to return a correct `{"ok": false, ...}` body with
+    `isError` staying `False` regardless - the same gap Task 1 closed for `check`'s
+    process exit code, reopened one layer down. Dispatched through the LOW-LEVEL
+    server's own registered handler (`mcp._mcp_server.request_handlers`), not FastMCP's
+    `call_tool()` convenience wrapper, so this is the actual wire path a real client's
+    `tools/call` request takes - not just the Python-level shortcut to it."""
+
+    async def _dispatch(self, name, arguments):
+        from mcp import types
+
+        handler = mcp_server.mcp._mcp_server.request_handlers[types.CallToolRequest]
+        request = types.CallToolRequest(
+            method="tools/call",
+            params=types.CallToolRequestParams(name=name, arguments=arguments),
+        )
+        result = await handler(request)
+        return result.root  # ServerResult wraps the CallToolResult
+
+    def test_findings_bad_status_sets_iserror_as_plain_python(self):
+        # NOT dispatched through the wire path above: `status` is typed as a closed
+        # Literal (FindingStatusFilter) in the tool's own signature, so a real,
+        # schema-respecting client is refused by MCP's own argument validation before
+        # queries.findings() - and therefore mcp_server._tool_result() - is ever reached.
+        # A caller that skips the schema (or calls this as plain Python, exactly like
+        # seamcheck's own tests elsewhere in this file) must still get the SAME coded
+        # isError=True failure, not a bare dict - so this proves that path directly,
+        # the same way ReportFormatGateTests/SnapshotToolTests already do for their tools.
+        from seamcheck.mcp_server import seamcheck_findings
+
+        result = seamcheck_findings(repo_root=".", status="wobbly")
+
+        self.assertTrue(result.isError)
+        self.assertFalse(result.structuredContent["ok"])
+        self.assertEqual(result.structuredContent["error"]["code"], "bad_argument")
+
+    def test_diff_bad_ref_sets_iserror_over_the_real_wire_path(self):
+        result = asyncio.run(self._dispatch(
+            "seamcheck_diff", {"repo_root": ".", "since": "totally-bogus-ref-xyz"}))
+
+        self.assertTrue(result.isError)
+        self.assertFalse(result.structuredContent["ok"])
+        self.assertEqual(result.structuredContent["error"]["code"], "no_git")
+
+    def test_symbols_ok_true_never_sets_iserror(self):
+        # The success path (the overwhelming majority of calls) must stay completely
+        # unaffected - a plain dict, isError False, exactly as before this fix.
+        result = asyncio.run(self._dispatch("seamcheck_symbols", {"repo_root": "."}))
+
+        self.assertFalse(result.isError)
+        self.assertTrue(result.structuredContent["ok"])
+
+
 class ReportFormatGateTests(SimpleTestCase):
     """`json` (72 MB) and `map` (8.6 MB) must never reach api.report at all - the schema
     enum keeps a well-behaved client from asking, but a direct call (or a client that
@@ -93,16 +150,23 @@ class ReportFormatGateTests(SimpleTestCase):
             result = seamcheck_report(fmt="json", repo_root=".")
 
         report.assert_not_called()
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["error"]["code"], "too_large")
+        # Called as plain Python here (not through the protocol - see
+        # ProtocolSmokeTests._call for that path), so the coded failure comes back as the
+        # CallToolResult mcp_server._tool_result() constructs directly, isError included -
+        # not a plain dict, which is exactly the point: isError must be set, not just a
+        # correct body a caller has to parse to notice.
+        self.assertTrue(result.isError)
+        self.assertFalse(result.structuredContent["ok"])
+        self.assertEqual(result.structuredContent["error"]["code"], "too_large")
 
     def test_map_is_refused_before_report_is_ever_called(self):
         with mock.patch("seamcheck.api.report") as report:
             result = seamcheck_report(fmt="map", repo_root=".")
 
         report.assert_not_called()
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["error"]["code"], "too_large")
+        self.assertTrue(result.isError)
+        self.assertFalse(result.structuredContent["ok"])
+        self.assertEqual(result.structuredContent["error"]["code"], "too_large")
 
 
 class NewToolDelegationTests(SimpleTestCase):
@@ -198,8 +262,12 @@ class SnapshotToolTests(SimpleTestCase):
         with tempfile.TemporaryDirectory() as tmp:  # never git-initialised
             result = seamcheck_snapshot(repo_root=tmp)
 
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["error"]["code"], "no_git")
+        # Plain-Python call (see the class docstring's `write_map` test for the `ok:True`
+        # shape, still a plain dict) - a coded failure is a CallToolResult with isError
+        # set, not just a dict a caller has to inspect to notice.
+        self.assertTrue(result.isError)
+        self.assertFalse(result.structuredContent["ok"])
+        self.assertEqual(result.structuredContent["error"]["code"], "no_git")
 
 
 class LegacyTriageDataTests(SimpleTestCase):
@@ -250,7 +318,18 @@ class ProtocolSmokeTests(SimpleTestCase):
     of only ever being checked by list_tools(), which never invokes a tool at all."""
 
     def _call(self, name, **arguments):
-        return asyncio.run(mcp_server.mcp.call_tool(name, arguments))
+        # FastMCP's own convert_result() (server/fastmcp/utilities/func_metadata.py)
+        # returns a bare CallToolResult, unchanged, when the tool function returned one
+        # itself (mcp_server._tool_result()'s ok:False path, so isError survives to the
+        # wire) - and a (content, structuredContent) TUPLE otherwise, its ordinary shape
+        # for every ok:True call. Normalised to the tuple shape here so every existing
+        # `_, structured = self._call(...)` caller keeps working for both.
+        from mcp.types import CallToolResult
+
+        result = asyncio.run(mcp_server.mcp.call_tool(name, arguments))
+        if isinstance(result, CallToolResult):
+            return result.content, result.structuredContent
+        return result
 
     def test_check(self):
         self._call("seamcheck_check", repo_root=".")

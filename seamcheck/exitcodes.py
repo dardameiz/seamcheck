@@ -16,6 +16,51 @@ EXIT_ENVIRONMENT = 4    # the machine was wrong: no adapter, missing import, no 
 NO_BASELINE = "No baseline snapshot stored"
 
 
+# Where each envelope.ERRORS code lands on the process-exit ladder, for `findings`/
+# `symbols`/`diff` (see envelope_exit_code below). `bad_argument`/`too_large` are the
+# caller typing something wrong - EXIT_USAGE, the same code `check --since <bad ref>`
+# already uses. `no_git` is `queries.diff`'s own version of "the ref could not be
+# resolved" (or this is not a git repository at all) - the same command-is-wrong
+# question `check --since` answers with EXIT_USAGE for an unresolvable ref, so this
+# must not be the weaker code. `no_baseline`/`stale_snapshot` both mean "nothing usable
+# to diff against yet" - the same soft, "run scan again" answer `check --since`
+# reports as EXIT_NO_BASELINE, which docs/ci.md's own CI recipe reads as "not a
+# failure". `no_adapter`/`missing_dependency` are the MACHINE being wrong, not the
+# command - EXIT_ENVIRONMENT, matching every other "nothing here this knows how to
+# read" / "a dependency is missing" site in both CLI doors. `unknown_symbol` is not
+# reachable through any of the three today (only `explain`/`triage` look a single
+# symbol up, and neither returns an envelope) but is mapped for completeness, as a
+# bad argument, so a future caller of it is not left with an unmapped code.
+_ENVELOPE_EXIT_CODES: dict[str, int] = {
+    "unknown_symbol": EXIT_USAGE,
+    "no_baseline": EXIT_NO_BASELINE,
+    "no_adapter": EXIT_ENVIRONMENT,
+    "bad_argument": EXIT_USAGE,
+    "missing_dependency": EXIT_ENVIRONMENT,
+    "no_git": EXIT_USAGE,
+    "too_large": EXIT_USAGE,
+    "stale_snapshot": EXIT_NO_BASELINE,
+}
+
+
+def envelope_exit_code(out: dict) -> int:
+    """The exit code an envelope (`envelope.answer()`/`envelope.failure()`) earns.
+
+    `findings`/`symbols`/`diff` used to print a correct `{"ok": false, "error": ...}`
+    body and unconditionally exit 0 on both CLI doors - `check`'s own exit codes
+    (Tasks 1-2) were wired through `gate_code()` below, but the newer commands built on
+    top of the envelope never closed the loop back to the one signal a script or agent
+    actually checks first (`$?`). `out["ok"] is False` with no recognised `error.code`
+    (should never happen - `envelope.failure()` refuses to construct one - but this must
+    never raise out of an exit-code lookup) still earns `EXIT_USAGE`: an envelope this
+    function cannot classify is closer to "the command was wrong" than to a clean exit.
+    """
+    if out.get("ok"):
+        return EXIT_CLEAN
+    code = (out.get("error") or {}).get("code")
+    return _ENVELOPE_EXIT_CODES.get(code, EXIT_USAGE)
+
+
 def gate_code(outcome: dict, comparing: bool = False) -> int:
     """0 clean, 1 findings, 2 no baseline - but 2 only for a run that asked to compare.
 

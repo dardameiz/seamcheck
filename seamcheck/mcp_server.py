@@ -271,6 +271,40 @@ _READS = {"readOnlyHint": True, "destructiveHint": False}
 mcp = _Server("seamcheck", instructions=__doc__)
 
 
+def _tool_result(out: dict):
+    """An envelope (`envelope.answer()`/`envelope.failure()`), returned so a FAILURE also
+    sets MCP's own `isError` - not just a coded body a client has to parse to notice.
+
+    `findings`/`symbols`/`diff`/`snapshot`/`report` used to return the failure dict as a
+    plain value on every path - a correct `{"ok": false, "error": {...}}` body, but
+    `isError` stayed `False`: read directly from the installed SDK
+    (`mcp.server.lowlevel.server.Server.call_tool`'s handler), `isError` is set only when
+    the tool function RAISES or output validation fails, never by inspecting a returned
+    dict's own contents. A client that special-cases `isError` (a common agent-harness
+    pattern) saw success on a coded failure - the same gap Task 1 closed for `check`'s
+    process exit code, reopened one layer down for every command built on the envelope
+    since.
+
+    FastMCP passes a `mcp.types.CallToolResult` returned by a tool function straight
+    through (checked by `isinstance` on the actual return VALUE, not the function's
+    declared type hint - see `func_metadata.convert_result`), still validating
+    `structuredContent` against the tool's own output schema first. Constructing one only
+    for `ok: False` keeps every success path - the vast majority of calls - exactly as it
+    already was: a plain dict, converted FastMCP's ordinary way.
+    """
+    if out.get("ok") is not False:
+        return out
+    import json
+
+    from mcp.types import CallToolResult, TextContent
+
+    return CallToolResult(
+        content=[TextContent(type="text", text=json.dumps(out, indent=2))],
+        structuredContent=out,
+        isError=True,
+    )
+
+
 @mcp.tool(annotations=_READS)
 def seamcheck_check(repo_root: str = ".") -> CheckResult:
     """Scan the project and report findings new since the last snapshot."""
@@ -336,12 +370,12 @@ def seamcheck_report(fmt: Fmt = "markdown", repo_root: str = ".") -> str | Envel
     from seamcheck import envelope
 
     if fmt in ("json", "map"):
-        return envelope.failure(
+        return _tool_result(envelope.failure(
             "report", "too_large",
             f"seamcheck_report does not offer fmt={fmt!r} - json is ~72 MB and map ~8.6 MB "
             "on a large project, both far over any usable reply size.",
             hint="Use seamcheck_findings for what is wrong, or seamcheck_explain for one "
-                 "symbol, instead of the whole report.")
+                 "symbol, instead of the whole report."))
     try:
         return api.report(repo_root, fmt)
     except envelope.TooLarge as error:
@@ -349,12 +383,12 @@ def seamcheck_report(fmt: Fmt = "markdown", repo_root: str = ".") -> str | Envel
         # too (today only json's own size gate in api.py does) - kept as the same
         # documented contract every other `api.report` caller honours, not dead code for
         # a shape this tool happens not to hit yet.
-        return envelope.failure(
+        return _tool_result(envelope.failure(
             "report", "too_large",
             f"The rendered report is {error.size_bytes / 1e6:.1f} MB "
             f"(~{error.tokens:,} tokens) - too large to return here.",
             hint="Use seamcheck_findings for what is wrong, or seamcheck_explain for one "
-                 "symbol, instead of the whole report.")
+                 "symbol, instead of the whole report."))
 
 
 @mcp.tool(annotations=_READS)
@@ -403,8 +437,9 @@ def seamcheck_findings(repo_root: str = ".", file: str = "", kind: str = "",
     """
     from seamcheck import queries
 
-    return queries.findings(repo_root, file, kind, status, owner, limit, cursor,
-                            refresh=refresh, include_triaged=include_triaged)
+    return _tool_result(queries.findings(repo_root, file, kind, status, owner, limit,
+                                         cursor, refresh=refresh,
+                                         include_triaged=include_triaged))
 
 
 @mcp.tool(annotations=_READS)
@@ -413,7 +448,8 @@ def seamcheck_symbols(repo_root: str = ".", search: str = "", kind: str = "",
     """Find a symbol id by name, before spending a call on explain or triage."""
     from seamcheck import queries
 
-    return queries.symbols(repo_root, search, kind, limit, cursor, refresh=refresh)
+    return _tool_result(queries.symbols(repo_root, search, kind, limit, cursor,
+                                        refresh=refresh))
 
 
 @mcp.tool(annotations=_READS)
@@ -422,7 +458,7 @@ def seamcheck_diff(repo_root: str = ".", since: str = "HEAD~1", limit: int = 25,
     """What appeared, vanished or changed status since a ref. The "what did I break" call."""
     from seamcheck import queries
 
-    return queries.diff(repo_root, since, limit, cursor, refresh=refresh)
+    return _tool_result(queries.diff(repo_root, since, limit, cursor, refresh=refresh))
 
 
 @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False})
@@ -444,10 +480,10 @@ def seamcheck_snapshot(repo_root: str = ".", refresh: bool = False) -> SnapshotE
     try:
         sha = current_git_sha(repo_root)
     except (OSError, subprocess.CalledProcessError) as error:
-        return envelope.failure(
+        return _tool_result(envelope.failure(
             "snapshot", "no_git", f"Could not resolve HEAD ({error}).",
             hint="Run this inside a git repository - a snapshot is keyed by commit.",
-            repo=repo_root)
+            repo=repo_root))
     graph, how = cached_scan(repo_root, refresh=refresh)
     path = api.write_map(graph, repo_root)
     return envelope.answer(
