@@ -351,6 +351,43 @@ class CheckSinceWithFormatExitCodeTests(SimpleTestCase):
         self.assertEqual(code, 1)
 
 
+@override_settings(SEAMCHECK_CONFIG=_CONFIG)
+class CheckSinceBadRefExitCodeTests(SimpleTestCase):
+    """A `since` ref that cannot be resolved AT ALL - a typo, a CI variable that came
+    through empty - is a USAGE error, not "no baseline yet" (that needs a real commit
+    with nothing stored for it). Both `_check()` and `_exit_on_check()` used to treat any
+    non-empty message from `diff_against` as "no baseline" and exit 2 either way, so a
+    mistyped `$BASE_SHA` in CI silently read as a clean first run instead of the broken
+    invocation it is. Uses a real nonexistent ref rather than mocking `diff_against`, so
+    this also proves the real `git rev-parse` failure is what `sha == ""` actually means.
+    """
+
+    def _run(self, *args):
+        out = StringIO()
+        try:
+            call_command("seamcheck", *args, stdout=out, stderr=StringIO())
+        except SystemExit as exit_code:
+            return out.getvalue(), int(str(exit_code.code))
+        return out.getvalue(), 0
+
+    def test_a_nonexistent_ref_exits_usage_and_names_the_ref(self):
+        output, code = self._run("--check", "--since", "totally-bogus-ref-xyz")
+
+        self.assertEqual(code, 3)
+        self.assertIn("totally-bogus-ref-xyz", output)
+
+    def test_a_nonexistent_ref_exits_usage_even_composed_with_a_format(self):
+        out, err = StringIO(), StringIO()
+        with override_settings(SEAMCHECK_CONFIG=_CONFIG), self.assertRaises(SystemExit) as raised:
+            call_command(
+                "seamcheck", "--check", "--since", "totally-bogus-ref-xyz",
+                "--format", "sarif", stdout=out, stderr=err,
+            )
+
+        self.assertEqual(raised.exception.code, 3)
+        self.assertIn("totally-bogus-ref-xyz", err.getvalue())
+
+
 class ServingTests(SimpleTestCase):
     """`map` serves by default now, so the file and the server have to coexist."""
 

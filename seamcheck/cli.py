@@ -619,8 +619,16 @@ def _run_without_django(arguments, verbose: bool) -> int:
             # The CI gate. `passed` is the key api.check() actually returns; this asked for
             # `findings`, which it never had, so every non-Django project passed no matter
             # what was in it - measured on redash: 47 unresolved, exit 0.
-            from seamcheck.exitcodes import gate_code
-            result = api.check(repo_root=root)
+            from seamcheck.exitcodes import EXIT_USAGE, gate_code
+            since = options["since"]
+            result = api.check(repo_root=root, since=since)
+            if result.get("bad_ref"):
+                # The ref itself could not be resolved - a typo, a CI variable that came
+                # through empty. Not "no baseline yet" (that needs a real commit with
+                # nothing stored for it): the command was wrong, not the machine, so this
+                # is EXIT_USAGE, not the gate_code() ladder at all.
+                print(result["message"], file=sys.stderr)
+                return EXIT_USAGE
             if options["fmt"] in ("sarif", "github"):
                 # A CI gate wants the annotation format it asked for, not the terminal
                 # digest - this branch used to ignore --format entirely, so `seamcheck
@@ -633,8 +641,8 @@ def _run_without_django(arguments, verbose: bool) -> int:
                 else:
                     print(text)
             else:
-                print(api.report(repo_root=root, fmt="terminal"))
-            return gate_code(result)
+                print(api.report(repo_root=root, fmt="terminal", ref=since or "HEAD"))
+            return gate_code(result, comparing=bool(since))
         if options["fmt"] in ("map", "console"):
             document = api.map_document(repo_root=root)
         else:
@@ -646,7 +654,7 @@ def _run_without_django(arguments, verbose: bool) -> int:
             going_to_disk = bool(options["out"])
             try:
                 rendered = api.report(
-                    repo_root=root, fmt=options["fmt"],
+                    repo_root=root, fmt=options["fmt"], ref=options["since"] or "HEAD",
                     full=going_to_disk or (options["full"] and options["yes"]),
                 )
             except TooLarge as error:
@@ -808,6 +816,12 @@ def _plain_args(arguments) -> dict:
         # Same names, same meaning as the management command's --full/--yes: --full alone
         # still refuses to print the whole graph, on this path too.
         "full": False, "yes": False,
+        # Missing entirely until now: --since was parsed by argparse on the Django door
+        # and simply absent here, so `seamcheck check --since REF` on a non-Django project
+        # silently ran a bare check against HEAD - no error, no warning, just the wrong
+        # question answered. Third time this exact drift has bitten (--limit, --format,
+        # now this) - see LimitFlagParityTests for the same shape of bug.
+        "since": None,
     }
     items = list(arguments)
     for index, item in enumerate(items):
@@ -840,6 +854,8 @@ def _plain_args(arguments) -> dict:
             # exactly what argparse's type=int does; the clamp stays the one in page().
             with contextlib.suppress(ValueError):
                 options["limit"] = int(following)
+        elif item == "--since" and following:
+            options["since"] = following
         elif item == "--cursor" and following:
             options["cursor"] = following
         elif item == "--triage" and following:

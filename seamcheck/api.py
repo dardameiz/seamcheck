@@ -424,6 +424,15 @@ def check(repo_root: str = ".", graph: Graph | None = None, since: str | None = 
     `docs/ci.md` documents) called this with no way to pass `since` at all until this
     parameter existed, so it was always judged by the bare-check question and could never
     report "no baseline yet" (exit 2) the way `--since` alone always could.
+
+    A THIRD outcome exists when `since` is given and cannot be resolved at all - a typo, a
+    CI variable that came through empty, a ref this checkout genuinely does not have.
+    `diff_against` returns `sha == ""` for exactly that case (see its own docstring) and
+    otherwise never does, so that is the signal used here to set `"bad_ref"` rather than
+    falling through to the bare-check question: a mistyped `$BASE_SHA` is the COMMAND being
+    wrong, not "nothing to compare yet", and conflating the two let it silently read as a
+    clean first run instead of the usage error it is. `queries.diff()` already makes this
+    same distinction with its own `no_git` failure code; this must not be the weaker one.
     """
     if graph is None:
         graph = scan(repo_root)
@@ -431,7 +440,19 @@ def check(repo_root: str = ".", graph: Graph | None = None, since: str | None = 
 
     entries = _marks(graph, repo_root)
     graph = apply_triage(graph, entries)
-    result, _, message = diff_against(graph, since or "HEAD", repo_root)
+    result, sha, message = diff_against(graph, since or "HEAD", repo_root)
+
+    if since and not sha:
+        return {
+            "passed": False,
+            "message": f"Could not resolve `{since}` as a git ref - check the value.",
+            "bad_ref": since,
+            "new_unresolved": [], "new_unused": [], "triage_invalidated": [], "returned": [],
+            "counts": {
+                status.value: sum(1 for s in graph.symbols if s.status is status)
+                for status in Status
+            },
+        }
 
     def _ids(symbols):
         return [{"id": s.id, "label": s.label, "kind": s.kind, "note": s.note} for s in symbols]

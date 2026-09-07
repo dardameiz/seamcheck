@@ -372,6 +372,54 @@ class PlainJsonSizeGateTests(SimpleTestCase):
         self.assertIn("--full --yes", err.getvalue())
 
 
+class PlainCheckFormatTests(SimpleTestCase):
+    """`_run_without_django`'s `--check` branch used to hardcode `fmt="terminal"` and
+    ignore `--format`/`--out` outright - `seamcheck check --format sarif --out FILE` on a
+    non-Django project (redash: 47 unresolved, 53 unused) printed the terminal digest to
+    stdout and never wrote FILE at all. Manual proof against a real corpus project does not
+    stop this regressing; this pins the plain path's own format handling directly."""
+
+    def test_check_composes_with_format_and_out_on_the_plain_door(self):
+        import os
+
+        from seamcheck.cli import _run_without_django
+
+        clean = {"passed": True, "message": "", "new_unresolved": [], "new_unused": [],
+                 "triage_invalidated": [], "returned": [], "counts": {}}
+
+        def fake_report(*, repo_root, fmt, **kwargs):
+            return f"RENDERED AS {fmt}"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            pathlib.Path(tmp, "package.json").write_text("{}")
+            out_path = str(pathlib.Path(tmp) / "out.sarif")
+            cwd = os.getcwd()
+            os.chdir(tmp)
+            try:
+                with (
+                    mock.patch("seamcheck.cli._worth_scanning", return_value=True),
+                    mock.patch("seamcheck.api.check", return_value=clean),
+                    mock.patch("seamcheck.api.report", side_effect=fake_report),
+                    redirect_stdout(io.StringIO()) as out,
+                    redirect_stderr(io.StringIO()),
+                ):
+                    code = _run_without_django(
+                        ["--check", "--format", "sarif", "--out", out_path], verbose=False
+                    )
+            finally:
+                os.chdir(cwd)
+
+            # Read while the temp directory still exists - it is deleted the moment this
+            # `with` block exits, and checking after that would report FileNotFoundError
+            # for the app being wrong when it is actually the test that closed too soon.
+            written = pathlib.Path(out_path).read_text()
+            printed = out.getvalue()
+
+        self.assertEqual(code, 0)
+        self.assertEqual(written, "RENDERED AS sarif")
+        self.assertEqual(printed, "", "sarif with --out must not also print to stdout")
+
+
 class TunnelSettingArgumentTests(SimpleTestCase):
     """`seamcheck config --tunnel always` is the sentence a person types.
 
@@ -431,3 +479,35 @@ class LimitFlagParityTests(SimpleTestCase):
         options = _plain_args(["--limit", "banana"])
 
         self.assertEqual(options["limit"], 25)
+
+
+class SinceFlagParityTests(SimpleTestCase):
+    """`--since` must mean the same thing on both front doors, same as `--limit` above and
+    `--format` before it - this is the third time one flag worked on the Django management
+    command and was silently absent from `_plain_args`, so `seamcheck check --since REF` on
+    a non-Django project (redash, most of the corpus) ran a bare check against HEAD with no
+    error and no warning: the wrong question, answered as if it were the right one.
+
+    Parses the SAME argv on both doors and compares the result directly, rather than just
+    asserting a value against `_plain_args` alone - that is what let `--format` drift
+    silently before it: each half looked correct read on its own.
+    """
+
+    def _django_since(self, *argv):
+        from seamcheck.management.commands.seamcheck import Command
+
+        parser = Command().create_parser("manage.py", "seamcheck")
+        return parser.parse_args(list(argv)).since
+
+    def test_the_same_argv_parses_to_the_same_since_value(self):
+        from seamcheck.cli import _plain_args
+
+        argv = ["--since", "origin/main"]
+
+        self.assertEqual(_plain_args(argv)["since"], self._django_since(*argv))
+
+    def test_neither_door_invents_a_since_when_none_is_given(self):
+        from seamcheck.cli import _plain_args
+
+        self.assertIsNone(_plain_args([])["since"])
+        self.assertIsNone(self._django_since())

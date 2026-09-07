@@ -42,7 +42,11 @@ jobs:
 
       # The baseline. Without it `check` cannot tell a regression from a first run and
       # exits 2, which this job treats as "nothing to compare yet" rather than failure.
-      # This is OTHER/seamcheck/scans, not .seamcheck - see "The cache path" below.
+      # This is OTHER/seamcheck/scans, not .seamcheck - see "The cache path" below. This
+      # cache only ever has something in it once the companion workflow at the bottom of
+      # this doc ("Establishing the baseline") has run on your default branch at least
+      # once - copy both files, not just this one, or every PR takes the "no baseline
+      # yet" branch forever.
       - uses: actions/cache@v4
         with:
           path: OTHER/seamcheck/scans
@@ -158,6 +162,19 @@ Nothing above ever *writes* a snapshot - `check` only ever reads one. The comman
 `seamcheck help scan` - "it also writes two things you get for free... a snapshot keyed by
 the current commit... so running scan regularly is what builds the history." `seamcheck map`
 does not do this; only the bare command and `--backfill` do.
+
+**This only works on a Django project today.** `seamcheck scan`'s snapshot-writing is
+`api.write_map()` (`seamcheck/api.py`), called from the Django management command's own
+bare-invocation handler (`_summary()`) - the non-Django front door (`cli._run_without_django`,
+what runs on a Flask/Express/FastAPI/Next repo with no `manage.py`) never calls it for any
+command, `scan` included. Found proving this section end to end against a non-Django
+project (redash): `seamcheck scan` there exits 0 and prints totals, same as on a Django
+project, but writes no `OTHER/seamcheck/scans/*.json` at all - so `--since` on that kind of
+project can never find a baseline, no matter how often this workflow runs. `--since` itself
+is correctly wired through to `api.check(since=...)` on that door now (see below); it is the
+place a snapshot could come FROM that is still missing there. Real gap, out of scope for
+this fix, tracked separately - if your project has no `manage.py`, this companion workflow
+will not do what it says until that closes.
 
 Run the `pull_request` workflow above on its own, on a repository that has never scanned its
 default branch, and every single PR takes the "no baseline yet" branch forever - not a bug in

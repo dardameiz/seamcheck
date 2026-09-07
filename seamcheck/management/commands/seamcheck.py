@@ -452,7 +452,18 @@ class Command(BaseCommand):
         graph = api.scan(repo_root, bar)
         bar.finish()
         if options["since"]:
-            result, _, message = api.diff_against(graph, options["since"], repo_root)
+            result, sha, message = api.diff_against(graph, options["since"], repo_root)
+            if not sha:
+                # The ref itself could not be resolved - a typo, a CI variable that came
+                # through empty. Different from "resolved but nothing stored for it"
+                # below: this is the COMMAND being wrong, not "nothing to compare yet",
+                # and conflating the two (both used to be "any message means exit 2") let
+                # a mistyped $BASE_SHA silently read as a clean first run.
+                self.stdout.write(message)
+                if options["check"]:
+                    from seamcheck.exitcodes import EXIT_USAGE
+                    raise SystemExit(EXIT_USAGE)
+                return
             if message:
                 self.stdout.write(message)
                 # A gate asked to compare against a baseline that is not there has not
@@ -640,9 +651,15 @@ class Command(BaseCommand):
         # `comparing=bool(since)` is what unlocks EXIT_NO_BASELINE - a bare `--check`
         # (since=None) never asked "what changed" and must never report "no baseline" for
         # a question it did not ask. See gate_code()'s docstring and api.check()'s.
-        from seamcheck.exitcodes import EXIT_CLEAN, gate_code
+        from seamcheck.exitcodes import EXIT_CLEAN, EXIT_USAGE, gate_code
 
         outcome = api.check(repo_root, graph=graph, since=since)
+        if outcome.get("bad_ref"):
+            # The ref itself could not be resolved - a typo, a CI variable that came
+            # through empty. Not "no baseline yet": the command was wrong, not the
+            # machine, so this bypasses gate_code()'s ladder entirely.
+            self.stderr.write(outcome["message"])
+            raise SystemExit(EXIT_USAGE)
         code = gate_code(outcome, comparing=bool(since))
         if code != EXIT_CLEAN:
             raise SystemExit(code)
