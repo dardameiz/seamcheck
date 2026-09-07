@@ -454,9 +454,19 @@ def check(repo_root: str = ".", graph: Graph | None = None, since: str | None = 
     wrong, not "nothing to compare yet", and conflating the two let it silently read as a
     clean first run instead of the usage error it is. `queries.diff()` already makes this
     same distinction with its own `no_git` failure code; this must not be the weaker one.
+
+    A caller that already has a graph (both CLI doors' own "scan once, share it between
+    the digest and the exit code" combos) passes it straight through; only a caller with
+    NO graph in hand - MCP's `seamcheck_check`, and the plain CLI door's own `check`
+    branch, which never pre-scans - pays for a scan here, and pays the CACHED price
+    (`scancache.cached_scan`) rather than a fresh one every time. This is the exact call
+    the review measured a mistyped `explain` at 88.5s for; `check` is the natural next
+    call in the same agent loop and used to cost the same uncached scan again.
     """
     if graph is None:
-        graph = scan(repo_root)
+        from seamcheck.scancache import cached_scan
+
+        graph, _how = cached_scan(repo_root)
     from seamcheck.report import mark_dict
 
     entries = _marks(graph, repo_root)
@@ -527,6 +537,7 @@ def report(
 
 
 def _report(repo_root, fmt, ref, graph, progress, full=False) -> str:
+    from seamcheck.cliflags import FORMATS
     from seamcheck.renderers import html as html_renderer
     from seamcheck.renderers import markdown as markdown_renderer
     from seamcheck.renderers import terminal as terminal_renderer
@@ -543,16 +554,30 @@ def _report(repo_root, fmt, ref, graph, progress, full=False) -> str:
         # The review sections live inside the map now: one document, one link, one render
         # of the same scan. Kept as an alias so an existing caller does not break.
         return _render_map(repo_root, ref, progress)
-    if fmt not in renderers and fmt not in ("map", "console", "sarif", "github", "json"):
-        raise ValueError(f"Unknown format {fmt!r}. Use one of: {', '.join(sorted(renderers))}.")
+    # FORMATS (cliflags.py) is the one place the accepted set lives - not `renderers`
+    # unioned with a second, hand-typed tuple here, and not restated a third time in the
+    # refusal below: those three used to be free to disagree, and the refusal message
+    # alone knew about a THIRD of the real set.
+    if fmt not in FORMATS:
+        raise ValueError(f"Unknown format {fmt!r}. Use one of: {', '.join(sorted(FORMATS))}.")
 
     # Resolved BEFORE the sarif/github branch below, not just before json/the renderers -
     # `--check --format sarif` (the exact command docs/ci.md prescribes) already built this
     # graph to answer the exit code, and returning early here used to discard it, paying for
     # a second ~168-second scan through `_findings_report` -> `queries.findings` just to
     # render the digest the first scan could already answer.
+    #
+    # A caller with no graph in hand (MCP's `seamcheck_report`, and the plain CLI door's
+    # `report`/`--format`/`sarif`/`github`/`json` rendering, none of which pre-scan) pays
+    # for the scan HERE - through the cache, not a fresh scan every time, the same reuse
+    # `symbols`/`findings`/`diff` already got. `progress` goes unused on that path (there
+    # is nothing to report progress on above a cache hit; a cache miss still runs the real
+    # scan, just without a bar) - it stays a parameter because `map`/`console` above still
+    # need it.
     if graph is None:
-        graph = scan(repo_root, progress)
+        from seamcheck.scancache import cached_scan
+
+        graph, _how = cached_scan(repo_root)
     if fmt in ("sarif", "github"):
         # A different question from the other formats: not "what changed since ref" but
         # "what is wrong right now" - GitHub's own code-scanning baseline does the
@@ -636,8 +661,15 @@ def unverified(repo_root: str = ".", limit: int = 25, kind: str = "") -> dict:
 
     Ordered worst-kind-first and capped, because a queue of twenty-five is worked and a
     queue of three thousand is closed.
+
+    Only reachable through MCP's `seamcheck_unverified` (neither CLI door exposes it), and
+    that tool never pre-scans, so this always pays for the scan itself - through the
+    cache, like `explain`/`check`/`report`, rather than a fresh scan on every call in the
+    documented `unverified` -> `explain` -> `triage` -> `check` loop.
     """
-    graph = scan(repo_root)
+    from seamcheck.scancache import cached_scan
+
+    graph, _how = cached_scan(repo_root)
     judged = judged_ids(load_triage(repo_root))
     claims = [
         symbol for symbol in graph.symbols

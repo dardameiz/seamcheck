@@ -87,9 +87,13 @@ class Command(BaseCommand):
         if options["triage"]:
             return self._triage(options)
         if options["explain"]:
-            bar = self._progress(options, api.SCAN_STEPS)
-            graph = api.scan(options["repo_root"], bar)
-            bar.finish()
+            # Through the cache, not a fresh scan - this is the exact call the review
+            # measured at 88.5s for a mistyped id. No progress bar: a cache hit is near-
+            # instant, and a miss still runs the real scan underneath, same as
+            # symbols/findings/diff already do with no bar of their own.
+            from seamcheck.scancache import cached_scan
+
+            graph, _how = cached_scan(options["repo_root"])
             return self.stdout.write(
                 api.explain_with_hint(graph, options["explain"], options["repo_root"]))
 

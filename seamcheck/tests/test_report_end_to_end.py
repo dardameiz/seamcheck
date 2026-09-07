@@ -42,6 +42,34 @@ class EndToEndReportTests(SimpleTestCase):
 
         self.assertIn("markdown", str(raised.exception))
 
+    def test_the_refusal_names_every_real_format_not_just_the_renderers_dict(self):
+        # The validity check used to be `renderers.keys()` (terminal/markdown/html)
+        # UNIONED with a second, hand-typed tuple of the other five - but the refusal
+        # message was built from `renderers` alone, so a typo was told only a third of
+        # the real menu existed. sarif/github/json/map/console are all real, accepted
+        # values (see cliflags.FORMATS) that never appeared in their own error message.
+        from seamcheck.cliflags import FORMATS
+
+        with self.assertRaises(ValueError) as raised:
+            api.report(".", "yaml")
+
+        message = str(raised.exception)
+        for fmt in FORMATS:
+            with self.subTest(fmt=fmt):
+                self.assertIn(fmt, message)
+
+    def test_every_real_format_is_actually_accepted(self):
+        # The other half of the same guarantee: FORMATS must not claim a value the
+        # validity check would then refuse.
+        from seamcheck.cliflags import FORMATS
+
+        for fmt in FORMATS:
+            with self.subTest(fmt=fmt):
+                try:
+                    api.report(".", fmt)
+                except ValueError:
+                    self.fail(f"{fmt!r} is in cliflags.FORMATS but api.report() refused it")
+
     def test_the_real_fixture_scan_renders_the_uncertain_gloss_sentence(self):
         # Not a test that uncertain symbols are excluded from groups/new_findings - that
         # guarantee is structural, in report.py's _FINDING_STATUSES, and cannot reach a
@@ -127,3 +155,67 @@ class BaselineShaWiringTests(SimpleTestCase):
         self.assertIn(f"Seamcheck — {head_sha[:12]}", out)
         self.assertIn(f"NEW SINCE {baseline_sha[:12]}", out)
         self.assertNotEqual(baseline_sha[:12], head_sha[:12])
+
+
+class CachedScanRoutingTests(SimpleTestCase):
+    """`check`, `report` and `unverified` used to call `scan()` directly whenever a
+    caller had no graph in hand - MCP's seamcheck_check/_report/_unverified, and the
+    plain CLI door's own check/report dispatch, neither of which pre-scan. That made the
+    documented unverified -> explain -> triage -> check agent loop pay for four full,
+    uncached scans - the entire efficiency argument the scan cache exists to deliver,
+    unmet for the tool's own headline commands (Task 4's cached_scan() was reached only
+    from queries.py and the MCP snapshot tool). They now go through the same
+    scancache.cached_scan() symbols/findings/diff already use.
+
+    A graph already in hand (both CLI doors' own "scan once, share it between the digest
+    and the exit code" combo for `--check --format X`) must keep bypassing the cache
+    lookup entirely - re-fetching it would be a second call for no reason, not a bug the
+    cache itself could ever catch, so this pins it directly.
+    """
+
+    GRAPH = Graph(symbols=[], edges=[])
+
+    def test_check_with_no_graph_goes_through_the_cache(self):
+        with (
+            mock.patch("seamcheck.scancache.cached_scan",
+                       return_value=(self.GRAPH, {"cached": True})) as cached_scan,
+            mock.patch("seamcheck.api.scan") as scan,
+        ):
+            api.check(".")
+
+        cached_scan.assert_called_once_with(".")
+        scan.assert_not_called()
+
+    def test_check_with_a_graph_already_in_hand_never_touches_the_cache(self):
+        with mock.patch("seamcheck.scancache.cached_scan") as cached_scan:
+            api.check(".", graph=self.GRAPH)
+
+        cached_scan.assert_not_called()
+
+    def test_report_with_no_graph_goes_through_the_cache(self):
+        with (
+            mock.patch("seamcheck.scancache.cached_scan",
+                       return_value=(self.GRAPH, {"cached": True})) as cached_scan,
+            mock.patch("seamcheck.api.scan") as scan,
+        ):
+            api.report(".", "terminal")
+
+        cached_scan.assert_called_once_with(".")
+        scan.assert_not_called()
+
+    def test_report_with_a_graph_already_in_hand_never_touches_the_cache(self):
+        with mock.patch("seamcheck.scancache.cached_scan") as cached_scan:
+            api.report(".", "terminal", graph=self.GRAPH)
+
+        cached_scan.assert_not_called()
+
+    def test_unverified_goes_through_the_cache(self):
+        with (
+            mock.patch("seamcheck.scancache.cached_scan",
+                       return_value=(self.GRAPH, {"cached": True})) as cached_scan,
+            mock.patch("seamcheck.api.scan") as scan,
+        ):
+            api.unverified(".")
+
+        cached_scan.assert_called_once_with(".")
+        scan.assert_not_called()

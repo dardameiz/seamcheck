@@ -686,3 +686,24 @@ class ExplainWithHintTests(SimpleTestCase):
         self.assertEqual(code, 0)
         self.assertIn("Did you mean", out.getvalue())
         self.assertIn("url:api/submit/", out.getvalue())
+
+
+class ExplainCachedScanTests(SimpleTestCase):
+    """`explain` used to call api.scan() directly on both CLI doors and the MCP tool -
+    the exact call the review measured at 88.5 seconds for a mistyped id, on the second
+    step of the documented unverified -> explain -> triage -> check agent loop. It now
+    shares the same cache symbols/findings/diff already use (see scancache.py)."""
+
+    def test_the_django_door_goes_through_the_cache_not_a_fresh_scan(self):
+        from seamcheck.graph import Graph
+
+        empty = Graph(symbols=[], edges=[])
+        with (
+            mock.patch("seamcheck.scancache.cached_scan",
+                       return_value=(empty, {"cached": True, "seconds": 0.0})) as cached_scan,
+            mock.patch("seamcheck.api.scan") as scan,
+        ):
+            call_command("seamcheck", "--explain", "url:x", stdout=StringIO(), stderr=StringIO())
+
+        cached_scan.assert_called_once_with(".")
+        scan.assert_not_called()

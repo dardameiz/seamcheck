@@ -38,6 +38,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+# The complete, canonical set of values `--format` accepts. This used to be expressed
+# three ways that could each say something different: `api.py`'s validity check
+# (`renderers.keys()` unioned with a second, hand-typed tuple), its refusal message (built
+# from `renderers` ALONE, so a typo was told only `html`, `markdown`, `terminal` existed -
+# five of the eight real formats never appeared in their own error message), and this
+# file's `--format` help text (a third, hand-typed copy). One tuple, read by all three:
+# `api._report`'s validity check and its ValueError, and the help text below.
+FORMATS: tuple[str, ...] = (
+    "terminal", "markdown", "html", "json", "map", "console", "sarif", "github",
+)
+
 
 @dataclass(frozen=True)
 class Flag:
@@ -134,8 +145,8 @@ FLAGS: tuple[Flag, ...] = (
         # SystemExit) for call_command() invocations, so argparse-level validation
         # can't produce the SystemExit callers of an invalid --format expect.
         # _format_report() validates instead, via api.report()'s ValueError.
-        help="Output format: terminal, markdown, html, json, map, console, sarif, "
-             "github. json emits the whole graph, as --json does.",
+        help=f"Output format: {', '.join(FORMATS)}. json emits the whole graph, as "
+             "--json does.",
     ),
     Flag(("--out",), "out", help="Write to PATH instead of stdout ('-' for stdout)."),
     Flag(

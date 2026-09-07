@@ -428,6 +428,38 @@ class PlainCheckFormatTests(SimpleTestCase):
         self.assertEqual(printed, "", "sarif with --out must not also print to stdout")
 
 
+class PlainExplainCachedScanTests(SimpleTestCase):
+    """The plain door's own `--explain` used to call `api.scan()` directly - the exact
+    call the review measured at 88.5 seconds for a mistyped id. It now goes through the
+    same cache `--symbols`/`--findings`/`--diff` already share."""
+
+    def test_explain_goes_through_the_cache_not_a_fresh_scan(self):
+        import os
+
+        from seamcheck.cli import _run_without_django
+        from seamcheck.graph import Graph
+
+        empty = Graph(symbols=[], edges=[])
+        with tempfile.TemporaryDirectory() as tmp:
+            pathlib.Path(tmp, "package.json").write_text("{}")
+            cwd = os.getcwd()
+            os.chdir(tmp)
+            try:
+                with (
+                    mock.patch("seamcheck.cli._worth_scanning", return_value=True),
+                    mock.patch("seamcheck.scancache.cached_scan",
+                               return_value=(empty, {"cached": True, "seconds": 0.0})) as cached_scan,
+                    mock.patch("seamcheck.api.scan") as scan,
+                    redirect_stdout(io.StringIO()),
+                ):
+                    _run_without_django(["--explain", "url:x"], verbose=False)
+            finally:
+                os.chdir(cwd)
+
+        cached_scan.assert_called_once()
+        scan.assert_not_called()
+
+
 class TunnelSettingArgumentTests(SimpleTestCase):
     """`seamcheck config --tunnel always` is the sentence a person types.
 
@@ -636,6 +668,20 @@ class FlagTableParityTests(SimpleTestCase):
                         self.assertNotIn(name, unknown)
                     else:
                         self.assertIn(name, unknown)
+
+
+class FormatHelpTextTests(SimpleTestCase):
+    """`--format`'s help text used to be a third, hand-typed copy of the accepted set,
+    independent of both `api._report`'s validity check and its own refusal message -
+    now all three read `cliflags.FORMATS`."""
+
+    def test_the_help_text_names_every_real_format(self):
+        from seamcheck.cliflags import FLAGS, FORMATS
+
+        (format_flag,) = [flag for flag in FLAGS if flag.dest == "format"]
+        for fmt in FORMATS:
+            with self.subTest(fmt=fmt):
+                self.assertIn(fmt, format_flag.help)
 
 
 class UnknownFlagTests(SimpleTestCase):

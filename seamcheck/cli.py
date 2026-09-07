@@ -713,7 +713,13 @@ def _run_without_django(arguments, verbose: bool) -> int:
             print(result["message"])
             return 0 if result.get("ok") else EXIT_USAGE
         if options["explain"]:
-            print(api.explain_with_hint(api.scan(root), options["explain"], root))
+            # Through the cache, not a fresh scan - this is the exact call the review
+            # measured at 88.5s for a mistyped id, and explain is the second step of the
+            # documented unverified -> explain -> triage -> check agent loop.
+            from seamcheck.scancache import cached_scan
+
+            graph, _how = cached_scan(root)
+            print(api.explain_with_hint(graph, options["explain"], root))
             return 0
         if options["check"]:
             # The CI gate. `passed` is the key api.check() actually returns; this asked for

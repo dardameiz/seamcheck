@@ -75,6 +75,27 @@ class McpToolFunctionTests(SimpleTestCase):
         )
 
 
+class ExplainCachedScanTests(SimpleTestCase):
+    """`seamcheck_explain` used to call `api.scan()` directly - the exact call the review
+    measured at 88.5 seconds for a mistyped id, the second step of the documented
+    unverified -> explain -> triage -> check agent loop. It now shares the same cache
+    `seamcheck_symbols`/`seamcheck_findings`/`seamcheck_diff` already use."""
+
+    def test_explain_goes_through_the_cache_not_a_fresh_scan(self):
+        from seamcheck.graph import Graph
+
+        empty = Graph(symbols=[], edges=[])
+        with (
+            mock.patch("seamcheck.scancache.cached_scan",
+                       return_value=(empty, {"cached": True, "seconds": 0.0})) as cached_scan,
+            mock.patch("seamcheck.api.scan") as scan,
+        ):
+            seamcheck_explain("url:x", repo_root=".")
+
+        cached_scan.assert_called_once_with(".")
+        scan.assert_not_called()
+
+
 class ReportSizeGateTests(SimpleTestCase):
     """A tool call must return an answer, never an exception - `TooLarge` escaping here
     would crash the whole server process, not just refuse one oversized request.

@@ -284,7 +284,10 @@ def seamcheck_explain(symbol_id: str, repo_root: str = ".") -> str:
     On a miss, also names the ids closest to the one given - the same hint the CLI's
     `explain` prints, so the two surfaces cannot disagree about what a typo meant.
     """
-    return api.explain_with_hint(api.scan(repo_root), symbol_id, repo_root)
+    from seamcheck.scancache import cached_scan
+
+    graph, _how = cached_scan(repo_root)
+    return api.explain_with_hint(graph, symbol_id, repo_root)
 
 
 @mcp.tool(annotations={"readOnlyHint": False})
