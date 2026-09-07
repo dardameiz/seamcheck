@@ -751,3 +751,160 @@ class RepoRootPlainDoorTests(SimpleTestCase):
         self.assertEqual(code, EXIT_USAGE)
         self.assertIn("--repo-root", err.getvalue())
         self.assertIn("does not exist", err.getvalue())
+
+
+class FlagShapedValueTests(SimpleTestCase):
+    """A value that itself starts with `--` (unusual for `--explain`/`--search`/`--reason`,
+    but not invalid) used to be consumed as its flag's value AND re-scanned as its own
+    token on the next loop step - so it landed in `unknown` too, and an otherwise-valid
+    command was refused. Refusing a valid command is worse than the silent-ignore this
+    door replaced; `_parse_against_table` now advances past a consumed value rather than
+    revisiting it.
+    """
+
+    def test_a_dash_dash_leading_value_is_accepted_as_the_flags_value(self):
+        from seamcheck.cli import _plain_args
+
+        options = _plain_args(["--explain", "--foo"])
+
+        self.assertEqual(options["explain"], "--foo")
+        self.assertEqual(options["unknown"], [])
+
+    def test_the_value_is_not_also_reported_as_an_unknown_flag(self):
+        from seamcheck.cli import _plain_args
+
+        # --search's value, then a genuinely separate, later flag - the value must be
+        # consumed and skipped, not re-scanned, while the flag after it still parses.
+        options = _plain_args(["--search", "--weird-but-valid-search-term", "--check"])
+
+        self.assertEqual(options["search"], "--weird-but-valid-search-term")
+        self.assertTrue(options["check"])
+        self.assertEqual(options["unknown"], [])
+
+    def test_a_genuinely_unknown_flag_is_still_refused(self):
+        # The fix above must not swallow real typos - only a CONSUMED value is skipped.
+        from seamcheck.cli import _plain_args
+
+        options = _plain_args(["--frobnicate"])
+
+        self.assertEqual(options["unknown"], ["--frobnicate"])
+
+    def test_the_run_without_django_wrapper_accepts_a_dash_dash_leading_value(self):
+        # The behavioural version: this must not hit the EXIT_USAGE refusal at all.
+        from seamcheck.cli import _run_without_django
+
+        with (
+            mock.patch("seamcheck.cli._worth_scanning", return_value=True),
+            mock.patch("seamcheck.api.scan") as scan,
+            redirect_stdout(io.StringIO()),
+        ):
+            code = _run_without_django(["--explain", "--foo"], verbose=False)
+
+        self.assertEqual(code, 0)
+        scan.assert_called_once()
+
+
+class ReturnedDictBuiltFromTableTests(SimpleTestCase):
+    """`_plain_args`'s returned dict used to be a 32-key hand-written literal doing
+    `parsed.get(dest, default)` once per key - so a flag added to `FLAGS` with
+    `plain=True` would parse correctly (and pass `FlagTableParityTests`, since it is not
+    "unknown"), and its value would still never reach a caller until that literal was
+    separately edited too. That is the exact failure this file exists to close, one call
+    frame below where the refusal floor closes it. The dict is now BUILT from `FLAGS`.
+    """
+
+    def test_every_plain_flags_parsed_value_reaches_the_returned_dict(self):
+        # Driven off FLAGS, not a second hand-typed list of names - if a flag is added to
+        # the table tomorrow, this test covers it with no edit of its own.
+        from seamcheck.cli import _plain_args
+        from seamcheck.cliflags import FLAGS
+
+        for flag in FLAGS:
+            if not flag.plain:
+                continue
+            for name in flag.names:
+                with self.subTest(flag=name):
+                    if flag.kind == "flag":
+                        self.assertIs(_plain_args([name])[flag.dest], True)
+                    elif flag.kind == "int":
+                        self.assertEqual(_plain_args([name, "7"])[flag.dest], 7)
+                    else:
+                        self.assertEqual(_plain_args([name, "x"])[flag.dest], "x")
+
+    def test_a_flag_added_to_the_table_needs_no_second_edit_to_reach_a_caller(self):
+        # The literal-hand-dict failure mode, simulated: a brand-new plain=True flag,
+        # known only to FLAGS, must still show up in _plain_args' output with no other
+        # code touched. Fails against a hand-written 32-key literal (that flag's dest is
+        # simply not one of the 32 keys); passes once the dict is built from FLAGS.
+        import seamcheck.cliflags as cliflags_module
+        from seamcheck.cli import _plain_args
+        from seamcheck.cliflags import Flag
+
+        fake = Flag(("--totally-new-test-only-flag",), "totally_new_test_only_flag",
+                   default="", help="test-only, never a real seamcheck flag")
+        with mock.patch.object(cliflags_module, "FLAGS", cliflags_module.FLAGS + (fake,)):
+            options = _plain_args(["--totally-new-test-only-flag", "hello"])
+
+        self.assertEqual(options.get("totally_new_test_only_flag"), "hello")
+
+
+class FoldOrderIndependenceTests(SimpleTestCase):
+    """Two flags fold into one answer, on both doors: `--json` sets the format only when
+    `--format` was not given explicitly, and `--no-serve` always beats `--serve`. Both
+    doors must agree on the answer regardless of which of the pair was typed first -
+    pinned here now that `_plain_args` computes both folds once (order-independently)
+    rather than per-token (order-dependently, the way `--serve`/`--no-serve` and
+    `--json`/`--format` used to behave before this task).
+    """
+
+    def _django_format(self, *argv):
+        from seamcheck.management.commands.seamcheck import Command
+
+        ns = Command().create_parser("manage.py", "seamcheck").parse_args(list(argv))
+        # The same fold Command.handle() applies (--json is --format json under another
+        # name), reflected here rather than driving the full command.
+        if ns.json and ns.format is None:
+            return "json"
+        return ns.format
+
+    def _django_serving(self, *argv):
+        from seamcheck.management.commands.seamcheck import Command
+
+        ns = Command().create_parser("manage.py", "seamcheck").parse_args(list(argv))
+        # The same fold _format_report()/_write_map() apply.
+        return ns.serve and not ns.no_serve
+
+    def test_explicit_format_wins_over_json_regardless_of_order_plain_door(self):
+        from seamcheck.cli import _plain_args
+
+        self.assertEqual(
+            _plain_args(["--json", "--format", "markdown"])["format"], "markdown")
+        self.assertEqual(
+            _plain_args(["--format", "markdown", "--json"])["format"], "markdown")
+
+    def test_json_alone_still_means_json_in_either_position(self):
+        from seamcheck.cli import _plain_args
+
+        self.assertEqual(_plain_args(["--json"])["format"], "json")
+        self.assertEqual(_plain_args(["--check", "--json"])["format"], "json")
+
+    def test_both_orders_agree_with_the_django_door_on_format(self):
+        from seamcheck.cli import _plain_args
+
+        for argv in (["--json", "--format", "markdown"], ["--format", "markdown", "--json"],
+                    ["--json"]):
+            with self.subTest(argv=argv):
+                self.assertEqual(_plain_args(argv)["format"], self._django_format(*argv))
+
+    def test_no_serve_wins_over_serve_regardless_of_order_plain_door(self):
+        from seamcheck.cli import _plain_args
+
+        self.assertFalse(_plain_args(["--serve", "--no-serve"])["serve"])
+        self.assertFalse(_plain_args(["--no-serve", "--serve"])["serve"])
+
+    def test_both_orders_agree_with_the_django_door_on_serving(self):
+        from seamcheck.cli import _plain_args
+
+        for argv in (["--serve", "--no-serve"], ["--no-serve", "--serve"]):
+            with self.subTest(argv=argv):
+                self.assertEqual(_plain_args(argv)["serve"], self._django_serving(*argv))

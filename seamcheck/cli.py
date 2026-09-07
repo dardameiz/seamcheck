@@ -876,23 +876,29 @@ def _parse_against_table(arguments) -> tuple[dict, list[str]]:
     parsed: dict = {}
     unknown: list[str] = []
     items = list(arguments)
-    for index, item in enumerate(items):
+    index = 0
+    while index < len(items):
+        item = items[index]
         flag = by_name.get(item)
         if flag is None:
             if item.startswith("--"):
                 unknown.append(item)
+            index += 1
             continue
         if not flag.plain:
             unknown.append(item)
+            index += 1
             continue
         if flag.kind == "flag":
             parsed[flag.dest] = True
+            index += 1
             continue
         following = items[index + 1] if index + 1 < len(items) else None
         if following is None:
             # A known flag with no value given - silently a no-op, same as before rather
             # than a new way to be "unknown": a missing value is a different mistake from
             # a flag that does not exist at all.
+            index += 1
             continue
         if flag.kind == "int":
             # argparse's `type=int` on the Django door accepts a negative value and lets
@@ -911,6 +917,12 @@ def _parse_against_table(arguments) -> tuple[dict, list[str]]:
                 # an explicit --status elsewhere on the line still wins, in either order,
                 # since this is keyed by dest rather than applied token-by-token.
                 parsed.setdefault("status", "approved")
+        # The value is consumed HERE, not re-scanned as its own token next iteration - a
+        # value that itself starts with "--" (`seamcheck explain -- --foo`'s expansion, or
+        # any value that happens to look flag-shaped) used to be picked up a second time by
+        # `enumerate`'s next step and land in `unknown`, refusing an otherwise-valid
+        # command. Two tokens consumed, so the index advances by 2.
+        index += 2
     return parsed, unknown
 
 
@@ -939,56 +951,44 @@ def _plain_args(arguments) -> dict:
     flag that works on a Django project and is silently ignored on an Express one is
     worse than one that does not exist at all - that is exactly how `--since` came to
     read as working on every non-Django project while comparing against nothing.
+
+    Built FROM `FLAGS`, not as a second hand-written literal: every `plain=True` entry's
+    `dest` becomes a key here, defaulted from the table and overlaid with whatever was
+    actually parsed. A 32-key hand-written `parsed.get(dest, default)` literal used to sit
+    here instead - so a NEW flag added to `FLAGS` with `plain=True` would parse correctly
+    and pass `FlagTableParityTests` (it is not "unknown"), and its value would still never
+    reach a caller until someone edited this literal too. The same drift this whole module
+    exists to close, one call frame lower. `--json`/`--format` and `--serve`/`--no-serve`
+    are the only two exceptions: each is two flags folding into one answer (`--json` sets
+    `format` only when `--format` was not given explicitly; `--no-serve` always beats
+    `--serve`), so they get one small, explicit correction on top - applied once, after
+    both inputs are known, rather than per-token, so the answer no longer depends on which
+    of the pair came first on the command line the way the old per-token version did.
     """
+    from seamcheck.cliflags import FLAGS
+
     parsed, unknown = _parse_against_table(arguments)
 
+    options = {
+        flag.dest: (False if flag.kind == "flag" else flag.default)
+        for flag in FLAGS
+        if flag.plain
+    }
+    options.update(parsed)
+
     # --json is --format json under another name (kept for existing callers) - the SAME
-    # fold the Django door's handle() applies, computed once here rather than inside the
-    # token loop, so it no longer depends on which of the two flags came first on the
-    # command line the way the old per-token version did.
-    fmt = parsed.get("format")
-    if parsed.get("json") and fmt is None:
-        fmt = "json"
+    # fold the Django door's handle() applies.
+    if options["json"] and options["format"] is None:
+        options["format"] = "json"
+    if options["format"] is None:
+        options["format"] = "terminal"
 
     # --no-serve always wins over --serve regardless of order, the same
     # `serve and not no_serve` the Django door computes in _format_report/_write_map.
-    serve = bool(parsed.get("serve")) and not bool(parsed.get("no_serve"))
+    options["serve"] = bool(options["serve"]) and not bool(options["no_serve"])
 
-    return {
-        "format": fmt if fmt is not None else "terminal",
-        "out": parsed.get("out"),
-        "serve": serve,
-        "check": bool(parsed.get("check")),
-        "tunnel": bool(parsed.get("tunnel")),
-        "local_only": bool(parsed.get("local_only")),
-        "open_it": bool(parsed.get("open_it")),
-        "bundle": bool(parsed.get("bundle")),
-        "explain": parsed.get("explain"),
-        "show_config": bool(parsed.get("show_config")),
-        "triage": parsed.get("triage"),
-        "status": parsed.get("status"),
-        "reason": parsed.get("reason", ""),
-        "why": parsed.get("why", ""),
-        "undo": bool(parsed.get("undo")),
-        "set_tunnel": parsed.get("set_tunnel"),
-        "symbols": bool(parsed.get("symbols")),
-        "search": parsed.get("search", ""),
-        "kind": parsed.get("kind", ""),
-        "limit": parsed.get("limit", 25),
-        "cursor": parsed.get("cursor", ""),
-        "findings": bool(parsed.get("findings")),
-        "file": parsed.get("file", ""),
-        "owner": parsed.get("owner", ""),
-        "diff": bool(parsed.get("diff")),
-        "refresh": bool(parsed.get("refresh")),
-        "include_triaged": bool(parsed.get("include_triaged")),
-        "full": bool(parsed.get("full")),
-        "yes": bool(parsed.get("yes")),
-        "since": parsed.get("since"),
-        "repo_root": parsed.get("repo_root", "."),
-        "no_progress": bool(parsed.get("no_progress")),
-        "unknown": unknown,
-    }
+    options["unknown"] = unknown
+    return options
 
 
 def _show_config_plain(root: str) -> int:
