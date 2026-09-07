@@ -6,7 +6,8 @@ from unittest import mock
 
 from django.test import SimpleTestCase, override_settings
 
-from seamcheck.mcp_server import seamcheck_check, seamcheck_explain, seamcheck_triage
+from seamcheck.envelope import TooLarge
+from seamcheck.mcp_server import seamcheck_check, seamcheck_explain, seamcheck_report, seamcheck_triage
 
 FIXTURES_DIR = str(Path(__file__).parent / "fixtures")
 _CONFIG = {
@@ -63,6 +64,19 @@ class McpToolFunctionTests(SimpleTestCase):
             {"seamcheck_check", "seamcheck_explain", "seamcheck_triage", "seamcheck_report",
              "seamcheck_services", "seamcheck_unverified", "seamcheck_share", "seamcheck_why_wrong"},
         )
+
+
+class ReportSizeGateTests(SimpleTestCase):
+    """A tool call must return an answer, never an exception - `TooLarge` escaping here
+    would crash the whole server process, not just refuse one oversized request."""
+
+    def test_too_large_becomes_a_coded_failure_not_an_escaped_exception(self):
+        with mock.patch("seamcheck.api.report", side_effect=TooLarge(72_800_000, 18_200_000)):
+            result = seamcheck_report(fmt="json", repo_root=".")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"]["code"], "too_large")
+        self.assertIn("seamcheck_findings", result["error"]["hint"])
 
 
 class UndoTests(SimpleTestCase):

@@ -90,9 +90,24 @@ def seamcheck_why_wrong() -> dict:
 
 
 @mcp.tool()
-def seamcheck_report(fmt: str = "markdown", repo_root: str = ".") -> str:
-    """Render the findings digest: terminal, markdown or html."""
-    return api.report(repo_root, fmt)
+def seamcheck_report(fmt: str = "markdown", repo_root: str = ".") -> str | dict:
+    """Render the findings digest: terminal, markdown or html.
+
+    Returns the coded `too_large` failure instead of letting `TooLarge` escape the tool
+    call - `full` is deliberately not a parameter here: an agent that hits this ceiling
+    wants the narrower answer, not a way to force the big one.
+    """
+    from seamcheck import envelope
+
+    try:
+        return api.report(repo_root, fmt)
+    except envelope.TooLarge as error:
+        return envelope.failure(
+            "report", "too_large",
+            f"The rendered report is {error.size_bytes / 1e6:.1f} MB "
+            f"(~{error.tokens:,} tokens) - too large to return here.",
+            hint="Use seamcheck_findings for what is wrong, or seamcheck_explain for one "
+                 "symbol, instead of the whole report.")
 
 
 @mcp.tool()
