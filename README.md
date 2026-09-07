@@ -24,6 +24,35 @@ print a public HTTPS link. That is the one thing here that leaves the machine �
 holding the link can read the report while the command runs, and it dies when you stop it.
 It is off until you ask for it, and `--local-only` overrules it for a single run.
 
+## For agents
+
+This tool is built for you as much as for a person. `findings`, `symbols` and `diff` answer
+a bounded question at a few KB, instead of the whole graph `json` prints - 72 MB and about
+18 million tokens on a 500k-line project:
+
+```bash
+seamcheck findings --file app/views.py     # what is wrong here
+seamcheck symbols --search submit_push     # name -> id
+seamcheck diff --since origin/main         # what this branch changed
+seamcheck check --since origin/main        # the gate: 0 clean, 1 findings, 2 no baseline
+```
+
+`findings`, `symbols` and `diff` take `--limit`/`--cursor` to page, print one JSON envelope
+on stdout and nothing else (prose goes to stderr), and always exit `0` themselves - a failed
+*query* (a bad `--status`, an unresolvable `--since`) comes back as a code in the envelope's
+`error` field (`unknown_symbol`, `no_baseline`, `bad_argument`, ...) rather than a string you
+have to parse. The three of them share one scan cache keyed to the file tree, so a second
+question against an unchanged tree is nearly free; the whole graph is still there, with
+`--full --yes`, when you actually need it.
+
+There is an MCP server with the same functions behind it: `seamcheck_unverified` (call this
+first - the queue of findings nobody has judged yet, worst first), `seamcheck_check`,
+`seamcheck_explain`, `seamcheck_triage`, `seamcheck_why_wrong`, `seamcheck_report`,
+`seamcheck_share`, `seamcheck_services`, `seamcheck_findings`, `seamcheck_symbols`,
+`seamcheck_diff`, `seamcheck_snapshot`.
+
+[The pipeline recipe](docs/ci.md) · [Using it from an agent](docs/agents.md)
+
 ## Why I made it
 
 I was building a game — a fairly large Django app with a lot of hand-written JavaScript —
@@ -189,9 +218,11 @@ and the four ways a careful person gets the answer wrong (all four made here)
 seamcheck check --since $BASE_SHA
 ```
 
-Exit `1` on new findings, `0` when clean. **`--since` is what makes it adoptable**: it fails
-only on what your branch added, so you can turn it on today against a codebase with three
-thousand open findings and it will pass. No token, no network, no model — nothing per run
+Exit `1` on new findings, `0` when clean, `2` if `$BASE_SHA` has no stored snapshot to
+compare against yet (run `seamcheck scan` once on that commit to fix that, permanently).
+**`--since` is what makes it adoptable**: it fails only on what your branch added, so you
+can turn it on today against a codebase with three thousand open findings and it will pass.
+No token, no network, no model — nothing per run
 and nothing per repository.
 
 ## More

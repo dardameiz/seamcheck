@@ -11,13 +11,61 @@ seamcheck backfill   # scan the last N commits so the map has history
 seamcheck observe    # drive your pages in a real browser and record what it saw
 seamcheck config     # what was detected, and how it was worked out
 seamcheck share      # a report about the scan containing none of your code
+seamcheck scan       # scan and print the totals, no UI, no server - also writes
+                     # the snapshot check/diff compare against
+seamcheck serve      # the same command as map, under the name that reads better
+                     # when the phone is the point
+seamcheck json       # the whole graph, unfiltered, for jq or a script - 72 MB on
+                     # a 500k-line project; the three below answer in a few KB
+seamcheck symbols    # find a symbol by name - the cheap way to get an id
+seamcheck findings   # what is wrong, filtered by file/kind/status/owner, bounded
+seamcheck diff       # what appeared, vanished or changed status since --since REF
 ```
 
 `seamcheck help <command>` explains any of them with examples.
 
+**`symbols`, `findings` and `diff` are the ones built for an agent to call directly**, not
+just to be scripted around: unlike every other command here, each reads from one scan cache
+shared only among the three of them (and the MCP `seamcheck_snapshot` tool) rather than
+paying for a fresh scan every time, answers in a few KB, and takes `--limit`/`--cursor` to
+page and `--refresh` to skip that cache for a tree it cannot judge on its own (a fresh
+checkout, a restored backup, a clock that just got corrected). All three print one JSON
+envelope (`{schema, ok, command, repo, sha, data, truncated, warnings, cost, error}`,
+`seamcheck/envelope.py`) on stdout and nothing else, and exit `0` even when the *answer* is
+a failure: a bad `--status`, an unresolvable `--since` ref, or an unknown symbol id is
+reported in the envelope's `error.code` (one of `unknown_symbol, no_baseline, no_adapter,
+bad_argument, missing_dependency, no_git, too_large, stale_snapshot`), not as a process
+exit code - these three answer a question, they do not gate a build.
+
+```bash
+seamcheck findings --file app/views.py     # what is wrong here
+seamcheck symbols --search push            # name -> id, before spending a call on explain
+seamcheck diff --since origin/main         # what this branch changed
+```
+
+## Exit codes
+
+The process exit code - what a shell or a CI step actually branches on - is a small,
+closed set (`seamcheck/exitcodes.py`):
+
+| code | name | means |
+|---:|---|---|
+| 0 | `EXIT_CLEAN` | the command ran and found nothing blocking |
+| 1 | `EXIT_FINDINGS` | `check` found something new and blocking |
+| 2 | `EXIT_NO_BASELINE` | `check --since REF` has no stored snapshot for `REF` to diff against |
+| 3 | `EXIT_USAGE` | the command was wrong - an unknown flag, a bad enum value |
+| 4 | `EXIT_ENVIRONMENT` | the machine was wrong - nothing here this knows how to read, a missing import, no `node` on PATH |
+
+`check` is what actually walks this table, through `gate_code()`: 0 clean, 1 on new
+findings, and - only with `--since`, since a bare `check` has nothing to diff against and
+so cannot ask that question - 2 when `REF` has no stored snapshot. Any command, `check`
+included, can still stop with 3 or 4 before a scan even runs.
+
 Useful flags: `--format terminal|markdown|html|map|json|sarif|github` · `--out FILE` ·
 `--serve` / `--no-serve` · `--tunnel` (a temporary public HTTPS link, for your phone) ·
-`--local-only` · `--since REF` · `--open` · `--bundle`. `sarif` and `github` render the
+`--local-only` · `--since REF` · `--open` · `--bundle` · `--limit` / `--cursor` (paging on
+`symbols`/`findings`/`diff`) · `--full --yes` (with `json`, print the whole graph past the
+size gate - one flag alone still refuses). `sarif` and `github` render the
 current findings as SARIF 2.1.0 or GitHub Actions annotations - see `docs/ci.md` for the
 pull-request workflow that consumes them.
 
