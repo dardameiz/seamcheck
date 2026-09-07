@@ -53,7 +53,9 @@ from collections import OrderedDict
 from seamcheck.adapters.discovery import SKIP_DIRS
 from seamcheck.autoconfig import EXCLUDED_DIRS
 from seamcheck.graph import Graph, graph_from_dict, graph_to_dict
+from seamcheck.observe import _STORE_DIR
 from seamcheck.snapshot import _MAP_FILE, _SCANS_DIR
+from seamcheck.trend import _TREND_PATH
 from seamcheck.triage import _TRIAGE_FILE
 
 # memo_key -> (graph, cached_at_ns). cached_at_ns is judged against a fresh walk's latest
@@ -89,20 +91,36 @@ _KEEP_PER_REPO = 3
 # `.git` stays excluded because both sets already name it explicitly, not through a rule.
 _SCANNER_EXCLUDED = EXCLUDED_DIRS | SKIP_DIRS
 
-# The tool's OWN state, which is not scanner input at all and must never feed the key or the
-# freshness check - it is written to by `seamcheck scan` (`_SCANS_DIR`), rewritten by a
-# read that finds an expired mark (`_TRIAGE_FILE`, via `api._marks`), and rewritten again by
-# `api.write_map` (`_MAP_FILE`) on every scan and every `seamcheck_snapshot` MCP call, so
-# treating any of the three as an input file meant the documented "scan, then ask a
-# question" sequence never hit the cache: the scan's own writes, or the read that stamped an
-# expired triage entry, changed the key out from under the very answer they just produced.
+# The tool's OWN state, which is not scanner input at all and must never feed the key or
+# the freshness check. Each is written by a different command with no idea the others
+# exist (`seamcheck scan` writes `_SCANS_DIR` and `_MAP_FILE`; `api._marks` rewrites
+# `_TRIAGE_FILE` the moment a read finds an expired mark; `seamcheck observe` writes
+# `_STORE_DIR`; every map render writes `_TREND_PATH`) - so treating any of them as scan
+# input meant the documented "scan, then ask a question" sequence never hit the cache: a
+# write busted the very cache entry the next call in the same repo needed.
+#
+# ONE registry, not five names each with their own exclusion check: `f3f2bff5b` enumerated
+# two of these by hand, a third (`_MAP_FILE`) shipped unregistered one commit later, and
+# `test_tool_state_writes.py` - which finds every `Path(repo_root) / …` write in this
+# package's own source and checks it against THIS tuple, rather than trusting a
+# hand-maintained list to stay complete - is what found the other two (`_STORE_DIR`,
+# `_TREND_PATH`) already shipping unregistered. A path added here needs no matching code
+# change below: `_is_tool_state` iterates the tuple itself.
+#
 # Matched by RELATIVE PATH, not by directory name - `_TRIAGE_FILE` sits inside a directory
 # literally named `seamcheck`, which is this project's own source when this tool scans
 # itself, and skipping that whole directory would skip the product it exists to scan; the
-# same reasoning keeps `_MAP_FILE` excluded by its own path rather than by skipping all of
-# `docs/`, which may hold plenty the scanner has every reason to see.
-_TOOL_STATE_DIR = _SCANS_DIR.parts
-_TOOL_STATE_FILES = (_TRIAGE_FILE.parts, _MAP_FILE.parts)
+# same reasoning keeps every entry here excluded by its own path rather than by skipping
+# all of `docs/` or `OTHER/`, either of which may hold plenty the scanner has every reason
+# to see.
+TOOL_STATE_PATHS = (_SCANS_DIR, _TRIAGE_FILE, _MAP_FILE, _STORE_DIR, _TREND_PATH)
+
+
+def _is_tool_state(relative_parts: tuple[str, ...]) -> bool:
+    """True when `relative_parts` names a registered path exactly, or a location under
+    one - `_SCANS_DIR` is a directory holding one file per snapshot, so every file in it
+    must match this without being named individually."""
+    return any(relative_parts[:len(state.parts)] == state.parts for state in TOOL_STATE_PATHS)
 
 
 def _version() -> str:
@@ -169,20 +187,14 @@ def _scan_tree(repo_root: str) -> tuple[str, int]:
         directories[:] = sorted(
             d for d in directories
             if d not in _SCANNER_EXCLUDED
-            and (here / d).relative_to(root).parts != _TOOL_STATE_DIR
+            and not _is_tool_state((here / d).relative_to(root).parts)
         )
         for name in sorted(files):
             path = here / name
-            if path.relative_to(root).parts in _TOOL_STATE_FILES:
-                # The triage file: read by every command that judges a scan against marks,
-                # and REWRITTEN by `api._marks` the moment a scan finds one expired - a read
-                # that busts the very cache it just read from. The connectivity map: written
-                # by `api.write_map` right alongside every snapshot, on every `seamcheck
-                # scan` and every `seamcheck_snapshot` MCP call - a WRITE that busts the
-                # cache for the very next call in the same repo, unless excluded here too.
-                # Neither is scanner input either way, so both are excluded by path rather
-                # than by directory name (`_TRIAGE_FILE`'s parent, `seamcheck/`, is this
-                # project's own source when the tool scans itself).
+            if _is_tool_state(path.relative_to(root).parts):
+                # Tool state, not scanner input - see TOOL_STATE_PATHS above for which
+                # command writes each one and why a read or a write to it must not look,
+                # to the cache, like an edit to the project it just scanned.
                 continue
             try:
                 info = path.stat()

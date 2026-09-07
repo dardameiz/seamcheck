@@ -204,6 +204,40 @@ class ScanCacheTests(SimpleTestCase):
                 "writing the connectivity map between calls must not force a rescan")
             self.assertTrue(how_second["cached"])
 
+    def test_writing_an_observation_between_two_calls_does_not_bust_the_cache(self):
+        # observe.save() writes OTHER/seamcheck/observed/<sha>.json - found unregistered,
+        # shipping, by test_tool_state_writes.py's source-derived audit (not by hand).
+        from seamcheck.observe import save
+
+        with tempfile.TemporaryDirectory() as root:
+            (pathlib.Path(root) / "urls.py").write_text("x = 1")
+            with mock.patch("seamcheck.api.scan", return_value=_graph()) as scan:
+                scancache.cached_scan(root)
+                save([], root, "a" * 40)
+                _, how_second = scancache.cached_scan(root)
+
+            self.assertEqual(
+                scan.call_count, 1,
+                "writing an observation between calls must not force a rescan")
+            self.assertTrue(how_second["cached"])
+
+    def test_writing_a_trend_row_between_two_calls_does_not_bust_the_cache(self):
+        # trend.record() writes OTHER/seamcheck/trend.jsonl on every map render - also
+        # found unregistered, shipping, by the same source-derived audit.
+        from seamcheck.trend import record
+
+        with tempfile.TemporaryDirectory() as root:
+            (pathlib.Path(root) / "urls.py").write_text("x = 1")
+            with mock.patch("seamcheck.api.scan", return_value=_graph()) as scan:
+                scancache.cached_scan(root)
+                record(_graph(), "a" * 40, root)
+                _, how_second = scancache.cached_scan(root)
+
+            self.assertEqual(
+                scan.call_count, 1,
+                "writing a trend row between calls must not force a rescan")
+            self.assertTrue(how_second["cached"])
+
     def test_a_dot_directory_is_not_blanket_skipped(self):
         # The walk used to skip EVERY dot-directory by convention. A project's own
         # `js_entry_files` or `templates_root` can point INTO one on purpose (`.storybook/`,
