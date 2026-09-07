@@ -983,3 +983,238 @@ class FoldOrderIndependenceTests(SimpleTestCase):
         for argv in (["--serve", "--no-serve"], ["--no-serve", "--serve"]):
             with self.subTest(argv=argv):
                 self.assertEqual(_plain_args(argv)["serve"], self._django_serving(*argv))
+
+
+class EqualsFormTests(SimpleTestCase):
+    """`--flag=value`, argparse's other spelling for a value-taking flag. The Django
+    door accepts it (argparse splits on the first `=`); `by_name.get(item)` never split
+    it, so `--limit=5` was not a name in the table at all, landed whole in `unknown`, and
+    refused the ENTIRE command. Before this task the plain door silently ignored the
+    unsplit token (the wrong answer, quietly); after the `missing_value`/`unknown`
+    refusal floor existed, the same gap turned into refusing a completely ordinary,
+    valid invocation - a different failure, still a failure, and one anyone hits by
+    typing a normal flag.
+
+    Every case below is checked against the real Django parser first
+    (`Command().create_parser(...).parse_args(...)`), not assumed: `=` removes the
+    flag-shaped-value ambiguity `_looks_like_a_flag` exists to resolve for the spaced
+    form (`--limit=-5` and `--explain=--foo` are both accepted literally, verified),
+    but a boolean flag refuses ANY explicit value at all, and a value that fails its own
+    type conversion (`--limit=banana`, `--limit=`) is refused too - NOT silently
+    defaulted the way the spaced form's `--limit banana` deliberately still is (that
+    tolerance is pre-existing and pinned by LimitFlagParityTests; the `=` form is new
+    code with nothing to preserve, so it matches Django exactly).
+    """
+
+    def _django_parse(self, *argv):
+        from django.core.management.base import CommandError
+
+        from seamcheck.management.commands.seamcheck import Command
+
+        parser = Command().create_parser("manage.py", "seamcheck")
+        try:
+            return ("ok", parser.parse_args(list(argv)))
+        except CommandError as error:
+            return ("error", str(error))
+
+    def test_an_ordinary_value_flag_works_with_equals(self):
+        from seamcheck.cli import _plain_args
+
+        outcome, ns = self._django_parse("--limit=5")
+        self.assertEqual(outcome, "ok")
+        self.assertEqual(ns.limit, 5)
+
+        options = _plain_args(["--limit=5"])
+
+        self.assertEqual(options["limit"], 5)
+        self.assertEqual(options["unknown"], [])
+
+    def test_the_run_without_django_wrapper_no_longer_refuses_an_ordinary_equals_flag(self):
+        # The full behavioural proof: this exact shape used to refuse the WHOLE command.
+        # `queries.findings` is mocked (not just `_worth_scanning`/`api.report`) so this
+        # never scans for real - an earlier version of this test left `--findings`
+        # unmocked, which scanned THIS repository for real via `_resolve_repo_root(".")`
+        # and wrote a cache entry keyed only by repo path + file-tree state (not by
+        # SEAMCHECK_CONFIG - see scancache.py's `_scan_tree`), polluting what
+        # test_mcp_protocol.py's fixture-scoped tests read back later in the same run.
+        from seamcheck.cli import _run_without_django
+
+        with (
+            mock.patch("seamcheck.cli._worth_scanning", return_value=True),
+            mock.patch("seamcheck.queries.findings",
+                      return_value={"ok": True, "data": {"findings": []}}) as findings,
+            redirect_stdout(io.StringIO()) as out,
+        ):
+            code = _run_without_django(["--limit=5", "--findings"], verbose=False)
+
+        self.assertEqual(code, 0)
+        self.assertNotIn("not supported on this project type", out.getvalue())
+        findings.assert_called_once()
+
+    def test_a_negative_number_after_equals_is_taken_literally(self):
+        # No flag-shape ambiguity to resolve once "=" is there - unlike the spaced form,
+        # this needs no help from _looks_like_a_flag at all.
+        from seamcheck.cli import _plain_args
+
+        outcome, ns = self._django_parse("--limit=-5")
+        self.assertEqual(outcome, "ok")
+        self.assertEqual(ns.limit, -5)
+
+        options = _plain_args(["--limit=-5"])
+
+        self.assertEqual(options["limit"], -5)
+
+    def test_a_flag_shaped_value_after_equals_is_also_taken_literally(self):
+        # The spaced form refuses this (FlagShapedValueTests); "=" removes the
+        # ambiguity, so it is accepted here, on both doors.
+        from seamcheck.cli import _plain_args
+
+        outcome, ns = self._django_parse("--explain=--foo")
+        self.assertEqual(outcome, "ok")
+        self.assertEqual(ns.explain, "--foo")
+
+        options = _plain_args(["--explain=--foo"])
+
+        self.assertEqual(options["explain"], "--foo")
+        self.assertEqual(options["missing_value"], [])
+        self.assertEqual(options["unknown"], [])
+
+    def test_an_empty_value_after_equals_is_accepted_for_a_string_flag(self):
+        from seamcheck.cli import _plain_args
+
+        outcome, ns = self._django_parse("--search=")
+        self.assertEqual(outcome, "ok")
+        self.assertEqual(ns.search, "")
+
+        options = _plain_args(["--search="])
+
+        self.assertEqual(options["search"], "")
+        self.assertEqual(options["bad_value"], [])
+
+    def test_an_empty_value_after_equals_refuses_for_an_int_flag(self):
+        # Not the spaced form's tolerant "keep the default" - the real door refuses this
+        # ("invalid int value: ''"), and the plain door now matches it.
+        from seamcheck.cli import _plain_args
+
+        outcome, message = self._django_parse("--limit=")
+        self.assertEqual(outcome, "error")
+        self.assertIn("--limit", message)
+        self.assertIn("invalid int value", message)
+
+        options = _plain_args(["--limit="])
+
+        self.assertEqual(options["bad_value"], [("--limit", "")])
+        self.assertEqual(options["limit"], 25, "unset, not silently defaulted-and-accepted")
+
+    def test_a_non_numeric_value_after_equals_refuses_for_an_int_flag(self):
+        from seamcheck.cli import _plain_args
+
+        outcome, message = self._django_parse("--limit=banana")
+        self.assertEqual(outcome, "error")
+        self.assertIn("--limit", message)
+        self.assertIn("invalid int value", message)
+
+        options = _plain_args(["--limit=banana"])
+
+        self.assertEqual(options["bad_value"], [("--limit", "banana")])
+
+    def test_the_run_without_django_wrapper_refuses_a_bad_int_value_after_equals(self):
+        from seamcheck.cli import _run_without_django
+        from seamcheck.exitcodes import EXIT_USAGE
+
+        with (
+            mock.patch("seamcheck.cli._worth_scanning", return_value=True),
+            redirect_stdout(io.StringIO()),
+            redirect_stderr(io.StringIO()) as err,
+        ):
+            code = _run_without_django(["--limit=banana"], verbose=False)
+
+        self.assertEqual(code, EXIT_USAGE)
+        self.assertIn("--limit", err.getvalue())
+        self.assertIn("invalid int value", err.getvalue())
+
+    def test_an_explicit_value_on_a_boolean_flag_refuses_on_both_doors(self):
+        from seamcheck.cli import _plain_args
+
+        outcome, message = self._django_parse("--serve=1")
+        self.assertEqual(outcome, "error")
+        self.assertIn("--serve", message)
+        self.assertIn("ignored explicit argument", message)
+
+        options = _plain_args(["--serve=1"])
+
+        self.assertEqual(options["unexpected_value"], [("--serve", "1")])
+        self.assertFalse(options["serve"])
+
+    def test_an_empty_explicit_value_on_a_boolean_flag_also_refuses(self):
+        from seamcheck.cli import _plain_args
+
+        outcome, message = self._django_parse("--check=")
+        self.assertEqual(outcome, "error")
+        self.assertIn("--check", message)
+
+        options = _plain_args(["--check="])
+
+        self.assertEqual(options["unexpected_value"], [("--check", "")])
+
+    def test_the_run_without_django_wrapper_refuses_an_explicit_value_on_a_boolean(self):
+        from seamcheck.cli import _run_without_django
+        from seamcheck.exitcodes import EXIT_USAGE
+
+        with (
+            mock.patch("seamcheck.cli._worth_scanning", return_value=True),
+            redirect_stdout(io.StringIO()),
+            redirect_stderr(io.StringIO()) as err,
+        ):
+            code = _run_without_django(["--serve=1"], verbose=False)
+
+        self.assertEqual(code, EXIT_USAGE)
+        self.assertIn("--serve", err.getvalue())
+
+    def test_a_spaced_value_containing_equals_is_undisturbed(self):
+        # `--reason "a=b"` must not be mistaken for --reason itself carrying "=b" -
+        # "a=b" never starts with a prefix character, so it is never re-examined as a
+        # flag at all; it is just --reason's plain value, exactly as before.
+        from seamcheck.cli import _plain_args
+
+        outcome, ns = self._django_parse("--reason", "a=b")
+        self.assertEqual(outcome, "ok")
+        self.assertEqual(ns.reason, "a=b")
+
+        options = _plain_args(["--reason", "a=b"])
+
+        self.assertEqual(options["reason"], "a=b")
+        self.assertEqual(options["unknown"], [])
+        self.assertEqual(options["missing_value"], [])
+
+    def test_the_why_wrong_alias_still_defaults_status_via_equals(self):
+        # `--wrong X` implying `--status approved` (see the plain elif ladder's own
+        # comment on it) must survive going through the "=" branch too.
+        from seamcheck.cli import _plain_args
+
+        options = _plain_args(["--wrong=consumed-by-dependency"])
+
+        self.assertEqual(options["why"], "consumed-by-dependency")
+        self.assertEqual(options["status"], "approved")
+
+    def test_an_unrecognised_flag_with_equals_is_still_refused(self):
+        from seamcheck.cli import _plain_args
+
+        outcome, message = self._django_parse("--frobnicate=5")
+        self.assertEqual(outcome, "error")
+        self.assertIn("unrecognized arguments", message)
+
+        options = _plain_args(["--frobnicate=5"])
+
+        self.assertEqual(options["unknown"], ["--frobnicate"])
+
+    def test_multiple_equals_forms_in_one_command_all_parse(self):
+        from seamcheck.cli import _plain_args
+
+        outcome, ns = self._django_parse("--limit=5", "--search=x")
+        self.assertEqual(outcome, "ok")
+        self.assertEqual((ns.limit, ns.search), (5, "x"))
+
+        options = _plain_args(["--limit=5", "--search=x"])
+
+        self.assertEqual((options["limit"], options["search"]), (5, "x"))

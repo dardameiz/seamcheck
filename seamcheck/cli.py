@@ -620,6 +620,22 @@ def _run_without_django(arguments, verbose: bool) -> int:
         print(f"seamcheck: argument {options['missing_value'][0]}: expected one argument",
               file=sys.stderr)
         return EXIT_USAGE
+    if options["bad_value"]:
+        # `--limit=banana` / `--limit=` - argparse's own "invalid int value", not "no
+        # such flag" and not the SPACED form's tolerant "keep the default" (that
+        # tolerance is pinned by LimitFlagParityTests for `--limit banana`; the `=` form
+        # is new here and matches Django exactly instead, verified against the real
+        # parser).
+        name, value = options["bad_value"][0]
+        print(f"seamcheck: argument {name}: invalid int value: {value!r}", file=sys.stderr)
+        return EXIT_USAGE
+    if options["unexpected_value"]:
+        # `--serve=1` / `--check=` - argparse's own "ignored explicit argument": the
+        # flag takes no value at all, verified against the real parser.
+        name, value = options["unexpected_value"][0]
+        print(f"seamcheck: argument {name}: ignored explicit argument {value!r}",
+              file=sys.stderr)
+        return EXIT_USAGE
     if options["unknown"]:
         flags = ", ".join(options["unknown"])
         verb = "is" if len(options["unknown"]) == 1 else "are"
@@ -900,21 +916,29 @@ def _looks_like_a_flag(token: str) -> bool:
     return not _NEGATIVE_NUMBER_RE.match(token)
 
 
-def _parse_against_table(arguments) -> tuple[dict, list[str], list[str]]:
+def _parse_against_table(arguments) -> tuple[dict, list[str], list[str], list[str], list[str]]:
     """Parse argv against `seamcheck.cliflags.FLAGS` - the same table `add_arguments`
     builds the Django door's parser from - instead of a second, hand-written `elif`
     ladder that has to be kept in sync with it by hand.
 
-    Returns `(parsed, unknown, missing_value)`. `parsed` is keyed by each flag's `dest`
-    (the same name argparse's `Namespace` would use), holding only the flags actually
-    seen - a store_true flag maps to `True`, a value flag to the last value it was given
-    (later occurrence wins, same as argparse). `unknown` is every `--flag`-shaped token
-    this call could not resolve to a plain-supported entry: either genuinely unrecognised,
-    or recognised in the table but marked `plain=False` because honouring it needs
-    Django. `missing_value` is every RECOGNISED, plain-supported, value-taking flag whose
-    value was absent or itself flag-shaped - argparse's "expected one argument", not "no
-    such flag". None of the three may be silently absorbed - see `_run_without_django`'s
-    refusals for each.
+    Returns `(parsed, unknown, missing_value, bad_value, unexpected_value)`. `parsed` is
+    keyed by each flag's `dest` (the same name argparse's `Namespace` would use), holding
+    only the flags actually seen - a store_true flag maps to `True`, a value flag to the
+    last value it was given (later occurrence wins, same as argparse).
+
+    * `unknown` - every `--flag`-shaped token this call could not resolve to a
+      plain-supported entry: either genuinely unrecognised, or recognised in the table but
+      marked `plain=False` because honouring it needs Django.
+    * `missing_value` - a recognised, plain-supported, value-taking flag (spaced form)
+      whose value was absent or itself flag-shaped - argparse's "expected one argument".
+    * `bad_value` - `(flag, value)` for `--flag=value` where `value` fails the flag's own
+      type conversion (`int`, so far) - argparse's "invalid int value".
+    * `unexpected_value` - `(flag, value)` for `--flag=value` given to a boolean
+      (store_true) flag, which takes no value at all - argparse's "ignored explicit
+      argument".
+
+    None of the five may be silently absorbed - see `_run_without_django`'s refusal for
+    each.
     """
     from seamcheck.cliflags import FLAGS
 
@@ -922,10 +946,58 @@ def _parse_against_table(arguments) -> tuple[dict, list[str], list[str]]:
     parsed: dict = {}
     unknown: list[str] = []
     missing_value: list[str] = []
+    bad_value: list[tuple[str, str]] = []
+    unexpected_value: list[tuple[str, str]] = []
     items = list(arguments)
     index = 0
     while index < len(items):
         item = items[index]
+
+        # `--flag=value` form. Argparse only ever tries this split for a token that
+        # already starts with a prefix character (`_parse_optional`) - `--reason a=b`
+        # (the spaced form, "a=b" as reason's VALUE) never reaches this branch at all,
+        # because it is consumed as a value below, never re-examined as a flag in its
+        # own right. `=` removes the ambiguity `_looks_like_a_flag` exists to resolve -
+        # verified against the real parser (`--limit=-5` and `--explain=--foo` are both
+        # accepted, literally, where the spaced forms would refuse or need the check
+        # above) - so the value after "=" is taken as-is, never flag-shape-checked.
+        name, sep, rhs = item.partition("=")
+        if sep and name.startswith("-"):
+            flag = by_name.get(name)
+            if flag is not None and flag.plain:
+                if flag.kind == "flag":
+                    # `--serve=1`/`--check=` - argparse refuses ANY explicit value on a
+                    # store_true flag, verified against the real parser; it does not
+                    # matter what the value is, or whether it is empty.
+                    unexpected_value.append((name, rhs))
+                elif flag.kind == "int":
+                    try:
+                        parsed[flag.dest] = int(rhs)
+                    except ValueError:
+                        # `--limit=` (empty) and `--limit=banana` both land here -
+                        # verified against the real parser, which refuses both
+                        # ("invalid int value: ''" / "invalid int value: 'banana'")
+                        # rather than falling back to a default the way the SPACED
+                        # form's `--limit banana` deliberately does (see
+                        # LimitFlagParityTests) - the `=` form is new here and has no
+                        # legacy tolerance to preserve, so it matches Django exactly.
+                        bad_value.append((name, rhs))
+                else:
+                    parsed[flag.dest] = rhs
+                    if name == "--wrong":
+                        parsed.setdefault("status", "approved")
+                index += 1
+                continue
+            # `name` is unrecognised, or plain=False (needs Django) - reported by NAME
+            # (not the whole "--flag=value" token), the same shape "unknown" already
+            # uses for the spaced form; this bucket's message was never a byte-for-byte
+            # mirror of argparse's own "unrecognized arguments: --flag=value" phrasing
+            # in the first place.
+            if name.startswith("--"):
+                unknown.append(name)
+            index += 1
+            continue
+
         flag = by_name.get(item)
         if flag is None:
             if item.startswith("--"):
@@ -974,7 +1046,7 @@ def _parse_against_table(arguments) -> tuple[dict, list[str], list[str]]:
         # next step and land in `unknown`, refusing an otherwise-valid command. Two tokens
         # consumed, so the index advances by 2.
         index += 2
-    return parsed, unknown, missing_value
+    return parsed, unknown, missing_value, bad_value, unexpected_value
 
 
 def _resolve_repo_root(value: str) -> str | None:
@@ -999,13 +1071,16 @@ def _plain_args(arguments) -> dict:
     `options["unknown"]` lists every `--flag` this call could not resolve - genuinely
     unrecognised, or a real seamcheck flag this door cannot honour without Django
     (`plain=False` in the table). `options["missing_value"]` lists every RECOGNISED,
-    plain-supported, value-taking flag whose value was absent or itself flag-shaped -
-    argparse's "expected one argument", a different mistake from "no such flag".
-    `_run_without_django` refuses on either rather than guessing: a flag that works on a
-    Django project and is silently ignored (or, worse, silently eats the WRONG token) on
-    an Express one is worse than one that does not exist at all - that is exactly how
-    `--since` came to read as working on every non-Django project while comparing against
-    nothing, and how `--search --limit 5` once made `--limit 5` vanish with no error.
+    plain-supported, value-taking flag (spaced form) whose value was absent or itself
+    flag-shaped - argparse's "expected one argument". `options["bad_value"]` and
+    `options["unexpected_value"]` are the `--flag=value` equivalents: a value that fails
+    its flag's own type conversion, and a value given to a flag that takes none at all
+    (each a list of `(flag, value)` pairs). `_run_without_django` refuses on any of them
+    rather than guessing: a flag that works on a Django project and is silently ignored
+    (or, worse, silently eats the WRONG token) on an Express one is worse than one that
+    does not exist at all - that is exactly how `--since` came to read as working on
+    every non-Django project while comparing against nothing, and how `--search --limit
+    5` once made `--limit 5` vanish with no error.
 
     Built FROM `FLAGS`, not as a second hand-written literal: every `plain=True` entry's
     `dest` becomes a key here, defaulted from the table and overlaid with whatever was
@@ -1022,7 +1097,7 @@ def _plain_args(arguments) -> dict:
     """
     from seamcheck.cliflags import FLAGS
 
-    parsed, unknown, missing_value = _parse_against_table(arguments)
+    parsed, unknown, missing_value, bad_value, unexpected_value = _parse_against_table(arguments)
 
     options = {
         flag.dest: (False if flag.kind == "flag" else flag.default)
@@ -1044,6 +1119,8 @@ def _plain_args(arguments) -> dict:
 
     options["unknown"] = unknown
     options["missing_value"] = missing_value
+    options["bad_value"] = bad_value
+    options["unexpected_value"] = unexpected_value
     return options
 
 
