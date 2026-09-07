@@ -40,12 +40,26 @@ real source (`_format_report`, which happens to contain both shapes) found two b
 them. That real source is not itself a test - refactor `_format_report` tomorrow and
 nothing pins this logic - so `CheckerClassificationTests` below feeds the checker small,
 purpose-built synthetic snippets directly, independent of what the real package happens
-to look like today.
+to look like today. `ast.Try` got the SAME fork-walk-merge treatment as `ast.If` in that
+same pass, mirrored by hand rather than found by a failure - nothing in the real package
+has a branching try/except write, so the real-source sweep never exercised it, and
+without its own fixture that logic would have shipped with no evidence it works at all.
+A fourth pass closed a narrower hole in the same family: `refs` was built from `ast.Name`
+references only, so two writes differing ONLY in a string literal - `Path(repo_root) /
+"a.json"` vs. `.../ "b.json"` - collapsed to the identical refs, and ALLOWLIST's
+refs-keyed exemption (the round-5 fix for the (file, function)-only hole) would silently
+re-admit the same collision one level down. `_collect_refs` now folds a literal string
+constant in as its own `<str:…>` entry alongside names - discriminating only, since
+nothing is ever an attribute literally named `<str:…>`, so it can never make a write
+newly COVERED, only newly DISTINGUISHABLE from a differently-literaled sibling.
 
 What this still does not, and cannot, catch, noted here rather than fixed:
 - A write that never constructs its destination via `pathlib.Path(repo_root) / …` at
   all - string concatenation, `os.path.join(repo_root, …)`, an f-string. Nothing here
-  tracks string VALUES, only path-construction AST shapes. A real gap; not exercised by
+  tracks string VALUES for the purpose of RECOGNISING a write as rooted in the first
+  place - only path-construction AST shapes (folding a literal into `refs`, above, is a
+  different, narrower thing: it only discriminates between two writes ALREADY recognised
+  as rooted, it does not extend recognition to a new shape). A real gap; not exercised by
   anything in this package today (verified by hand, 2026-09-07) - if one appears, widen
   `_rooted` rather than adding a special case to the allowlist for a shape this test
   could actually resolve. Helper-calls-helper indirection, by contrast, IS followed to a
@@ -178,11 +192,22 @@ def _rooted(node, rooted_names: set) -> bool:
 
 
 def _collect_refs(node, rooted: dict) -> tuple:
-    """Every name referenced anywhere inside `node`, as ALTERNATIVES - normally a single
-    one (the plain union of every name found), expanding a name that was ITSELF
-    established as rooted (via an earlier assignment) into what IT was built from -
-    `path.parent` after `path = Path(repo_root) / _MAP_FILE` must resolve to `_MAP_FILE`,
-    not to the local variable name `path`, which resolves to nothing importable.
+    """Every name AND string-literal path segment referenced anywhere inside `node`, as
+    ALTERNATIVES - normally a single one (the plain union of every name/literal found),
+    expanding a name that was ITSELF established as rooted (via an earlier assignment)
+    into what IT was built from - `path.parent` after `path = Path(repo_root) /
+    _MAP_FILE` must resolve to `_MAP_FILE`, not to the local variable name `path`, which
+    resolves to nothing importable.
+
+    String constants (`Path(repo_root) / "a.json"`) are folded in as `<str:a.json>`
+    entries alongside names, not just names: two writes differing ONLY in a literal -
+    `"a.json"` vs. `"b.json"` - would otherwise collapse to the SAME refs (both just
+    `{repo_root, pathlib}`), making them indistinguishable to ALLOWLIST's refs-keyed
+    lookup - allowlisting one would silently allowlist the other too, exactly the
+    (file, function)-only hole this key was narrowed to close, reopened one level down.
+    A `<str:…>` entry never resolves against `known_paths` in `_alternative_resolves`
+    (nothing is EVER an attribute literally named `<str:a.json>`), so it is purely
+    discriminating, not participating in coverage.
 
     A name whose OWN alternatives number more than one - a local that an `if`/`else`
     merge (see `_walk_scoped`) could not collapse to a single origin, because its two
@@ -203,6 +228,8 @@ def _collect_refs(node, rooted: dict) -> tuple:
                 plain |= alts[0]
             elif branching is None:
                 branching = alts
+        elif isinstance(n, ast.Constant) and isinstance(n.value, str):
+            plain.add(f"<str:{n.value}>")
     if branching is None:
         return (frozenset(plain),)
     return tuple(frozenset(alt | plain) for alt in branching)
@@ -543,20 +570,24 @@ class ToolStateWritesTests(SimpleTestCase):
     def test_a_second_unrelated_write_in_an_allowlisted_function_is_still_caught(self):
         # An ALLOWLIST keyed by (file, function) alone would exempt EVERY write in that
         # function forever, the moment it carries one legitimate entry - a hole with a
-        # name on it, not an exception. Two writes, same function, different
-        # destinations: allowlisting the FIRST one's exact refs must not touch the
-        # second.
+        # name on it, not an exception. Two writes, same function, differing ONLY by a
+        # string literal destination (the shape that originally motivated switching this
+        # fixture to named parameters instead - which dodged the gap rather than fixing
+        # it): allowlisting the FIRST one's exact refs must not touch the second.
         synthetic = (
             "seamcheck/_fixture_two_writes.py",
-            "def leak(repo_root, allowlisted_destination, second_destination):\n"
-            "    a = pathlib.Path(repo_root) / allowlisted_destination\n"
+            "def leak(repo_root):\n"
+            "    a = pathlib.Path(repo_root) / 'allowlisted-thing.json'\n"
             "    a.write_text('{}')\n"
-            "    b = pathlib.Path(repo_root) / second_destination\n"
+            "    b = pathlib.Path(repo_root) / 'a-second-unrelated-leak.json'\n"
             "    b.write_text('{}')\n",
         )
         tier_b = _tier_b_refs([])
         writes = find_writes([synthetic], tier_b)
         self.assertEqual(len(writes), 2, "both writes in this function must be found")
+        self.assertNotEqual(writes[0].refs, writes[1].refs,
+                            "the two writes' literal destinations must be distinguishable "
+                            "- otherwise allowlisting one silently allowlists both")
 
         narrow = {("seamcheck/_fixture_two_writes.py", "leak", writes[0].refs): "test"}
         problems = _uncovered(writes, [synthetic], (), narrow)
@@ -654,3 +685,30 @@ class CheckerClassificationTests(SimpleTestCase):
             "    path.write_text('{}')\n"
         )), "one arm is unregistered - covering it anyway is the same under-report "
             "as the if/else case")
+
+    def test_a_path_assigned_in_try_and_a_different_path_in_except_written_after_the_join(self):
+        # Same join-point question as if/else, mirrored onto ast.Try - `_walk_scoped`'s
+        # Try branch forks a copy of `rooted` across the try body AND each handler, walks
+        # each independently, then merges every branch that falls through back into the
+        # caller's dict, exactly like If. Nothing exercised this before now: no source in
+        # the package has a branching try/except write, so the real-package sweep
+        # (test_every_repo_root_write_is_registered_or_allowlisted) does not cover it
+        # either - this fixture is the only thing pinning it.
+        self.assertTrue(_classify("try_except_both_covered", (
+            "def leak(repo_root):\n"
+            "    try:\n"
+            "        path = pathlib.Path(repo_root) / _GOOD_A\n"
+            "    except Exception:\n"
+            "        path = pathlib.Path(repo_root) / _GOOD_B\n"
+            "    path.write_text('{}')\n"
+        )), "both the try body and the except handler resolve - the join-point write "
+            "must be covered")
+        self.assertFalse(_classify("try_except_one_uncovered", (
+            "def leak(repo_root):\n"
+            "    try:\n"
+            "        path = pathlib.Path(repo_root) / _GOOD_A\n"
+            "    except Exception:\n"
+            "        path = pathlib.Path(repo_root) / 'unregistered.json'\n"
+            "    path.write_text('{}')\n"
+        )), "the except handler is unregistered - covering it anyway is the same "
+            "under-report the if/else case guards against")
