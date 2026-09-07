@@ -67,3 +67,59 @@ class FingerprintStabilityTests(SimpleTestCase):
         renamed = dict(FINDINGS[0], label="api/y/")
 
         self.assertNotEqual(self._fingerprint(FINDINGS[0]), self._fingerprint(renamed))
+
+
+class FingerprintCollisionTests(SimpleTestCase):
+    """The redash-shaped case: the three-part (kind, label, file) fingerprint merged six
+    real findings - same kind, same label, same file, different lines - into ONE SARIF
+    alert, and five of the six vanished from review. Fixed by adding a discriminator only
+    when a group of findings sharing (kind, label, file, owner) actually collides: the
+    position within that group, ordered by line.
+    """
+
+    def _fingerprints(self, findings):
+        run = json.loads(sarif.render(findings))["runs"][0]
+        return [result["partialFingerprints"]["seamcheckId"] for result in run["results"]]
+
+    def test_two_findings_identical_but_for_line_get_different_fingerprints(self):
+        first = dict(FINDINGS[0], line=10)
+        second = dict(FINDINGS[0], line=20)
+
+        fingerprints = self._fingerprints([first, second])
+
+        self.assertEqual(len(set(fingerprints)), 2, fingerprints)
+
+    def test_each_keeps_its_fingerprint_when_unrelated_lines_above_them_shift(self):
+        # An edit above a THIRD finding that shares none of the pair's identity (a
+        # different kind/label/file) must not touch either of their fingerprints - only
+        # the group each finding actually collides in can move its position.
+        first = dict(FINDINGS[0], line=10)
+        second = dict(FINDINGS[0], line=20)
+        unrelated = {"id": "url:api/other/", "kind": "url", "label": "api/other/",
+                    "status": "unresolved", "file": "app/other.py", "line": 1,
+                    "owner": "", "note": ""}
+
+        before = self._fingerprints([unrelated, first, second])
+        after = self._fingerprints([dict(unrelated, line=999), first, second])
+
+        self.assertEqual(before[1:], after[1:])
+
+    def test_a_lone_finding_in_its_group_is_unaffected_by_the_discriminator(self):
+        # No collision, no index suffix: a finding that shares its (kind, label, file,
+        # owner) with nothing else hashes exactly as it did before this fix, so most
+        # findings on a real project keep the fingerprint GitHub already tracks.
+        alone = dict(FINDINGS[0], line=10)
+        elsewhere = dict(FINDINGS[0], file="app/other.py", line=20)
+
+        batched = self._fingerprints([alone, elsewhere])
+        singly = [self._fingerprints([alone])[0], self._fingerprints([elsewhere])[0]]
+
+        self.assertEqual(batched, singly)
+
+    def test_a_different_owner_is_its_own_group_even_with_the_same_kind_label_file(self):
+        first = dict(FINDINGS[0], line=10, owner="handler_a")
+        second = dict(FINDINGS[0], line=10, owner="handler_b")
+
+        fingerprints = self._fingerprints([first, second])
+
+        self.assertEqual(len(set(fingerprints)), 2, fingerprints)
