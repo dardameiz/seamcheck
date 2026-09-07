@@ -225,6 +225,32 @@ class PerCommandHelpTests(SimpleTestCase):
                 self.assertTrue(entry.examples)
 
 
+class TriageWhyHelpTextTests(SimpleTestCase):
+    """`seamcheck help triage`'s nine-reason table used to be a hand-typed THIRD copy of
+    `triage.WHY_HELP` (already consumed programmatically by `seamcheck_why_wrong` and by
+    `mcp_server.py`'s Literal types) - not generated from it, not checked against it. 7 of
+    the 9 descriptions had already drifted word-for-word. It is now generated
+    (`cli._why_reasons_block`), so this pins the derivation rather than the wording:
+    every WHY_HELP sentence must appear verbatim in the triage command's own help text."""
+
+    def test_every_why_help_sentence_appears_verbatim_in_the_triage_detail(self):
+        from seamcheck.triage import WHY_HELP
+
+        detail = COMMANDS["triage"].detail
+        for word, sentence in WHY_HELP.items():
+            with self.subTest(word=word):
+                self.assertIn(word, detail)
+                self.assertIn(sentence, detail)
+
+    def test_every_why_wrong_member_is_named(self):
+        from seamcheck.triage import WhyWrong
+
+        detail = COMMANDS["triage"].detail
+        for reason in WhyWrong:
+            with self.subTest(reason=reason.value):
+                self.assertIn(reason.value, detail)
+
+
 class FrontDoorFlagTests(SimpleTestCase):
     def test_verbose_and_quiet_are_consumed_rather_than_forwarded(self):
         # The management command has never heard of --verbose; forwarding it turns a

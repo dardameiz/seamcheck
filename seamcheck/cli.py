@@ -50,6 +50,22 @@ class Command:
     number_default: str | None = None
 
 
+def _why_reasons_block() -> str:
+    """The nine `WhyWrong` reasons, as the aligned table `seamcheck help triage` shows -
+    generated from `triage.WHY_HELP` (kept beside the enum "so the two can never drift",
+    per that module's own comment) rather than retyped here a third time. This used to be
+    a hand-typed copy with its own one-line descriptions that were never checked against
+    `WHY_HELP` - diffed word-for-word, 7 of the 9 already read differently (DEPENDENCY, for
+    one: this file said "a CDN bundle, a package, the framework itself"; `WHY_HELP` said "a
+    CDN bundle, a package, the framework's own code"). One vocabulary, one place it is
+    worded - this function is the ONLY thing standing between the enum and the reader.
+    """
+    from seamcheck.triage import WHY_HELP
+
+    width = max(len(word) for word in WHY_HELP)
+    return "\n".join(f"  {word:<{width}}  {sentence}" for word, sentence in WHY_HELP.items())
+
+
 COMMANDS: dict[str, Command] = {
     "triage": Command(
         args=["--triage"],
@@ -65,15 +81,7 @@ COMMANDS: dict[str, Command] = {
             "free text is exactly where a path or a table name would escape, so the "
             "vocabulary is fixed rather than trusted.\n\n"
             "The nine, each a false-positive class measured on a real repository:\n"
-            "  consumed-by-dependency  a CDN bundle, a package, the framework itself\n"
-            "  built-at-runtime        the name is assembled, so no literal exists\n"
-            "  read-outside-repo       a container, CI, a shell script, another app\n"
-            "  declared-elsewhere      the schema or config lives somewhere else\n"
-            "  generated               build output, or a copy of code already read\n"
-            "  test-or-fixture         a test, not the product\n"
-            "  framework-implicit      the framework does this without being asked\n"
-            "  genuinely-dead          nothing wrong with it - it really is dead\n"
-            "  other                   none of the above\n\n"
+            f"{_why_reasons_block()}\n\n"
             "`genuinely-dead` matters as much as the rest: a finding confirmed RIGHT is "
             "evidence too.\n\n"
             "The mark is remembered. When the evidence changes it is kept, stamped with "
