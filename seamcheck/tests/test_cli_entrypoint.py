@@ -754,54 +754,129 @@ class RepoRootPlainDoorTests(SimpleTestCase):
 
 
 class FlagShapedValueTests(SimpleTestCase):
-    """A value that itself starts with `--` (unusual for `--explain`/`--search`/`--reason`,
-    but not invalid) used to be consumed as its flag's value AND re-scanned as its own
-    token on the next loop step - so it landed in `unknown` too, and an otherwise-valid
-    command was refused. Refusing a valid command is worse than the silent-ignore this
-    door replaced; `_parse_against_table` now advances past a consumed value rather than
-    revisiting it.
+    """Whether the token AFTER a value-taking flag can be consumed as its value is
+    argparse's OWN rule (`ArgumentParser._parse_optional`), verified directly against
+    the real Django parser below rather than assumed. A narrower first attempt at this
+    fix asked "is the next token a flag THIS TABLE recognises" - which sounds plausible
+    and disagrees with the real door: `Command().create_parser(...).parse_args(
+    ["--explain", "--foo"])` itself raises `argument --explain: expected one argument`,
+    because argparse refuses to consume ANY token starting with "--" as a value,
+    registered or not. Matching that - not the narrower guess - is what "the two doors
+    must agree" means here; see `_looks_like_a_flag` in cli.py.
+
+    The regression this class exists to catch: `_parse_against_table` once consumed the
+    token AFTER a value-taking flag unconditionally, so `--search --limit 5` consumed
+    "--limit" as `--search`'s value and then skipped "5" too, as though it had also been
+    consumed - a whole real flag+value pair vanishing with no error at all, worse than
+    either of the bugs before it.
     """
 
-    def test_a_dash_dash_leading_value_is_accepted_as_the_flags_value(self):
+    def _django_parse(self, *argv):
+        from django.core.management.base import CommandError
+
+        from seamcheck.management.commands.seamcheck import Command
+
+        parser = Command().create_parser("manage.py", "seamcheck")
+        try:
+            return ("ok", parser.parse_args(list(argv)))
+        except CommandError as error:
+            return ("error", str(error))
+
+    def test_shape_1_a_flag_shaped_value_refuses_without_swallowing_the_next_flag(self):
+        # The exact silent-drop the reviewer reproduced: --limit 5 must survive even
+        # though --search is refused for being given a flag, not a value.
         from seamcheck.cli import _plain_args
+
+        outcome, message = self._django_parse("--search", "--limit", "5")
+        self.assertEqual(outcome, "error")
+        self.assertIn("--search", message)
+
+        options = _plain_args(["--search", "--limit", "5"])
+
+        self.assertEqual(options["missing_value"], ["--search"])
+        self.assertEqual(options["limit"], 5, "the --limit 5 pair must not vanish")
+
+    def test_shape_1_behavioural_the_wrapper_refuses_rather_than_silently_dropping(self):
+        from seamcheck.cli import _run_without_django
+        from seamcheck.exitcodes import EXIT_USAGE
+
+        with (
+            mock.patch("seamcheck.cli._worth_scanning", return_value=True),
+            redirect_stdout(io.StringIO()),
+            redirect_stderr(io.StringIO()) as err,
+        ):
+            code = _run_without_django(["--search", "--limit", "5"], verbose=False)
+
+        self.assertEqual(code, EXIT_USAGE)
+        self.assertIn("--search", err.getvalue())
+
+    def test_shape_2_an_unrecognised_flag_shaped_value_also_refuses_matching_django(self):
+        # Corrects this class's own original premise: `--explain --foo` LOOKS like it
+        # should be accepted, since "--foo" names no real flag - it is not accepted,
+        # on either door, and the assertion below is against the real parser, not a
+        # restatement of what cli.py does.
+        from seamcheck.cli import _plain_args
+
+        outcome, message = self._django_parse("--explain", "--foo")
+        self.assertEqual(outcome, "error")
+        self.assertIn("--explain", message)
 
         options = _plain_args(["--explain", "--foo"])
 
-        self.assertEqual(options["explain"], "--foo")
-        self.assertEqual(options["unknown"], [])
+        self.assertEqual(options["missing_value"], ["--explain"])
+        self.assertIsNone(options["explain"])
 
-    def test_the_value_is_not_also_reported_as_an_unknown_flag(self):
+    def test_a_non_flag_shaped_value_is_still_accepted_by_both_doors(self):
+        # The positive control: a value that does not start with "-" at all is
+        # unaffected by any of this - both doors accept it exactly as before.
         from seamcheck.cli import _plain_args
 
-        # --search's value, then a genuinely separate, later flag - the value must be
-        # consumed and skipped, not re-scanned, while the flag after it still parses.
-        options = _plain_args(["--search", "--weird-but-valid-search-term", "--check"])
+        outcome, ns = self._django_parse("--explain", "url:foo")
+        self.assertEqual(outcome, "ok")
+        self.assertEqual(ns.explain, "url:foo")
 
-        self.assertEqual(options["search"], "--weird-but-valid-search-term")
+        options = _plain_args(["--explain", "url:foo"])
+
+        self.assertEqual(options["explain"], "url:foo")
+        self.assertEqual(options["missing_value"], [])
+        self.assertEqual(options["unknown"], [])
+
+    def test_shape_3_a_value_taking_flag_as_the_last_token_refuses_on_both_doors(self):
+        from seamcheck.cli import _plain_args
+
+        outcome, message = self._django_parse("--search")
+        self.assertEqual(outcome, "error")
+        self.assertIn("--search", message)
+
+        options = _plain_args(["--search"])
+
+        self.assertEqual(options["missing_value"], ["--search"])
+
+    def test_shape_4_a_boolean_flag_immediately_followed_by_another_flag_is_unaffected(self):
+        # Boolean (store_true) flags take no value at all, so the flag right after one
+        # must parse completely normally on both doors - nothing here should touch it.
+        from seamcheck.cli import _plain_args
+
+        outcome, ns = self._django_parse("--check", "--json")
+        self.assertEqual(outcome, "ok")
+        self.assertTrue(ns.check)
+        self.assertTrue(ns.json)
+
+        options = _plain_args(["--check", "--json"])
+
         self.assertTrue(options["check"])
+        self.assertEqual(options["format"], "json")
+        self.assertEqual(options["missing_value"], [])
         self.assertEqual(options["unknown"], [])
 
     def test_a_genuinely_unknown_flag_is_still_refused(self):
-        # The fix above must not swallow real typos - only a CONSUMED value is skipped.
+        # The ORIGINAL finding's non-regression guard: only a legitimate VALUE is
+        # exempted from the unknown-flag refusal - a real typo is still caught.
         from seamcheck.cli import _plain_args
 
         options = _plain_args(["--frobnicate"])
 
         self.assertEqual(options["unknown"], ["--frobnicate"])
-
-    def test_the_run_without_django_wrapper_accepts_a_dash_dash_leading_value(self):
-        # The behavioural version: this must not hit the EXIT_USAGE refusal at all.
-        from seamcheck.cli import _run_without_django
-
-        with (
-            mock.patch("seamcheck.cli._worth_scanning", return_value=True),
-            mock.patch("seamcheck.api.scan") as scan,
-            redirect_stdout(io.StringIO()),
-        ):
-            code = _run_without_django(["--explain", "--foo"], verbose=False)
-
-        self.assertEqual(code, 0)
-        scan.assert_called_once()
 
 
 class ReturnedDictBuiltFromTableTests(SimpleTestCase):

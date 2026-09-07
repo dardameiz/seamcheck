@@ -607,6 +607,19 @@ def _run_without_django(arguments, verbose: bool) -> int:
     from seamcheck.exitcodes import EXIT_ENVIRONMENT, EXIT_USAGE
 
     options = _plain_args(arguments)
+    if options["missing_value"]:
+        # Checked before "unknown": `--explain --foo` reports BOTH ("--explain" is
+        # missing_value since "--foo" looks flag-shaped, and "--foo" is separately
+        # unknown once it is evaluated in its own right) - argparse itself never gets
+        # that far, since it fails fast on the FIRST problem, which is --explain's
+        # missing argument. This ordering is the closer match to what it would say.
+        # `--search --limit 5` is the motivating case: it used to consume "--limit" as
+        # --search's value and silently drop "5" too, an entire flag+value pair
+        # vanishing with no error - refusing here, naming the first one, is what stops
+        # that.
+        print(f"seamcheck: argument {options['missing_value'][0]}: expected one argument",
+              file=sys.stderr)
+        return EXIT_USAGE
     if options["unknown"]:
         flags = ", ".join(options["unknown"])
         verb = "is" if len(options["unknown"]) == 1 else "are"
@@ -857,24 +870,58 @@ def _serve_plain(rendered: str, root: str, options: dict, assets=None) -> int:
     return 0
 
 
-def _parse_against_table(arguments) -> tuple[dict, list[str]]:
+# Argparse's OWN rule for whether a token can be consumed as a preceding option's value
+# (`argparse.ArgumentParser._parse_optional`): a negative-number-shaped token IS a value,
+# never an option - but only because THIS parser registers no option that itself looks
+# like a negative number (`--1`, say). If one ever does, this stops being correct and
+# needs the same `_has_negative_number_optionals` check argparse does.
+_NEGATIVE_NUMBER_RE = re.compile(r"^-\d+$|^-\d*\.\d+$")
+
+
+def _looks_like_a_flag(token: str) -> bool:
+    """Whether argparse would refuse to consume `token` as a preceding option's value.
+
+    This is `_parse_optional`'s real rule, not "is it a NAME this table recognises" - a
+    naive version of this bug fix once shipped exactly that narrower check, and it let
+    `seamcheck explain --foo` claim to accept `--foo` as `--explain`'s value while the
+    real Django door refuses it with "expected one argument" (verified directly against
+    `Command().create_parser(...).parse_args(...)`, not assumed). Argparse treats ANY
+    token starting with a prefix character as option-shaped and unavailable as a value,
+    REGARDLESS of whether it is a flag anyone registered - with two exceptions: a token
+    containing a space (no real flag ever does), and a negative number (see above). A
+    bare single "-" is also a value (too short to be an option).
+    """
+    if not token or not token.startswith("-"):
+        return False
+    if len(token) == 1:
+        return False
+    if " " in token:
+        return False
+    return not _NEGATIVE_NUMBER_RE.match(token)
+
+
+def _parse_against_table(arguments) -> tuple[dict, list[str], list[str]]:
     """Parse argv against `seamcheck.cliflags.FLAGS` - the same table `add_arguments`
     builds the Django door's parser from - instead of a second, hand-written `elif`
     ladder that has to be kept in sync with it by hand.
 
-    Returns `(parsed, unknown)`. `parsed` is keyed by each flag's `dest` (the same name
-    argparse's `Namespace` would use), holding only the flags actually seen - a
-    store_true flag maps to `True`, a value flag to the last value it was given (later
-    occurrence wins, same as argparse). `unknown` is every `--flag`-shaped token this call
-    could not resolve to a plain-supported entry: either genuinely unrecognised, or
-    recognised in the table but marked `plain=False` because honouring it needs Django.
-    Neither case may be silently absorbed - see `_run_without_django`'s refusal.
+    Returns `(parsed, unknown, missing_value)`. `parsed` is keyed by each flag's `dest`
+    (the same name argparse's `Namespace` would use), holding only the flags actually
+    seen - a store_true flag maps to `True`, a value flag to the last value it was given
+    (later occurrence wins, same as argparse). `unknown` is every `--flag`-shaped token
+    this call could not resolve to a plain-supported entry: either genuinely unrecognised,
+    or recognised in the table but marked `plain=False` because honouring it needs
+    Django. `missing_value` is every RECOGNISED, plain-supported, value-taking flag whose
+    value was absent or itself flag-shaped - argparse's "expected one argument", not "no
+    such flag". None of the three may be silently absorbed - see `_run_without_django`'s
+    refusals for each.
     """
     from seamcheck.cliflags import FLAGS
 
     by_name = {name: flag for flag in FLAGS for name in flag.names}
     parsed: dict = {}
     unknown: list[str] = []
+    missing_value: list[str] = []
     items = list(arguments)
     index = 0
     while index < len(items):
@@ -894,10 +941,14 @@ def _parse_against_table(arguments) -> tuple[dict, list[str]]:
             index += 1
             continue
         following = items[index + 1] if index + 1 < len(items) else None
-        if following is None:
-            # A known flag with no value given - silently a no-op, same as before rather
-            # than a new way to be "unknown": a missing value is a different mistake from
-            # a flag that does not exist at all.
+        if following is None or _looks_like_a_flag(following):
+            # `--search --limit 5` used to consume "--limit" as --search's value and then
+            # skip past "5" as if IT had been consumed too - an entire real flag+value
+            # pair vanished with no error, silently answering a different question than
+            # the one typed. Refuse instead, exactly where argparse would: only the
+            # flag-shaped/absent token is skipped, so a genuine following flag (here,
+            # --limit) is still parsed on the next iteration rather than swallowed.
+            missing_value.append(item)
             index += 1
             continue
         if flag.kind == "int":
@@ -918,12 +969,12 @@ def _parse_against_table(arguments) -> tuple[dict, list[str]]:
                 # since this is keyed by dest rather than applied token-by-token.
                 parsed.setdefault("status", "approved")
         # The value is consumed HERE, not re-scanned as its own token next iteration - a
-        # value that itself starts with "--" (`seamcheck explain -- --foo`'s expansion, or
-        # any value that happens to look flag-shaped) used to be picked up a second time by
-        # `enumerate`'s next step and land in `unknown`, refusing an otherwise-valid
-        # command. Two tokens consumed, so the index advances by 2.
+        # value that does NOT look flag-shaped (`seamcheck explain url:foo`, or one that
+        # happens to contain a space) used to be picked up a second time by `enumerate`'s
+        # next step and land in `unknown`, refusing an otherwise-valid command. Two tokens
+        # consumed, so the index advances by 2.
         index += 2
-    return parsed, unknown
+    return parsed, unknown, missing_value
 
 
 def _resolve_repo_root(value: str) -> str | None:
@@ -947,10 +998,14 @@ def _plain_args(arguments) -> dict:
 
     `options["unknown"]` lists every `--flag` this call could not resolve - genuinely
     unrecognised, or a real seamcheck flag this door cannot honour without Django
-    (`plain=False` in the table). `_run_without_django` refuses rather than guessing: a
-    flag that works on a Django project and is silently ignored on an Express one is
-    worse than one that does not exist at all - that is exactly how `--since` came to
-    read as working on every non-Django project while comparing against nothing.
+    (`plain=False` in the table). `options["missing_value"]` lists every RECOGNISED,
+    plain-supported, value-taking flag whose value was absent or itself flag-shaped -
+    argparse's "expected one argument", a different mistake from "no such flag".
+    `_run_without_django` refuses on either rather than guessing: a flag that works on a
+    Django project and is silently ignored (or, worse, silently eats the WRONG token) on
+    an Express one is worse than one that does not exist at all - that is exactly how
+    `--since` came to read as working on every non-Django project while comparing against
+    nothing, and how `--search --limit 5` once made `--limit 5` vanish with no error.
 
     Built FROM `FLAGS`, not as a second hand-written literal: every `plain=True` entry's
     `dest` becomes a key here, defaulted from the table and overlaid with whatever was
@@ -967,7 +1022,7 @@ def _plain_args(arguments) -> dict:
     """
     from seamcheck.cliflags import FLAGS
 
-    parsed, unknown = _parse_against_table(arguments)
+    parsed, unknown, missing_value = _parse_against_table(arguments)
 
     options = {
         flag.dest: (False if flag.kind == "flag" else flag.default)
@@ -988,6 +1043,7 @@ def _plain_args(arguments) -> dict:
     options["serve"] = bool(options["serve"]) and not bool(options["no_serve"])
 
     options["unknown"] = unknown
+    options["missing_value"] = missing_value
     return options
 
 
