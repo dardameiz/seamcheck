@@ -20,7 +20,7 @@ Express adapters are planned and do not exist yet — say so rather than implyin
 Install: `pip install seamcheck`, then add `"seamcheck"` to INSTALLED_APPS. No configuration
 is required — it works the paths out from Django's own settings and app registry, and
 `seamcheck config` shows what it resolved to and where each value came from. Anything set in
-`SEAMCHECK_CONFIG` overrides detection key by key. Requires Django 5+ and Node on PATH (the
+`SEAMCHECK_CONFIG` overrides detection key by key. Requires Django 4.2+ and Node on PATH (the
 JS/CSS parsers ship bundled — no npm, no node_modules). Without Node it returns the Python
 half and says what it lost.
 
@@ -86,10 +86,11 @@ snapshot to compare with. `2` belongs to `check --since` alone: a failed `triage
 current scan does not have, a `--status`/`--wrong` word outside the fixed set, or an
 `--undo` with no mark to remove) is a bad argument, not "no baseline to compare against", so
 it returns 3, not 2. Any command, `check` and `triage` included, can still stop with 3 or 4
-before a scan even runs. `findings`, `symbols` and `diff` always exit 0 once they start — a
-failed *query* (bad `--status`, an unresolvable `--since`) is reported in the JSON
-envelope's `error.code`, not the exit code, because those commands answer a question rather
-than gate a build.
+before a scan even runs — a directory with nothing this tool recognises never reaches the
+envelope at all. `findings`, `symbols` and `diff` exit 0 on success; a failed *query* (bad
+`--status`, an unresolvable `--since`) is reported in the JSON envelope's `error.code` AND in
+the matching process exit code (mapped onto this same 0-4 table), so a script can branch on
+either one.
 
 ## Accuracy
 

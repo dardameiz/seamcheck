@@ -31,11 +31,14 @@ paying for a fresh scan every time, answers in a few KB, and takes `--limit`/`--
 page and `--refresh` to skip that cache for a tree it cannot judge on its own (a fresh
 checkout, a restored backup, a clock that just got corrected). All three print one JSON
 envelope (`{schema, ok, command, repo, sha, data, truncated, warnings, cost, error}`,
-`seamcheck/envelope.py`) on stdout and nothing else, and exit `0` even when the *answer* is
-a failure: a bad `--status`, an unresolvable `--since` ref, or an unknown symbol id is
-reported in the envelope's `error.code` (one of `unknown_symbol, no_baseline, no_adapter,
-bad_argument, missing_dependency, no_git, too_large, stale_snapshot`), not as a process
-exit code - these three answer a question, they do not gate a build.
+`seamcheck/envelope.py`) on stdout and nothing else: a bad `--status`, an unresolvable
+`--since` ref, or an unknown symbol id is reported in the envelope's `error.code` (one of
+`unknown_symbol, no_baseline, bad_argument, missing_dependency, no_git, too_large,
+stale_snapshot` - `no_adapter` is a defined code with no scenario that reaches it through
+these three; see below), and the process exit code matches it, through the same 0-4 table
+every other command uses (`exitcodes.envelope_exit_code`). A directory with nothing this
+tool recognises never reaches the envelope at all: it exits `4` with a plain stderr message
+before any of the three starts.
 
 ```bash
 seamcheck findings --file app/views.py     # what is wrong here

@@ -38,10 +38,13 @@ seamcheck check --since origin/main        # the gate: 0 clean, 1 findings, 2 no
 ```
 
 `findings`, `symbols` and `diff` take `--limit`/`--cursor` to page, print one JSON envelope
-on stdout and nothing else (prose goes to stderr), and always exit `0` themselves - a failed
-*query* (a bad `--status`, an unresolvable `--since`) comes back as a code in the envelope's
-`error` field (`unknown_symbol`, `no_baseline`, `bad_argument`, ...) rather than a string you
-have to parse. The three of them share one scan cache keyed to the file tree, so a second
+on stdout and nothing else (prose goes to stderr). A failed *query* (a bad `--status`, an
+unresolvable `--since`) comes back as a code in the envelope's `error` field
+(`unknown_symbol`, `no_baseline`, `bad_argument`, ...) rather than a string you have to
+parse, and the process exit code matches it - see [Exit codes](docs/commands.md#exit-codes).
+A directory with nothing this tool recognises never reaches the envelope at all: it exits
+`4` with a plain message on stderr, before any of the three starts. The three of them share
+one scan cache keyed to the file tree, so a second
 question against an unchanged tree is nearly free; the whole graph is still there, with
 `--full --yes`, when you actually need it.
 
