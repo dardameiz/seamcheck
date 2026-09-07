@@ -85,8 +85,8 @@ class Command(BaseCommand):
             # SystemExit) for call_command() invocations, so argparse-level validation
             # can't produce the SystemExit callers of an invalid --format expect.
             # _format_report() validates instead, via api.report()'s ValueError.
-            help="Output format: terminal, markdown, html, json, map, console. "
-                 "json emits the whole graph, as --json does.",
+            help="Output format: terminal, markdown, html, json, map, console, sarif, "
+                 "github. json emits the whole graph, as --json does.",
         )
         parser.add_argument("--out", default=None, help="Write to PATH instead of stdout ('-' for stdout).")
         parser.add_argument(
@@ -215,7 +215,7 @@ class Command(BaseCommand):
             # comment, fail the build" - so the digest must land before the exit, or a
             # failing build ships with nothing to read.
             if options["check"]:
-                self._exit_on_check(options["repo_root"], graph)
+                self._exit_on_check(options["repo_root"], graph, since=options["since"])
             return
         if options["check"] or options["since"]:
             return self._check(options)
@@ -636,9 +636,16 @@ class Command(BaseCommand):
         if not webbrowser.open(url):
             self.stderr.write("could not open a browser; the link above still works.")
 
-    def _exit_on_check(self, repo_root, graph=None):
-        if not api.check(repo_root, graph=graph)["passed"]:
-            raise SystemExit(1)
+    def _exit_on_check(self, repo_root, graph=None, since=None):
+        # `comparing=bool(since)` is what unlocks EXIT_NO_BASELINE - a bare `--check`
+        # (since=None) never asked "what changed" and must never report "no baseline" for
+        # a question it did not ask. See gate_code()'s docstring and api.check()'s.
+        from seamcheck.exitcodes import EXIT_CLEAN, gate_code
+
+        outcome = api.check(repo_root, graph=graph, since=since)
+        code = gate_code(outcome, comparing=bool(since))
+        if code != EXIT_CLEAN:
+            raise SystemExit(code)
 
     def _summary(self, options):
         """The default command's answer: the totals, in words, and what to type next.

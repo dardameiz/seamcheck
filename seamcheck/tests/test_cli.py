@@ -293,6 +293,64 @@ class CheckSinceExitCodeTests(SimpleTestCase):
         self.assertEqual(code, 2)
 
 
+@override_settings(SEAMCHECK_CONFIG=_CONFIG)
+class CheckSinceWithFormatExitCodeTests(SimpleTestCase):
+    """`check --since REF --format sarif` is the exact docs/ci.md Gate step: the digest
+    (SARIF, markdown, whatever) goes to the pull request, the exit code gates the build.
+
+    `--format` routes through `_exit_on_check`, a second implementation of the same gate
+    that called `api.check()` with no way to pass `since` at all - so it always diffed
+    against HEAD, never called `gate_code()`, and could never return EXIT_NO_BASELINE.
+    Reproduced against a real project (pointlessbutton): `--check --since <sha with no
+    stored snapshot> --format sarif` exited 0, not 2."""
+
+    def _run(self, *args):
+        out = StringIO()
+        try:
+            call_command("seamcheck", *args, stdout=out, stderr=StringIO())
+        except SystemExit as exit_code:
+            return out.getvalue(), int(str(exit_code.code))
+        return out.getvalue(), 0
+
+    def _diff(self, **kwargs):
+        from seamcheck.diff import DiffResult
+
+        return DiffResult(**{"new_unresolved": [], "new_unused": [], "resolved": [],
+                             "triage_invalidated": [], **kwargs})
+
+    def test_a_gate_with_no_baseline_exits_2_even_with_a_format(self):
+        # gate_code() matches the exact NO_BASELINE prefix, unlike _check()'s own
+        # any-truthy-message check - use the real constant so this exercises the actual
+        # decision this call site now makes.
+        from seamcheck.exitcodes import NO_BASELINE
+
+        with mock.patch.object(api, "diff_against",
+                               return_value=(None, "abc", f"{NO_BASELINE} for abc yet.")):
+            _, code = self._run("--check", "--since", "abc", "--format", "sarif")
+
+        self.assertEqual(code, 2)
+
+    def test_a_gate_that_found_nothing_new_passes_even_with_an_existing_backlog(self):
+        # `has_blocking_findings` (the bare-check question, "any finding at all") would
+        # say True here - the whole point of --since is that an existing backlog must not
+        # block a build that added nothing to it.
+        with (
+            mock.patch.object(api, "diff_against", return_value=(self._diff(), "abc", "")),
+            mock.patch.object(api, "has_blocking_findings", return_value=True),
+        ):
+            _, code = self._run("--check", "--since", "abc", "--format", "sarif")
+
+        self.assertEqual(code, 0)
+
+    def test_a_gate_that_found_something_new_fails_with_a_format_too(self):
+        symbol = mock.Mock(id="url:gone")
+        with mock.patch.object(api, "diff_against",
+                               return_value=(self._diff(new_unresolved=[symbol]), "abc", "")):
+            _, code = self._run("--check", "--since", "abc", "--format", "sarif")
+
+        self.assertEqual(code, 1)
+
+
 class ServingTests(SimpleTestCase):
     """`map` serves by default now, so the file and the server have to coexist."""
 

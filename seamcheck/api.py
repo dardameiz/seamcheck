@@ -410,20 +410,38 @@ def _marks(graph: Graph, repo_root: str) -> list[TriageEntry]:
     return entries
 
 
-def check(repo_root: str = ".", graph: Graph | None = None) -> dict:
+def check(repo_root: str = ".", graph: Graph | None = None, since: str | None = None) -> dict:
+    """The CI gate's answer: passed or not, and everything CI might want to say why.
+
+    A bare check (`since=None`) asks "does the current scan have any untriaged blocking
+    finding at all" - baseline or backlog included - matching the promise in
+    `exitcodes.gate_code`'s docstring that a bare check never returns `EXIT_NO_BASELINE`.
+
+    Passing `since` asks the other question, "what did THIS change introduce": `passed`
+    then means the diff against that ref added nothing new, so a project with an existing
+    backlog can turn the gate on without every old finding blocking every future build.
+    The two must not be conflated - `--check --format X --since REF` (the CI use case
+    `docs/ci.md` documents) called this with no way to pass `since` at all until this
+    parameter existed, so it was always judged by the bare-check question and could never
+    report "no baseline yet" (exit 2) the way `--since` alone always could.
+    """
     if graph is None:
         graph = scan(repo_root)
     from seamcheck.report import mark_dict
 
     entries = _marks(graph, repo_root)
     graph = apply_triage(graph, entries)
-    result, _, message = diff_against(graph, "HEAD", repo_root)
+    result, _, message = diff_against(graph, since or "HEAD", repo_root)
 
     def _ids(symbols):
         return [{"id": s.id, "label": s.label, "kind": s.kind, "note": s.note} for s in symbols]
 
+    passed = not has_blocking_findings(graph, entries)
+    if since and not message:
+        passed = not (result.new_unresolved or result.new_unused or result.triage_invalidated)
+
     return {
-        "passed": not has_blocking_findings(graph, entries),
+        "passed": passed,
         "message": message,
         "new_unresolved": _ids(result.new_unresolved) if result else [],
         "new_unused": _ids(result.new_unused) if result else [],
@@ -483,7 +501,16 @@ def _report(repo_root, fmt, ref, graph, progress, full=False) -> str:
         # The review sections live inside the map now: one document, one link, one render
         # of the same scan. Kept as an alias so an existing caller does not break.
         return _render_map(repo_root, ref, progress)
-    if fmt not in renderers and fmt not in ("map", "console", "json"):
+    if fmt in ("sarif", "github"):
+        # A different question from the other formats: not "what changed since ref" but
+        # "what is wrong right now" - GitHub's own code-scanning baseline does the
+        # new-vs-existing bookkeeping from each result's fingerprint, so this renders the
+        # current findings list, the same one `queries.findings()` answers with, rather
+        # than the snapshot-diff Report the other formats build. Kept here rather than in
+        # just one caller for the same reason `json` moved here: a format that only works
+        # through the Django management command is the one an agent's own script hits.
+        return _findings_report(repo_root, fmt)
+    if fmt not in renderers and fmt not in ("map", "console", "sarif", "github", "json"):
         raise ValueError(f"Unknown format {fmt!r}. Use one of: {', '.join(sorted(renderers))}.")
 
     if graph is None:
@@ -520,6 +547,28 @@ def _report(repo_root, fmt, ref, graph, progress, full=False) -> str:
         baseline_message=message,
     )
     return renderers[fmt](built)
+
+
+def _findings_report(repo_root: str, fmt: str) -> str:
+    """SARIF or GitHub workflow-command text, from the current findings list.
+
+    A high limit rather than none: a pull request that would annotate 10,000 lines is
+    telling you something other than what any one line says.
+    """
+    from seamcheck import queries
+    from seamcheck.renderers import github as github_renderer
+    from seamcheck.renderers import sarif as sarif_renderer
+
+    rows = queries.findings(repo_root, limit=10_000)["data"]["findings"]
+    try:
+        sha = current_git_sha(repo_root)
+    except Exception:  # noqa: BLE001 - a directory that is not a git checkout still has
+        # findings worth rendering; SARIF's revisionId is just left blank rather than the
+        # render failing outright.
+        sha = ""
+    if fmt == "sarif":
+        return sarif_renderer.render(rows, sha=sha, repo=repo_root)
+    return github_renderer.render(rows)
 
 
 def unverified(repo_root: str = ".", limit: int = 25, kind: str = "") -> dict:

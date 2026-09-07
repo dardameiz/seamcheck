@@ -15,9 +15,11 @@ seamcheck share      # a report about the scan containing none of your code
 
 `seamcheck help <command>` explains any of them with examples.
 
-Useful flags: `--format terminal|markdown|html|map|json` · `--out FILE` · `--serve` /
-`--no-serve` · `--tunnel` (a temporary public HTTPS link, for your phone) · `--local-only` ·
-`--since REF` · `--open` · `--bundle`.
+Useful flags: `--format terminal|markdown|html|map|json|sarif|github` · `--out FILE` ·
+`--serve` / `--no-serve` · `--tunnel` (a temporary public HTTPS link, for your phone) ·
+`--local-only` · `--since REF` · `--open` · `--bundle`. `sarif` and `github` render the
+current findings as SARIF 2.1.0 or GitHub Actions annotations - see `docs/ci.md` for the
+pull-request workflow that consumes them.
 
 A map is one HTML file by default. `seamcheck map --out map/` (a folder, or `--bundle`)
 writes a small `index.html` plus `data/*.js`, and each page's rows - and each review

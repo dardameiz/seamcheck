@@ -621,7 +621,19 @@ def _run_without_django(arguments, verbose: bool) -> int:
             # what was in it - measured on redash: 47 unresolved, exit 0.
             from seamcheck.exitcodes import gate_code
             result = api.check(repo_root=root)
-            print(api.report(repo_root=root, fmt="terminal"))
+            if options["fmt"] in ("sarif", "github"):
+                # A CI gate wants the annotation format it asked for, not the terminal
+                # digest - this branch used to ignore --format entirely, so `seamcheck
+                # check --format sarif --out FILE` on a non-Django project (redash: 47
+                # unresolved) printed the terminal report and never wrote FILE.
+                text = api.report(repo_root=root, fmt=options["fmt"])
+                if options["out"]:
+                    pathlib.Path(options["out"]).write_text(text, encoding="utf-8")
+                    print(f"seamcheck: wrote {options['out']}", file=sys.stderr)
+                else:
+                    print(text)
+            else:
+                print(api.report(repo_root=root, fmt="terminal"))
             return gate_code(result)
         if options["fmt"] in ("map", "console"):
             document = api.map_document(repo_root=root)
