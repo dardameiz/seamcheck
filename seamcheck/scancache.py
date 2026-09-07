@@ -51,7 +51,7 @@ import time
 from collections import OrderedDict
 
 from seamcheck.adapters.discovery import SKIP_DIRS
-from seamcheck.autoconfig import EXCLUDED_DIRS
+from seamcheck.autoconfig import EXCLUDED_DIRS, declared_config
 from seamcheck.graph import Graph, graph_from_dict, graph_to_dict
 from seamcheck.observe import _STORE_DIR
 from seamcheck.snapshot import _MAP_FILE, _SCANS_DIR
@@ -140,28 +140,24 @@ CONFIGURABLE_TOOL_STATE_DEFAULTS = (_REPORT_OUTPUT_FALLBACK, _MAP_OUTPUT_FALLBAC
 
 def resolve_report_output(repo_root: str) -> pathlib.Path:
     """Where the html report goes: `SEAMCHECK_CONFIG["report_output"]`, or its default."""
-    from seamcheck.autoconfig import _declared
-
-    declared = _declared()
+    declared = declared_config()
     return pathlib.Path(repo_root) / (declared.get("report_output") or _REPORT_OUTPUT_FALLBACK)
 
 
 def resolve_map_output(repo_root: str) -> pathlib.Path:
     """Where the map/console document goes: `SEAMCHECK_CONFIG["map_output"]`, or its
     default."""
-    from seamcheck.autoconfig import _declared
-
-    declared = _declared()
+    declared = declared_config()
     return pathlib.Path(repo_root) / (declared.get("map_output") or _MAP_OUTPUT_FALLBACK)
 
 
 def _resolved_configured_paths(repo_root: str) -> tuple[pathlib.Path, ...]:
     """The tool-state paths that depend on THIS repo's own config, resolved fresh on
-    every call - cheap, because `autoconfig._declared()` is a single settings-attribute
-    read, not `autoconfig.effective()`'s ~7-second auto-detection walk (see the module
-    docstring for why the scan key already refuses to pay that cost; reading the
-    declared config on every `_scan_tree` call, cache hit or miss, must not reintroduce
-    it under a different name).
+    every call - cheap, because `autoconfig.declared_config()` is a single
+    settings-attribute read, not `autoconfig.effective()`'s ~7-second auto-detection walk
+    (see the module docstring for why the scan key already refuses to pay that cost;
+    reading the declared config on every `_scan_tree` call, cache hit or miss, must not
+    reintroduce it under a different name).
 
     Filtered to destinations that resolve INSIDE `repo_root`: one that does not (an
     absolute override, a value equivalent to `--out` pointed elsewhere) never entered

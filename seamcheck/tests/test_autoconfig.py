@@ -3,7 +3,7 @@ import tempfile
 
 from django.test import SimpleTestCase, override_settings
 
-from seamcheck.autoconfig import EXCLUDED_DIRS, detect, effective, excluded
+from seamcheck.autoconfig import EXCLUDED_DIRS, declared_config, detect, effective, excluded
 
 
 class ExclusionTests(SimpleTestCase):
@@ -126,3 +126,24 @@ class PrecedenceTests(SimpleTestCase):
             config, _ = effective(".")
 
         self.assertEqual(config["urlconf_module"], "proj.urls")
+
+
+class DeclaredConfigTests(SimpleTestCase):
+    """The public name for `_declared()` - `scancache.py` calls this, not the private
+    one, so a module reaching across the package boundary into another module's
+    underscore-prefixed function is not left for the next refactor to break silently."""
+
+    def test_returns_exactly_what_was_declared_no_detection_merged_in(self):
+        with override_settings(
+            ROOT_URLCONF="detected.urls",
+            SEAMCHECK_CONFIG={"editor": "cursor"},
+        ):
+            config = declared_config()
+
+        self.assertEqual(config, {"editor": "cursor"})
+        self.assertNotIn("urlconf_module", config, "declared_config must not run "
+                         "detection - that is what effective() is for")
+
+    def test_a_project_with_no_seamcheck_config_at_all_gets_an_empty_dict(self):
+        with override_settings(SEAMCHECK_CONFIG={}):
+            self.assertEqual(declared_config(), {})

@@ -19,23 +19,44 @@ for `seamcheck observe` and for every map render - real, pre-existing instances 
 same bug this test exists to stop the next one of. A second pass, after `_format_report`'s
 SEAMCHECK_CONFIG-driven html/map destination moved from an ALLOWLIST entry into the
 registry (`scancache.resolve_report_output`/`resolve_map_output` +
-`CONFIGURABLE_TOOL_STATE_DEFAULTS`), is what needed `_rooted`/`_expr_refs` to understand a
-ternary (`X if cond else Y`, unioning both arms' refs - a bare `if`/`else` around the
-SAME write call is understood too, each branch scoped to its own copy of the local
-variable history, so one branch's assignment can never leak into the other's - see
-`_walk_scoped`'s docstring) and to resolve a name against every analyzed module, not only
-the write's own file (a tier-B helper's referenced constant can live in a different
-module from the one that calls it).
+`CONFIGURABLE_TOOL_STATE_DEFAULTS`), needed `_rooted`/`_expr_refs` to understand a ternary
+and to resolve a name against every analyzed module, not only the write's own file (a
+tier-B helper's referenced constant can live in a different module from the one that
+calls it). A third pass fixed the ternary/branch handling itself: `_walk_scoped` now
+forks the local-variable history across each side of an `if`/`except`, walks each
+independently, then MERGES the results back at the join point rather than leaking one
+branch's assignment into the other (or, the very first attempt, forking without ever
+merging back - which silently found NOTHING for a write placed after the join at all).
+A write built from more than one possible construction (a ternary's two arms; an
+`if`/`else`-merged local) is tracked as ALTERNATIVES, and `_is_covered` requires EVERY
+alternative to independently resolve - unioning them instead, which an earlier version
+of this checker did, would mark a write covered when only ONE of its possible executions
+actually is. `ALLOWLIST` is keyed by the write's exact `refs`, not just (file, function):
+the latter would exempt every write in an allowlisted function forever, the moment it
+carries one legitimate entry.
 
-What this still does not, and cannot, catch: a write that never constructs its
-destination via `pathlib.Path(repo_root) / …` at all - string concatenation,
-`os.path.join(repo_root, …)`, an f-string. Nothing here tracks string VALUES, only
-path-construction AST shapes. A real gap; not exercised by anything in this package
-today (verified by hand, 2026-09-07) - if one appears, widen `_rooted` rather than
-adding a special case to the allowlist for a shape this test could actually resolve.
-Helper-calls-helper indirection, by contrast, IS followed to a fixed point (`_tier_b_refs`
-re-runs until nothing new is found), so a chain more than one function deep is not itself
-a blind spot.
+The branch-forking and ternary logic exist only because running this checker against
+real source (`_format_report`, which happens to contain both shapes) found two bugs in
+them. That real source is not itself a test - refactor `_format_report` tomorrow and
+nothing pins this logic - so `CheckerClassificationTests` below feeds the checker small,
+purpose-built synthetic snippets directly, independent of what the real package happens
+to look like today.
+
+What this still does not, and cannot, catch, noted here rather than fixed:
+- A write that never constructs its destination via `pathlib.Path(repo_root) / …` at
+  all - string concatenation, `os.path.join(repo_root, …)`, an f-string. Nothing here
+  tracks string VALUES, only path-construction AST shapes. A real gap; not exercised by
+  anything in this package today (verified by hand, 2026-09-07) - if one appears, widen
+  `_rooted` rather than adding a special case to the allowlist for a shape this test
+  could actually resolve. Helper-calls-helper indirection, by contrast, IS followed to a
+  fixed point (`_tier_b_refs` re-runs until nothing new is found), so a chain more than
+  one function deep is not itself a blind spot.
+- `repo_root` is matched BY NAME, deliberately (see `_rooted`'s own docstring for why),
+  not by tracing where a value actually came from. An unrelated local variable that
+  happened to be named `repo_root` anywhere in this package - for something that is not
+  a project root at all - would be misflagged as a rooted path. Nothing collides today
+  (checked by hand, 2026-09-07); if one ever does, the fix is a real one, not a
+  workaround in this file.
 """
 from __future__ import annotations
 
@@ -53,8 +74,20 @@ _SOURCE_ROOT = _PACKAGE_DIR.parent
 _WRITE_METHODS = {"write_text", "write_bytes", "mkdir"}
 _REPO_ROOT_NAME = "repo_root"
 
-# (relative/path/to/file.py, enclosing function name): "why this destination is not, and
-# cannot be, one fixed entry in TOOL_STATE_PATHS".
+# (relative/path/to/file.py, enclosing function name, write.refs): "why this destination
+# is not, and cannot be, one fixed entry in TOOL_STATE_PATHS".
+#
+# Keyed by `refs`, not just (file, function): `_format_report` carries exactly one
+# legitimate entry below, and a (file, function)-only key would exempt EVERY write in
+# that function forever - the moment a second, unrelated, genuinely unregistered write
+# is added to the same function, it would be silently swallowed by an allowlist entry
+# that was never written for it. Keying on the exact set of names the write was built
+# from means only a write shaped THIS way, in this function, is exempted - a different
+# write (different refs) in the same function still falls through to be reported. The
+# cost: renaming the local variable this entry names (`destination`) changes `refs` and
+# breaks the match, requiring the entry to be updated - an acceptable, even desirable,
+# bit of friction, since it forces a human to look again rather than let the exemption
+# silently keep applying to code that no longer matches what it was written to describe.
 #
 # `_format_report`'s CONFIG-DRIVEN write (the one that used to be here, SEAMCHECK_CONFIG
 # ["report_output"/"map_output"] falling back to a repo-relative default) is gone from
@@ -73,8 +106,9 @@ _REPO_ROOT_NAME = "repo_root"
 # because it happens to spell that combination out (`Path(repo_root) / destination`)
 # rather than taking an already-absolute path - there is no fixed value to register, and
 # no way to have "isolated to this one branch" that isn't already true.
-ALLOWLIST: dict[tuple[str, str], str] = {
-    ("seamcheck/management/commands/seamcheck.py", "_format_report"): (
+ALLOWLIST: dict[tuple[str, str, tuple], str] = {
+    ("seamcheck/management/commands/seamcheck.py", "_format_report",
+     (frozenset({"repo_root", "destination", "pathlib"}),)): (
         "The --out branch only: `path = pathlib.Path(repo_root) / destination` where "
         "`destination` is options['out'], a value the CALLER chooses at invocation time "
         "- structurally identical to api.write_map_document's `destination` parameter "
@@ -143,16 +177,35 @@ def _rooted(node, rooted_names: set) -> bool:
     return False
 
 
-def _collect_refs(node, rooted: dict) -> set:
-    """Every name referenced anywhere inside `node`, expanding a name that was ITSELF
+def _collect_refs(node, rooted: dict) -> tuple:
+    """Every name referenced anywhere inside `node`, as ALTERNATIVES - normally a single
+    one (the plain union of every name found), expanding a name that was ITSELF
     established as rooted (via an earlier assignment) into what IT was built from -
     `path.parent` after `path = Path(repo_root) / _MAP_FILE` must resolve to `_MAP_FILE`,
-    not to the local variable name `path`, which resolves to nothing importable."""
-    refs = set()
+    not to the local variable name `path`, which resolves to nothing importable.
+
+    A name whose OWN alternatives number more than one - a local that an `if`/`else`
+    merge (see `_walk_scoped`) could not collapse to a single origin, because its two
+    branches built it from two DIFFERENT things - multiplies out: every OTHER name in
+    this expression is added to EACH of that name's alternatives, since they are present
+    regardless of which one was actually taken at runtime. Handles at most one such
+    branching name per expression (every real write in this package references at most
+    one); a second would need combining pairwise, which nothing here does.
+    """
+    plain: set = set()
+    branching: tuple | None = None
     for n in ast.walk(node):
         if isinstance(n, ast.Name):
-            refs |= rooted.get(n.id, {n.id})
-    return refs
+            alts = rooted.get(n.id)
+            if alts is None:
+                plain.add(n.id)
+            elif len(alts) == 1:
+                plain |= alts[0]
+            elif branching is None:
+                branching = alts
+    if branching is None:
+        return (frozenset(plain),)
+    return tuple(frozenset(alt | plain) for alt in branching)
 
 
 def _write_call_base(node):
@@ -189,20 +242,53 @@ class Write:
         self.refs = refs
 
 
+def _falls_through(stmts: list) -> bool:
+    """True unless this block's OWN last top-level statement is a return/raise/continue/
+    break - a coarse, conservative heuristic (a return buried inside a further-nested
+    `if` is invisible to it) that can call a branch "falls through" when it never
+    actually does. That only makes a later merge (see `_walk_scoped`) carry one extra,
+    unreachable-in-practice alternative into the join point - which biases toward
+    reporting a write as potentially UNcovered rather than silently dropping it, the
+    direction a guard that must never under-report has to err in.
+    """
+    if not stmts:
+        return True
+    return not isinstance(stmts[-1], (ast.Return, ast.Raise, ast.Continue, ast.Break))
+
+
+def _merge_branches(branches: list) -> dict:
+    """The local-variable history at a join point, from the histories of every branch
+    that actually reaches it (`branches` - each a dict `_walk_scoped` finished a fork
+    with). A name any of them established keeps ALL of its alternatives, concatenated
+    rather than deduplicated by content: `_is_covered` requires EVERY alternative to
+    independently resolve, so keeping the branches distinct - not merging their names
+    into one bag - is what stops a write reachable through an unregistered branch from
+    being marked covered just because some OTHER branch resolves.
+    """
+    merged: dict[str, tuple] = {}
+    for branch in branches:
+        for name, alts in branch.items():
+            merged[name] = merged.get(name, ()) + alts
+    return merged
+
+
 def _walk_scoped(stmts, rooted: dict, tier_b: dict, visit_leaf) -> None:
     """Depth-first, in source order, calling `visit_leaf(stmt, rooted)` for every
     statement that is not itself a nested block - assignment tracking (the one thing
     both callers below need identically) happens here, once, rather than twice.
 
-    Forks a COPY of `rooted` across each side of an `if`/`except` before recursing, so
-    one branch's assignment can never leak into the other's: `path = A` in an `if` and
-    `path = B` in its `else`, each followed by their OWN `path.write_text(...)`, must
-    resolve to A and B respectively - a single shared dict (the first version of this
-    checker) let whichever branch was scanned LAST silently win for BOTH write sites,
-    which is worse than not tracking branches at all, because it looks precise while
-    being wrong for one of them. `for`/`while`/`with`/`try.body` are not alternatives -
-    code after them still ran through whatever the block set - so those keep sharing the
-    same dict.
+    Forks a COPY of `rooted` across each side of an `if`/`except`, walks each
+    independently, then MERGES the results back into the CALLER's own `rooted` (mutated
+    in place, so a statement after the block sees it) before continuing - `path = A` in
+    an `if` and `path = B` in its `else`, joined by ONE shared `path.write_text(...)`
+    after both, must see BOTH alternatives at that point, not just whichever branch a
+    naive single shared dict happened to process last (an earlier version of this
+    checker did exactly that, and silently reported the WRONG one), and not neither
+    (an even earlier version forked without ever merging back, which silently reported
+    NOTHING for a join-point write at all - the worse of the two failures, since a
+    write that is never even found cannot be flagged for a decision). `for`/`while`/
+    `with`/`try.body` are not alternatives - code after them still ran through whatever
+    the block itself set - so those keep sharing one dict directly, no fork or merge.
     """
     for stmt in stmts:
         if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1
@@ -212,19 +298,41 @@ def _walk_scoped(stmts, rooted: dict, tier_b: dict, visit_leaf) -> None:
                 rooted[stmt.targets[0].id] = refs
 
         if isinstance(stmt, ast.If):
-            _walk_scoped(stmt.body, dict(rooted), tier_b, visit_leaf)
-            _walk_scoped(stmt.orelse, dict(rooted), tier_b, visit_leaf)
+            body_rooted = dict(rooted)
+            _walk_scoped(stmt.body, body_rooted, tier_b, visit_leaf)
+            orelse_rooted = dict(rooted)
+            _walk_scoped(stmt.orelse, orelse_rooted, tier_b, visit_leaf)
+            reaching = []
+            if _falls_through(stmt.body):
+                reaching.append(body_rooted)
+            if stmt.orelse:
+                if _falls_through(stmt.orelse):
+                    reaching.append(orelse_rooted)
+            else:
+                reaching.append(dict(rooted))  # falling PAST a bare `if:` with no else
+            rooted.clear()
+            rooted.update(_merge_branches(reaching))
         elif isinstance(stmt, (ast.For, ast.AsyncFor, ast.While)):
             _walk_scoped(stmt.body, rooted, tier_b, visit_leaf)
             _walk_scoped(stmt.orelse, rooted, tier_b, visit_leaf)
         elif isinstance(stmt, (ast.With, ast.AsyncWith)):
             _walk_scoped(stmt.body, rooted, tier_b, visit_leaf)
         elif isinstance(stmt, ast.Try):
-            _walk_scoped(stmt.body, rooted, tier_b, visit_leaf)
+            body_rooted = dict(rooted)
+            _walk_scoped(stmt.body, body_rooted, tier_b, visit_leaf)
+            reaching = [body_rooted] if _falls_through(stmt.body) else []
             for handler in stmt.handlers:
-                _walk_scoped(handler.body, dict(rooted), tier_b, visit_leaf)
-            _walk_scoped(stmt.orelse, rooted, tier_b, visit_leaf)
-            _walk_scoped(stmt.finalbody, rooted, tier_b, visit_leaf)
+                handler_rooted = dict(rooted)
+                _walk_scoped(handler.body, handler_rooted, tier_b, visit_leaf)
+                if _falls_through(handler.body):
+                    reaching.append(handler_rooted)
+            if not reaching:
+                reaching.append(dict(rooted))
+            merged = _merge_branches(reaching)
+            _walk_scoped(stmt.orelse, merged, tier_b, visit_leaf)
+            _walk_scoped(stmt.finalbody, merged, tier_b, visit_leaf)
+            rooted.clear()
+            rooted.update(merged)
         else:
             visit_leaf(stmt, rooted)
 
@@ -254,25 +362,30 @@ def _tier_b_refs(files) -> dict:
 
 
 def _expr_refs(node, rooted: dict, tier_b: dict):
-    """None if `node` is not (as far as this can tell) a repo-root-rooted path; otherwise
-    the set of names it was built from, for the covered-check to resolve."""
+    """None if `node` is not (as far as this can tell) a repo-root-rooted path;
+    otherwise a tuple of ALTERNATIVES - each a frozenset of names one possible
+    construction was built from. Normally one alternative long. Two or more means the
+    value could be EITHER at runtime (a ternary's two arms; a local merged across an
+    `if`/`else` - see `_walk_scoped`), and `_is_covered` requires EVERY alternative to
+    independently resolve before calling the write covered: unioning them instead (an
+    earlier version of this checker did) would let a write reachable through an
+    UNREGISTERED branch be marked safe just because the OTHER branch happens to
+    resolve - exactly the under-reporting a guard must never do.
+    """
     if isinstance(node, ast.IfExp):
-        # A ternary choosing between two constructions - `resolve_report_output(repo_root)
-        # if fmt == "html" else resolve_map_output(repo_root)` - is exactly as reportable
-        # as either branch alone: if EITHER resolves, the union of both branches' refs is
-        # what a write through this expression could be built from. Handled here, not by
-        # widening `_rooted` (which stays "is this ONE expression definitely a path"),
-        # because an if-expression's two arms are alternatives, not a single structural
-        # descent.
-        body_refs = _expr_refs(node.body, rooted, tier_b)
-        else_refs = _expr_refs(node.orelse, rooted, tier_b)
-        if body_refs is None and else_refs is None:
+        # An arm that is not itself repo-root-rooted at all still becomes ONE alternative
+        # - an empty, never-resolving one - rather than being dropped: dropping it would
+        # let "one arm is a registered path, the other is anything at all" pass, which is
+        # the same under-reporting the multi-alternative design exists to prevent.
+        body_refs = _expr_refs(node.body, rooted, tier_b) or (frozenset(),)
+        else_refs = _expr_refs(node.orelse, rooted, tier_b) or (frozenset(),)
+        if body_refs == (frozenset(),) and else_refs == (frozenset(),):
             return None
-        return (body_refs or set()) | (else_refs or set())
+        return body_refs + else_refs
     if _rooted(node, set(rooted)):
         return _collect_refs(node, rooted)
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in tier_b:
-        return set(tier_b[node.func.id])
+        return tier_b[node.func.id]
     return None
 
 
@@ -306,23 +419,36 @@ def find_writes(files, tier_b: dict) -> list[Write]:
     return writes
 
 
-def _is_covered(write: Write, known_paths, modules) -> bool:
-    """True if ANY name this write was built from resolves, in ANY of `modules` (so it
-    does not matter whether a name is defined in the write's OWN file or in a tier-B
-    helper's - `resolve_report_output`'s refs include `_REPORT_OUTPUT_FALLBACK`, which
-    lives in scancache.py, not in the management command that calls it), to one of
-    `known_paths` - ordinarily `TOOL_STATE_PATHS + CONFIGURABLE_TOOL_STATE_DEFAULTS`, so
-    a write is "covered" whether it matches a fixed tool-state path or the DEFAULT of a
-    config-driven one (see scancache.py's own comment on `CONFIGURABLE_TOOL_STATE_
-    DEFAULTS` for what that second half does and does not verify). A name is looked up
-    via `getattr`, so it does not matter whether it is defined in a module or merely
-    imported into it - Python already resolved that."""
-    for name in write.refs:
+def _alternative_resolves(names, known_paths, modules) -> bool:
+    """True if ANY name in `names` resolves, in ANY of `modules` (so it does not matter
+    whether a name is defined in the write's OWN file or in a tier-B helper's -
+    `resolve_report_output`'s refs include `_REPORT_OUTPUT_FALLBACK`, which lives in
+    scancache.py, not in the management command that calls it), to one of `known_paths`.
+    A name is looked up via `getattr`, so it does not matter whether it is defined in a
+    module or merely imported into it - Python already resolved that."""
+    for name in names:
         for module in modules:
             value = getattr(module, name, None)
             if isinstance(value, pathlib.Path) and value in known_paths:
                 return True
     return False
+
+
+def _is_covered(write: Write, known_paths, modules) -> bool:
+    """True only if EVERY alternative in `write.refs` independently resolves - ordinarily
+    `known_paths` is `TOOL_STATE_PATHS + CONFIGURABLE_TOOL_STATE_DEFAULTS`, so a write is
+    "covered" whether it matches a fixed tool-state path or the DEFAULT of a
+    config-driven one (see scancache.py's own comment on `CONFIGURABLE_TOOL_STATE_
+    DEFAULTS` for what that second half does and does not verify).
+
+    Requiring ALL, not ANY, alternative to resolve is what makes a ternary or an
+    `if`/`else`-merged local safe to check at all: a write that could come from EITHER
+    branch is only genuinely excluded from the cache if BOTH branches are - a write
+    reachable through an unregistered branch must be reported even when some OTHER
+    branch happens to resolve, or the guard would silently pass exactly the case it
+    exists to catch.
+    """
+    return all(_alternative_resolves(names, known_paths, modules) for names in write.refs)
 
 
 def _uncovered(writes, files, known_paths, allowlist) -> list[tuple[Write, str | None]]:
@@ -342,7 +468,7 @@ def _uncovered(writes, files, known_paths, allowlist) -> list[tuple[Write, str |
         rel = str(write.file.relative_to(_SOURCE_ROOT)) if isinstance(write.file, pathlib.Path) else str(write.file)
         if _is_covered(write, known_paths, modules):
             continue
-        reason = allowlist.get((rel, write.function))
+        reason = allowlist.get((rel, write.function, write.refs))
         if reason is not None:
             continue
         problems.append((write, rel))
@@ -352,13 +478,16 @@ def _uncovered(writes, files, known_paths, allowlist) -> list[tuple[Write, str |
 def _format_failure(problems) -> str:
     lines = ["Found a write to a repo-root-relative path this package does not know about:", ""]
     for write, rel in problems:
-        lines.append(f"  {rel}:{write.lineno} in {write.function}() - built from {sorted(write.refs)}")
+        alternatives = " OR ".join(f"{{{', '.join(sorted(names))}}}" for names in write.refs)
+        lines.append(f"  {rel}:{write.lineno} in {write.function}() - built from {alternatives}")
     lines.append("")
     lines.append(
         "Add it to scancache.TOOL_STATE_PATHS if this is genuine tool state (never scanner "
         "input) - the fix for the exact same finding twice already. Otherwise add "
-        "(<relative path>, \"<function name>\") to ALLOWLIST in this file with a comment "
-        "saying why this destination should legitimately invalidate the cache."
+        "(<relative path>, \"<function name>\", write.refs) to ALLOWLIST in this file "
+        "with a comment saying why this destination should legitimately invalidate the "
+        "cache - the refs, not just the function, or a second unregistered write added "
+        "to the same function later would silently inherit this exemption."
     )
     return "\n".join(lines)
 
@@ -410,3 +539,118 @@ class ToolStateWritesTests(SimpleTestCase):
         self.assertEqual(len(problems), 1,
                          "a write to a path nobody registered or allowlisted must be reported")
         self.assertEqual(problems[0][0].function, "leak")
+
+    def test_a_second_unrelated_write_in_an_allowlisted_function_is_still_caught(self):
+        # An ALLOWLIST keyed by (file, function) alone would exempt EVERY write in that
+        # function forever, the moment it carries one legitimate entry - a hole with a
+        # name on it, not an exception. Two writes, same function, different
+        # destinations: allowlisting the FIRST one's exact refs must not touch the
+        # second.
+        synthetic = (
+            "seamcheck/_fixture_two_writes.py",
+            "def leak(repo_root, allowlisted_destination, second_destination):\n"
+            "    a = pathlib.Path(repo_root) / allowlisted_destination\n"
+            "    a.write_text('{}')\n"
+            "    b = pathlib.Path(repo_root) / second_destination\n"
+            "    b.write_text('{}')\n",
+        )
+        tier_b = _tier_b_refs([])
+        writes = find_writes([synthetic], tier_b)
+        self.assertEqual(len(writes), 2, "both writes in this function must be found")
+
+        narrow = {("seamcheck/_fixture_two_writes.py", "leak", writes[0].refs): "test"}
+        problems = _uncovered(writes, [synthetic], (), narrow)
+        offending = {write.lineno for write, _ in problems}
+        self.assertEqual(offending, {writes[1].lineno},
+                         "the second, unrelated write must still be reported even "
+                         "though the first is allowlisted in the SAME function")
+
+
+# Fixed, made-up stand-ins for TOOL_STATE_PATHS + a module - so the tests below exercise
+# the checker's OWN branch/ternary classification logic in isolation, on tiny synthetic
+# source snippets, rather than depending on which real files in the package happen to
+# contain a branch or a ternary today. `_format_report` is what originally exposed both
+# bugs fixed in this file - but it is not a TEST, and a later refactor of it would pin
+# nothing: these fixtures are what actually pin the classification.
+_FIXTURE_GOOD_A = pathlib.Path("docs") / "good-a.json"
+_FIXTURE_GOOD_B = pathlib.Path("docs") / "good-b.json"
+_FIXTURE_KNOWN_PATHS = (_FIXTURE_GOOD_A, _FIXTURE_GOOD_B)
+_FIXTURE_MODULE = type("FixtureModule", (), {
+    "_GOOD_A": _FIXTURE_GOOD_A, "_GOOD_B": _FIXTURE_GOOD_B,
+})
+
+
+def _classify(label: str, source: str):
+    """Run the checker on one synthetic function, end to end: find its write (there
+    must be exactly one) and say whether it is covered against `_FIXTURE_KNOWN_PATHS`/
+    `_FIXTURE_MODULE`. Raises if the write itself was never found, so a test that
+    expects "uncovered" cannot pass for the wrong reason (nothing was found at all)."""
+    synthetic = (f"seamcheck/_fixture_{label}.py", source)
+    writes = find_writes([synthetic], _tier_b_refs([]))
+    if len(writes) != 1:
+        raise AssertionError(f"expected exactly one write, found {len(writes)}")
+    return _is_covered(writes[0], _FIXTURE_KNOWN_PATHS, [_FIXTURE_MODULE])
+
+
+class CheckerClassificationTests(SimpleTestCase):
+    """Purpose-built fixtures for the branch- and ternary-handling in `_walk_scoped`/
+    `_expr_refs` - the two bugs found by running the checker against real source
+    (`_format_report`'s `if`/`else` and its ternary) had nothing else pinning them: a
+    later refactor of that one function would leave both regressions undetected."""
+
+    def test_a_plain_assignment_is_the_control(self):
+        # No branching at all - the baseline every other case in this class is a
+        # variation on. Covered when it resolves, uncovered when it does not.
+        self.assertTrue(_classify("plain_covered", (
+            "def leak(repo_root):\n"
+            "    path = pathlib.Path(repo_root) / _GOOD_A\n"
+            "    path.write_text('{}')\n"
+        )))
+        self.assertFalse(_classify("plain_uncovered", (
+            "def leak(repo_root):\n"
+            "    path = pathlib.Path(repo_root) / 'unregistered.json'\n"
+            "    path.write_text('{}')\n"
+        )))
+
+    def test_a_path_assigned_in_one_branch_of_if_else_and_written_after_the_join(self):
+        # The bug this file actually had: `path` assigned differently in each branch of
+        # an `if`/`else`, then written ONCE after both rejoin. The very first version of
+        # this checker found NOTHING here at all (branches were forked but never merged
+        # back for the statement after them); a later version found the write but
+        # reported only whichever branch was scanned last, for BOTH possible executions.
+        self.assertTrue(_classify("ifelse_both_covered", (
+            "def leak(repo_root, cond):\n"
+            "    if cond:\n"
+            "        path = pathlib.Path(repo_root) / _GOOD_A\n"
+            "    else:\n"
+            "        path = pathlib.Path(repo_root) / _GOOD_B\n"
+            "    path.write_text('{}')\n"
+        )), "both branches resolve - the join-point write must be covered")
+        self.assertFalse(_classify("ifelse_one_uncovered", (
+            "def leak(repo_root, cond):\n"
+            "    if cond:\n"
+            "        path = pathlib.Path(repo_root) / _GOOD_A\n"
+            "    else:\n"
+            "        path = pathlib.Path(repo_root) / 'unregistered.json'\n"
+            "    path.write_text('{}')\n"
+        )), "one branch is unregistered - covering it anyway is the under-report a "
+            "guard must never produce")
+
+    def test_a_ternary_assignment(self):
+        # `X if cond else Y` is the same alternatives question as if/else, in one
+        # expression rather than two statements - unioning both arms' names (what an
+        # earlier version of this checker did) would mark this covered even when only
+        # ONE arm actually is.
+        self.assertTrue(_classify("ternary_both_covered", (
+            "def leak(repo_root, cond):\n"
+            "    path = (pathlib.Path(repo_root) / _GOOD_A if cond\n"
+            "           else pathlib.Path(repo_root) / _GOOD_B)\n"
+            "    path.write_text('{}')\n"
+        )), "both arms resolve - the ternary write must be covered")
+        self.assertFalse(_classify("ternary_one_uncovered", (
+            "def leak(repo_root, cond):\n"
+            "    path = (pathlib.Path(repo_root) / _GOOD_A if cond\n"
+            "           else pathlib.Path(repo_root) / 'unregistered.json')\n"
+            "    path.write_text('{}')\n"
+        )), "one arm is unregistered - covering it anyway is the same under-report "
+            "as the if/else case")
