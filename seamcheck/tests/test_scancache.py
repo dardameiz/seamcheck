@@ -238,6 +238,103 @@ class ScanCacheTests(SimpleTestCase):
                 "writing a trend row between calls must not force a rescan")
             self.assertTrue(how_second["cached"])
 
+    def test_writing_the_default_html_report_between_two_calls_does_not_bust_the_cache(self):
+        # management/commands/seamcheck.py writes docs/maps/connectivity-report.html by
+        # default (SEAMCHECK_CONFIG["report_output"] unset) on every `--format html` run -
+        # found unregistered by the same audit, and ruled a real defect to FIX rather than
+        # allowlist, since map/serve is the tool's documented primary workflow.
+        with tempfile.TemporaryDirectory() as root:
+            (pathlib.Path(root) / "urls.py").write_text("x = 1")
+            with mock.patch("seamcheck.api.scan", return_value=_graph()) as scan:
+                scancache.cached_scan(root)
+                report_dir = pathlib.Path(root) / "docs" / "maps"
+                report_dir.mkdir(parents=True)
+                (report_dir / "connectivity-report.html").write_text("<html></html>")
+                _, how_second = scancache.cached_scan(root)
+
+            self.assertEqual(
+                scan.call_count, 1,
+                "writing the default html report between calls must not force a rescan")
+            self.assertTrue(how_second["cached"])
+
+    def test_writing_the_default_map_document_between_two_calls_does_not_bust_the_cache(self):
+        # Same default-destination gap, for --format map/console/serve's own document.
+        with tempfile.TemporaryDirectory() as root:
+            (pathlib.Path(root) / "urls.py").write_text("x = 1")
+            with mock.patch("seamcheck.api.scan", return_value=_graph()) as scan:
+                scancache.cached_scan(root)
+                map_dir = pathlib.Path(root) / "docs" / "maps"
+                map_dir.mkdir(parents=True)
+                (map_dir / "connectivity-map.html").write_text("<html></html>")
+                _, how_second = scancache.cached_scan(root)
+
+            self.assertEqual(
+                scan.call_count, 1,
+                "writing the default map document between calls must not force a rescan")
+            self.assertTrue(how_second["cached"])
+
+    def test_writing_a_configured_report_destination_between_two_calls_does_not_bust_the_cache(self):
+        # SEAMCHECK_CONFIG can move report_output/map_output anywhere - the cache must
+        # follow the CONFIGURED destination, not just the two fixed defaults.
+        from django.test import override_settings
+
+        with tempfile.TemporaryDirectory() as root:
+            (pathlib.Path(root) / "urls.py").write_text("x = 1")
+            with override_settings(SEAMCHECK_CONFIG={"report_output": "elsewhere/report.html"}):
+                with mock.patch("seamcheck.api.scan", return_value=_graph()) as scan:
+                    scancache.cached_scan(root)
+                    custom_dir = pathlib.Path(root) / "elsewhere"
+                    custom_dir.mkdir(parents=True)
+                    (custom_dir / "report.html").write_text("<html></html>")
+                    _, how_second = scancache.cached_scan(root)
+
+                self.assertEqual(
+                    scan.call_count, 1,
+                    "writing to a CONFIGURED report destination must not force a rescan")
+                self.assertTrue(how_second["cached"])
+
+    def test_a_report_destination_outside_repo_root_is_never_excluded(self):
+        # A destination pointed outside the repo never entered the walk in the first
+        # place - excluding it by a path that escapes the root is how an exclusion
+        # starts matching things it should not (the same reasoning `--out` already
+        # gets: an arbitrary, caller-chosen destination is out of scope).
+        from django.test import override_settings
+
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as outside:
+            with override_settings(SEAMCHECK_CONFIG={"report_output": os.path.join(outside, "r.html")}):
+                configured = scancache._resolved_configured_paths(root)
+
+            self.assertEqual(
+                [p for p in configured if str(p).startswith("..")], [],
+                "a destination outside repo_root must never appear in the resolved set")
+
+    def test_a_users_own_file_with_the_same_name_elsewhere_is_not_excluded(self):
+        # Matched by exact resolved relative path, never by basename - a user's own
+        # unrelated connectivity-report.html living somewhere else in their repo must
+        # not be treated as tool state just because the two share a filename.
+        with tempfile.TemporaryDirectory() as root:
+            (pathlib.Path(root) / "urls.py").write_text("x = 1")
+            other_dir = pathlib.Path(root) / "not-the-report-dir"
+            other_dir.mkdir()
+            (other_dir / "connectivity-report.html").write_text("mine, not the tool's")
+
+            with mock.patch("seamcheck.api.scan", return_value=_graph()) as scan:
+                scancache.cached_scan(root)
+                scancache.cached_scan(root)
+
+            self.assertEqual(
+                scan.call_count, 1,
+                "an unrelated file merely SHARING a registered basename must not itself "
+                "force a rescan - it was never touched between the two calls")
+            key1, mtime1 = scancache._scan_tree(str(pathlib.Path(root).resolve()))
+            (other_dir / "connectivity-report.html").write_text("changed")
+            key2, mtime2 = scancache._scan_tree(str(pathlib.Path(root).resolve()))
+            self.assertNotEqual(
+                (key1, mtime1), (key2, mtime2),
+                "a user's own file, merely sharing a registered basename at a different "
+                "path, must still be treated as real scanner input - the key must move "
+                "when it changes")
+
     def test_a_dot_directory_is_not_blanket_skipped(self):
         # The walk used to skip EVERY dot-directory by convention. A project's own
         # `js_entry_files` or `templates_root` can point INTO one on purpose (`.storybook/`,

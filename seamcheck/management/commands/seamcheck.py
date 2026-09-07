@@ -7,21 +7,20 @@ import os
 import pathlib
 import sys
 
-from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
 from seamcheck import api
 from seamcheck.progress import Progress
 from seamcheck.renderers.terminal import returned_line
+from seamcheck.scancache import resolve_map_output, resolve_report_output
 
 # Formats whose output is a whole document rather than a few lines. Printing one to a
 # terminal is a wall of markup and a lost scrollback, so each has a default destination
-# on disk and says where it went.
-_DOCUMENTS = {
-    "html": ("report_output", "docs/maps/connectivity-report.html"),
-    "map": ("map_output", "docs/maps/connectivity-map.html"),
-    "console": ("map_output", "docs/maps/connectivity-map.html"),
-}
+# on disk and says where it went - resolved by `scancache.resolve_report_output`/
+# `resolve_map_output`, the SAME functions the cache's own exclusion check calls, so this
+# command and the cache can never disagree about where a document with no explicit --out
+# actually lands.
+_DOCUMENT_FORMATS = {"html", "map", "console"}
 
 
 class Command(BaseCommand):
@@ -597,24 +596,32 @@ class Command(BaseCommand):
             # Explicit stdout always wins, even for a document: a flag whose help text
             # promises the terminal must not silently redirect to a file.
             return self.stdout.write(text)
-        if destination is None:
-            if fmt not in _DOCUMENTS:
-                return self.stdout.write(text)
-            # A whole document with no destination goes to a file, because `seamcheck map`
-            # used to answer with 3.8 MB of markup down the terminal - which reads as the
-            # command being broken. Read config from settings, not api._config(): a command
-            # reaching into another module's private helper is how a refactor there
-            # silently breaks this one.
-            config = getattr(settings, "SEAMCHECK_CONFIG", {})
-            key, fallback = _DOCUMENTS[fmt]
-            destination = config.get(key) or fallback
 
         # Written before it is served, not instead of. Serving used to return early, so
         # the one command that renders the UI left nothing behind when you pressed Ctrl-C
         # - and the artifact is the thing you commit, diff and open again tomorrow.
-        path = pathlib.Path(repo_root) / destination
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
+        #
+        # Two branches, not one shared `path = ... if ... else ...`, on purpose: an
+        # explicit --out is a caller-chosen destination that can land anywhere, exactly
+        # like every other --out in this codebase, and cannot be a registered cache
+        # exclusion - see test_tool_state_writes.py's ALLOWLIST entry for this branch.
+        # The no-destination branch resolves through scancache.resolve_report_output/
+        # resolve_map_output, the SAME functions the cache's own exclusion check calls,
+        # so this command and the cache can never disagree about where a document with
+        # no explicit --out actually lands - and so THAT branch's write is registered,
+        # not allowlisted. Keeping them as separate write call sites, not merged behind
+        # one variable, is what lets the audit tell the two apart at all.
+        if destination is not None:
+            path = pathlib.Path(repo_root) / destination
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+        else:
+            if fmt not in _DOCUMENT_FORMATS:
+                return self.stdout.write(text)
+            path = (resolve_report_output(repo_root) if fmt == "html"
+                   else resolve_map_output(repo_root))
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
         self._wrote(path, text, open_it=options.get("open_it") and not serving)
 
         if serving:
@@ -640,11 +647,8 @@ class Command(BaseCommand):
         destination = options["out"]
         if destination == "-":
             return self.stdout.write(document.single_file())
-        if destination is None:
-            config = getattr(settings, "SEAMCHECK_CONFIG", {})
-            key, fallback = _DOCUMENTS["map"]
-            destination = config.get(key) or fallback
-        path = pathlib.Path(repo_root) / destination
+        path = (pathlib.Path(repo_root) / destination if destination is not None
+               else resolve_map_output(repo_root))
         written, note = api.write_map_document(document, str(path), bundle=options.get("bundle") or None)
         self.stdout.write(f"  wrote  {written}")
         if note:

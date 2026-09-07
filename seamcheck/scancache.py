@@ -115,12 +115,83 @@ _SCANNER_EXCLUDED = EXCLUDED_DIRS | SKIP_DIRS
 # to see.
 TOOL_STATE_PATHS = (_SCANS_DIR, _TRIAGE_FILE, _MAP_FILE, _STORE_DIR, _TREND_PATH)
 
+# The html report and the map/console document are the ONE tool-state destination that
+# is not a fixed path: `management/commands/seamcheck.py` writes each to
+# `SEAMCHECK_CONFIG["report_output"/"map_output"]` when set, and to the default below
+# otherwise - so TOOL_STATE_PATHS (a tuple of constants the audit test can read by simple
+# membership) cannot name it, and `_is_tool_state` alone cannot decide it without also
+# knowing what THIS repo's config says. `resolve_report_output`/`resolve_map_output` are
+# the one place that resolution happens, called both by the command that writes there and
+# by `_resolved_configured_paths` below for the cache's own exclusion check, so the two
+# can never compute two different answers for the same repo.
+_REPORT_OUTPUT_FALLBACK = pathlib.Path("docs") / "maps" / "connectivity-report.html"
+_MAP_OUTPUT_FALLBACK = pathlib.Path("docs") / "maps" / "connectivity-map.html"
 
-def _is_tool_state(relative_parts: tuple[str, ...]) -> bool:
+# Exported alongside TOOL_STATE_PATHS for test_tool_state_writes.py: that audit reads
+# source, not a running repo's config, so it cannot resolve what SEAMCHECK_CONFIG would
+# say - the DEFAULT is the one fixed thing it CAN check a write against, on top of the
+# static core, the same "static core, plus the resolved/default configurable destination
+# on top" shape `_resolved_configured_paths` uses for the real, runtime exclusion. A
+# write matching only this (not TOOL_STATE_PATHS) is verified default-covered; whether a
+# repo's own CONFIGURED override is also excluded is what test_scancache.py's dedicated
+# configured-destination tests check, not this static audit.
+CONFIGURABLE_TOOL_STATE_DEFAULTS = (_REPORT_OUTPUT_FALLBACK, _MAP_OUTPUT_FALLBACK)
+
+
+def resolve_report_output(repo_root: str) -> pathlib.Path:
+    """Where the html report goes: `SEAMCHECK_CONFIG["report_output"]`, or its default."""
+    from seamcheck.autoconfig import _declared
+
+    declared = _declared()
+    return pathlib.Path(repo_root) / (declared.get("report_output") or _REPORT_OUTPUT_FALLBACK)
+
+
+def resolve_map_output(repo_root: str) -> pathlib.Path:
+    """Where the map/console document goes: `SEAMCHECK_CONFIG["map_output"]`, or its
+    default."""
+    from seamcheck.autoconfig import _declared
+
+    declared = _declared()
+    return pathlib.Path(repo_root) / (declared.get("map_output") or _MAP_OUTPUT_FALLBACK)
+
+
+def _resolved_configured_paths(repo_root: str) -> tuple[pathlib.Path, ...]:
+    """The tool-state paths that depend on THIS repo's own config, resolved fresh on
+    every call - cheap, because `autoconfig._declared()` is a single settings-attribute
+    read, not `autoconfig.effective()`'s ~7-second auto-detection walk (see the module
+    docstring for why the scan key already refuses to pay that cost; reading the
+    declared config on every `_scan_tree` call, cache hit or miss, must not reintroduce
+    it under a different name).
+
+    Filtered to destinations that resolve INSIDE `repo_root`: one that does not (an
+    absolute override, a value equivalent to `--out` pointed elsewhere) never entered
+    the walk this exists to guard, and excluding it by a path that escapes the root is
+    how an exclusion starts matching things it should not.
+    """
+    root = pathlib.Path(repo_root).resolve()
+    resolved = []
+    for candidate in (resolve_report_output(repo_root), resolve_map_output(repo_root)):
+        try:
+            resolved.append(candidate.resolve().relative_to(root))
+        except ValueError:
+            continue  # outside repo_root - not a repo-root write, out of scope
+    return tuple(resolved)
+
+
+def _is_tool_state(relative_parts: tuple[str, ...], configured: tuple = ()) -> bool:
     """True when `relative_parts` names a registered path exactly, or a location under
     one - `_SCANS_DIR` is a directory holding one file per snapshot, so every file in it
-    must match this without being named individually."""
-    return any(relative_parts[:len(state.parts)] == state.parts for state in TOOL_STATE_PATHS)
+    must match this without being named individually.
+
+    `configured` (from `_resolved_configured_paths`, computed once per `_scan_tree` call
+    - never per file) is matched the same way and by the same rule: exact resolved
+    relative path, never by name, prefix or substring - a user's own `report.html`
+    living somewhere else must not be excluded just because the tool could have written
+    one there. Defaults to empty so the audit test can call this against the static
+    `TOOL_STATE_PATHS` core alone.
+    """
+    return any(relative_parts[:len(state.parts)] == state.parts
+              for state in TOOL_STATE_PATHS + configured)
 
 
 def _version() -> str:
@@ -181,17 +252,22 @@ def _scan_tree(repo_root: str) -> tuple[str, int]:
     digest.update(_version().encode())
     digest.update(os.environ.get("DJANGO_SETTINGS_MODULE", "").encode())
     root = pathlib.Path(repo_root)
+    # Computed ONCE per walk, not per file - a config-driven destination reads
+    # SEAMCHECK_CONFIG, and doing that for every file in a large tree would be wasteful
+    # even though any one read is cheap. See `_resolved_configured_paths`'s own
+    # docstring for the cost this must not reintroduce.
+    configured = _resolved_configured_paths(repo_root)
     latest_mtime_ns = 0
     for current, directories, files in os.walk(root):
         here = pathlib.Path(current)
         directories[:] = sorted(
             d for d in directories
             if d not in _SCANNER_EXCLUDED
-            and not _is_tool_state((here / d).relative_to(root).parts)
+            and not _is_tool_state((here / d).relative_to(root).parts, configured)
         )
         for name in sorted(files):
             path = here / name
-            if _is_tool_state(path.relative_to(root).parts):
+            if _is_tool_state(path.relative_to(root).parts, configured):
                 # Tool state, not scanner input - see TOOL_STATE_PATHS above for which
                 # command writes each one and why a read or a write to it must not look,
                 # to the cache, like an edit to the project it just scanned.
