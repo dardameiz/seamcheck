@@ -45,6 +45,17 @@ class DumpConnectivityMapTests(SimpleTestCase):
 
         self.assertIn("No symbol", output)
 
+    def test_explain_suggests_near_ids_on_a_miss(self):
+        # queries.near() had no caller anywhere in the codebase; wired in here so the
+        # 88.5-second "No symbol with id ..." finally says what you probably meant.
+        output = self._run(
+            "--explain", "view:seamcheck.tests.fixtures.fixture_views.get_thin"
+        )
+
+        self.assertIn("No symbol", output)
+        self.assertIn("Did you mean", output)
+        self.assertIn("view:seamcheck.tests.fixtures.fixture_views.get_thing", output)
+
     def test_check_says_so_plainly_when_no_baseline_snapshot_exists(self):
         # Fabricating a diff against a snapshot that was never taken would report the
         # entire graph as "new" on the first run.
@@ -313,10 +324,21 @@ class CheckSinceExitCodeTests(SimpleTestCase):
 
     def test_a_gate_with_no_baseline_did_not_pass_it_did_not_run(self):
         # Exiting 0 here tells CI the build is clean when nothing was compared at all.
-        with mock.patch.object(api, "diff_against", return_value=(None, "abc", "no baseline")):
+        #
+        # This branch now shares gate_code()'s exact NO_BASELINE-prefix match (see
+        # CheckSinceWithFormatExitCodeTests below, which already required it) instead of
+        # its own hand-rolled "any truthy message means no baseline". The literal string
+        # "no baseline" this test used to mock is not what `api.diff_against` actually
+        # ever returns - only the old, looser ladder tolerated it - so the mock is updated
+        # to the real constant rather than the production code being loosened back to
+        # match an unrealistic mock.
+        from seamcheck.exitcodes import NO_BASELINE
+
+        with mock.patch.object(api, "diff_against",
+                               return_value=(None, "abc", f"{NO_BASELINE} for abc yet.")):
             output, code = self._run("--check", "--since", "abc")
 
-        self.assertIn("no baseline", output)
+        self.assertIn(NO_BASELINE, output)
         self.assertEqual(code, 2)
 
 
@@ -540,3 +562,120 @@ class UndoTests(SimpleTestCase):
         self.assertNotIn("mark outlived its finding", out)
         # The first scan to notice stamps the day; the file is the memory.
         self.assertTrue(stamped)
+
+
+@override_settings(SEAMCHECK_CONFIG=_CONFIG)
+class DiffCommandTests(SimpleTestCase):
+    """`seamcheck diff --since REF` - `queries.diff()` had no command wired to it anywhere,
+    reachable only as a library call, despite the plan's own before/after table promising
+    it. Wired exactly as `--findings` is, on both doors, with --limit/--cursor/--refresh.
+    """
+
+    def test_the_django_door_wires_diff_with_since_limit_and_cursor(self):
+        out = StringIO()
+        with mock.patch("seamcheck.queries.diff",
+                        return_value={"ok": True, "data": {}}) as diff:
+            call_command("seamcheck", "--diff", "--since", "origin/main", "--limit", "10",
+                        "--cursor", "5", stdout=out, stderr=StringIO())
+
+        diff.assert_called_once_with(".", "origin/main", 10, "5", refresh=False)
+        self.assertIn('"ok": true', out.getvalue())
+
+    def test_the_django_door_defaults_since_to_head_tilde_1(self):
+        with mock.patch("seamcheck.queries.diff", return_value={"ok": True}) as diff:
+            call_command("seamcheck", "--diff", stdout=StringIO(), stderr=StringIO())
+
+        diff.assert_called_once_with(".", "HEAD~1", 25, "", refresh=False)
+
+    def test_the_django_door_forwards_refresh(self):
+        with mock.patch("seamcheck.queries.diff", return_value={"ok": True}) as diff:
+            call_command("seamcheck", "--diff", "--refresh", stdout=StringIO(), stderr=StringIO())
+
+        diff.assert_called_once_with(".", "HEAD~1", 25, "", refresh=True)
+
+    def test_the_plain_door_wires_diff_too(self):
+        import os
+
+        from seamcheck.cli import _run_without_django
+
+        with tempfile.TemporaryDirectory() as tmp:
+            real_tmp = os.path.realpath(tmp)
+            Path(tmp, "package.json").write_text("{}")
+            cwd = os.getcwd()
+            os.chdir(tmp)
+            try:
+                with (
+                    mock.patch("seamcheck.cli._worth_scanning", return_value=True),
+                    mock.patch("seamcheck.queries.diff",
+                              return_value={"ok": True, "data": {}}) as diff,
+                ):
+                    code = _run_without_django(
+                        ["--diff", "--since", "origin/main", "--limit", "10"], verbose=False
+                    )
+            finally:
+                os.chdir(cwd)
+
+        self.assertEqual(code, 0)
+        diff.assert_called_once_with(real_tmp, "origin/main", 10, "", refresh=False)
+
+
+class ExplainWithHintTests(SimpleTestCase):
+    """`queries.near()` had no caller anywhere in the codebase. `api.explain_with_hint()`
+    is the one wired into both CLI doors and the MCP server - direct, graph-only tests
+    here rather than a full scan, since the matching itself is `queries.near`'s job
+    (already tested in test_queries.py); this only checks the wiring and the wording."""
+
+    def _graph(self):
+        from seamcheck.graph import Graph, Status, Symbol
+
+        return Graph(symbols=[
+            Symbol(id="url:api/submit/", kind="url", label="api/submit/", sub="",
+                  file="app/urls.py", line=3, status=Status.CONNECTED, snippet="",
+                  chain=[], note=""),
+        ], edges=[])
+
+    def test_a_correct_id_gets_no_hint_section(self):
+        text = api.explain_with_hint(self._graph(), "url:api/submit/")
+
+        self.assertIn("api/submit/", text)
+        self.assertNotIn("Did you mean", text)
+
+    def test_a_near_miss_names_the_real_id(self):
+        text = api.explain_with_hint(self._graph(), "url:api/submit")
+
+        self.assertIn("No symbol", text)
+        self.assertIn("Did you mean", text)
+        self.assertIn("url:api/submit/", text)
+
+    def test_nothing_close_enough_gets_no_hint_section(self):
+        text = api.explain_with_hint(self._graph(), "totally-unrelated-xyz")
+
+        self.assertIn("No symbol", text)
+        self.assertNotIn("Did you mean", text)
+
+    def test_the_plain_non_django_door_offers_the_same_hint(self):
+        # Both CLI doors call the same api.explain_with_hint - proved here by observing
+        # the plain (non-Django) door's own output, not by re-testing the matching logic.
+        import io
+        import os
+        from contextlib import redirect_stdout
+
+        from seamcheck.cli import _run_without_django
+
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "package.json").write_text("{}")
+            cwd = os.getcwd()
+            os.chdir(tmp)
+            try:
+                with (
+                    mock.patch("seamcheck.cli._worth_scanning", return_value=True),
+                    mock.patch("seamcheck.api.scan", return_value=self._graph()),
+                    redirect_stdout(io.StringIO()) as out,
+                ):
+                    code = _run_without_django(["--explain", "url:api/submit"], verbose=False)
+            finally:
+                os.chdir(cwd)
+
+        self.assertEqual(code, 0)
+        self.assertIn("Did you mean", out.getvalue())
+        self.assertIn("url:api/submit/", out.getvalue())

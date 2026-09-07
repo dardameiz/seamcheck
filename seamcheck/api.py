@@ -364,6 +364,26 @@ def explain(graph: Graph, symbol_id: str) -> str:
     return "\n".join(line for line in lines if line != "")
 
 
+def explain_with_hint(graph: Graph, symbol_id: str, repo_root: str = ".") -> str:
+    """`explain`, plus - on a miss - the ids closest to the one that was typed.
+
+    A wrong id used to cost the same full scan as a correct one only to be told `No symbol
+    with id ...`, 88.5 seconds on the reference project for that sentence alone. `graph` is
+    already in hand here - both CLI doors scan before calling this - so the near-match
+    lookup (`queries.near`) is handed that graph directly rather than paying for a second
+    scan right behind the first.
+    """
+    text = explain(graph, symbol_id)
+    if not text.startswith("No symbol with id"):
+        return text
+    from seamcheck import queries
+
+    suggestions = queries.near(repo_root, symbol_id, graph=graph)
+    if not suggestions:
+        return text
+    return text + "\n\nDid you mean:\n" + "\n".join(f"  {s}" for s in suggestions)
+
+
 def diff_against(graph: Graph, ref: str, repo_root: str = ".") -> tuple[DiffResult | None, str, str]:
     """Diff `graph` against the snapshot for `ref`, or say plainly that there isn't one.
 

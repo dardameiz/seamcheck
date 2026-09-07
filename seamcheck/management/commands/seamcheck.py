@@ -137,6 +137,12 @@ class Command(BaseCommand):
                  "same thing here as in --check and --format sarif/github.",
         )
         parser.add_argument(
+            "--diff", action="store_true",
+            help="What appeared, vanished or changed status since --since (default "
+                 "HEAD~1). Unfiltered by triage - the raw graph difference, not check's "
+                 "pass/fail opinion.",
+        )
+        parser.add_argument(
             "--refresh", action="store_true",
             help="Skip the scan cache in both directions, for --symbols/--findings/--diff - "
                  "the escape for a tree the cache cannot judge on its own (a fresh checkout, "
@@ -197,6 +203,14 @@ class Command(BaseCommand):
                                    include_triaged=options["include_triaged"])
             self.stdout.write(json.dumps(out, indent=2))
             return None
+        if options.get("diff"):
+            from seamcheck import queries
+
+            out = queries.diff(options["repo_root"], options["since"] or "HEAD~1",
+                               options["limit"], options["cursor"],
+                               refresh=options["refresh"])
+            self.stdout.write(json.dumps(out, indent=2))
+            return None
         if options["show_config"]:
             return self._show_config(options["repo_root"])
         if options["triage"]:
@@ -205,7 +219,8 @@ class Command(BaseCommand):
             bar = self._progress(options, api.SCAN_STEPS)
             graph = api.scan(options["repo_root"], bar)
             bar.finish()
-            return self.stdout.write(api.explain(graph, options["explain"]))
+            return self.stdout.write(
+                api.explain_with_hint(graph, options["explain"], options["repo_root"]))
 
         if options["backfill"] is not None:
             return self._backfill(
@@ -467,34 +482,36 @@ class Command(BaseCommand):
         graph = api.scan(repo_root, bar)
         bar.finish()
         if options["since"]:
-            result, sha, message = api.diff_against(graph, options["since"], repo_root)
-            if not sha:
+            from seamcheck.exitcodes import EXIT_CLEAN, EXIT_USAGE, gate_code
+
+            outcome = api.check(repo_root, graph=graph, since=options["since"])
+            if outcome.get("bad_ref"):
                 # The ref itself could not be resolved - a typo, a CI variable that came
                 # through empty. Different from "resolved but nothing stored for it"
                 # below: this is the COMMAND being wrong, not "nothing to compare yet",
                 # and conflating the two (both used to be "any message means exit 2") let
                 # a mistyped $BASE_SHA silently read as a clean first run.
-                self.stdout.write(message)
+                self.stdout.write(outcome["message"])
                 if options["check"]:
-                    from seamcheck.exitcodes import EXIT_USAGE
                     raise SystemExit(EXIT_USAGE)
                 return
-            if message:
-                self.stdout.write(message)
-                # A gate asked to compare against a baseline that is not there has not
-                # passed - it has not run. Exit 2, so CI can tell "nothing new" (0) from
-                # "no findings, because nothing was checked".
-                if options["check"]:
-                    raise SystemExit(2)
-                return
-            self._report(result)
+            if outcome["message"]:
+                self.stdout.write(outcome["message"])
+            self._report_outcome(outcome)
             # `--since` alone answers "what changed"; with `--check` it is a gate, and a
-            # gate that prints findings and exits 0 tells CI the build is clean. This
-            # branch returned before ever reaching an exit code.
-            if options["check"] and (
-                result.new_unresolved or result.new_unused or result.triage_invalidated
-            ):
-                raise SystemExit(1)
+            # gate that prints findings and exits 0 tells CI the build is clean.
+            #
+            # Routed through the SAME gate_code(comparing=True) ladder `_exit_on_check`
+            # already uses for `--check --format X --since REF` - this used to hand-roll
+            # 2 (no baseline) / 1 (new findings) / 0 (clean) here, and "no baseline" meant
+            # any truthy `message` rather than gate_code()'s exact NO_BASELINE prefix. In
+            # this flow the two conditions coincide (`diff_against` only ever sets a
+            # message for the no-baseline case; a bad ref is handled above), so this is a
+            # consolidation, not a behavior change.
+            if options["check"]:
+                code = gate_code(outcome, comparing=True)
+                if code != EXIT_CLEAN:
+                    raise SystemExit(code)
             return
 
         outcome = api.check(repo_root, graph=graph)
@@ -516,12 +533,14 @@ class Command(BaseCommand):
         if code != EXIT_CLEAN:
             raise SystemExit(code)
 
-    def _report(self, result):
-        for symbol in result.new_unresolved:
-            self.stdout.write(f"new_unresolved: {symbol.id}")
-        for symbol in result.new_unused:
-            self.stdout.write(f"new_unused: {symbol.id}")
-        for item in result.triage_invalidated:
+    def _report_outcome(self, outcome):
+        """`--since`'s digest: what api.check() found, read from its own answer shape
+        (dicts) rather than a raw DiffResult (Symbol objects) - the same rows either way."""
+        for item in outcome["new_unresolved"]:
+            self.stdout.write(f"new_unresolved: {item['id']}")
+        for item in outcome["new_unused"]:
+            self.stdout.write(f"new_unused: {item['id']}")
+        for item in outcome["triage_invalidated"]:
             self.stdout.write(f"triage invalidated: {item['symbol_id']} - {item['note']}")
 
     def _format_report(self, options, graph=None, bar=None):

@@ -54,8 +54,12 @@ def seamcheck_check(repo_root: str = ".") -> dict:
 
 @mcp.tool()
 def seamcheck_explain(symbol_id: str, repo_root: str = ".") -> str:
-    """Explain one symbol: where it is, how it was reached, and why it is classified so."""
-    return api.explain(api.scan(repo_root), symbol_id)
+    """Explain one symbol: where it is, how it was reached, and why it is classified so.
+
+    On a miss, also names the ids closest to the one given - the same hint the CLI's
+    `explain` prints, so the two surfaces cannot disagree about what a typo meant.
+    """
+    return api.explain_with_hint(api.scan(repo_root), symbol_id, repo_root)
 
 
 @mcp.tool()

@@ -357,6 +357,25 @@ COMMANDS: dict[str, Command] = {
             ("seamcheck findings --cursor 50", "the next page"),
         ],
     ),
+    "diff": Command(
+        args=["--diff"],
+        summary="What appeared, vanished or changed status since a ref.",
+        detail=(
+            "\"What did this commit break\" is a question CI and an agent both ask, and "
+            "until now the only way to ask it was `check --since`, which folds the answer "
+            "into a pass/fail gate - there was no way to just SEE the list. This is a "
+            "separate comparison from the one `check` uses, not a shared implementation: "
+            "it is unfiltered by triage, so a caller diffing two arbitrary points sees the "
+            "raw graph difference rather than a CI-gate's opinion.\n\n"
+            "`--refresh` skips the scan cache in both directions - the escape for a tree "
+            "it cannot judge on its own."
+        ),
+        examples=[
+            ("seamcheck diff --since origin/main", "what this branch changed"),
+            ("seamcheck diff --since HEAD~5 --limit 50", "the last 5 commits, fifty rows"),
+            ("seamcheck diff --since main --cursor 50", "the next page"),
+        ],
+    ),
 }
 
 
@@ -615,6 +634,13 @@ def _run_without_django(arguments, verbose: bool) -> int:
                                           include_triaged=options["include_triaged"]),
                          indent=2))
         return 0
+    if options["diff"]:
+        from seamcheck import queries
+
+        print(json.dumps(queries.diff(root, options["since"] or "HEAD~1",
+                                      options["limit"], options["cursor"],
+                                      refresh=options["refresh"]), indent=2))
+        return 0
     if options["show_config"]:
         return _show_config_plain(root)
     with quiet(not verbose):
@@ -624,7 +650,7 @@ def _run_without_django(arguments, verbose: bool) -> int:
             print(result["message"])
             return 0 if result.get("ok") else 2
         if options["explain"]:
-            print(api.explain(api.scan(root), options["explain"]))
+            print(api.explain_with_hint(api.scan(root), options["explain"], root))
             return 0
         if options["check"]:
             # The CI gate. `passed` is the key api.check() actually returns; this asked for
@@ -824,6 +850,9 @@ def _plain_args(arguments) -> dict:
         "reason": "", "why": "", "undo": False, "set_tunnel": None,
         "symbols": False, "search": "", "kind": "", "limit": 25, "cursor": "",
         "findings": False, "file": "", "owner": "",
+        # What appeared, vanished or changed status since --since (default HEAD~1) - the
+        # same names the management command's --diff uses.
+        "diff": False,
         # Same name, same meaning as the management command's --refresh: skip the scan
         # cache in both directions for --symbols/--findings/--diff.
         "refresh": False,
@@ -855,6 +884,8 @@ def _plain_args(arguments) -> dict:
             options["symbols"] = True
         elif item == "--findings":
             options["findings"] = True
+        elif item == "--diff":
+            options["diff"] = True
         elif item == "--file" and following:
             options["file"] = following
         elif item == "--owner" and following:

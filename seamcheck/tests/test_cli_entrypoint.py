@@ -560,3 +560,25 @@ class IncludeTriagedFlagParityTests(SimpleTestCase):
 
         self.assertFalse(_plain_args([])["include_triaged"])
         self.assertFalse(self._django_include_triaged())
+
+
+class DiffFlagParityTests(SimpleTestCase):
+    """`--diff` must exist and mean the same thing on both front doors, the same way
+    `--findings` and `--symbols` already did."""
+
+    def _django_diff(self, *argv):
+        from seamcheck.management.commands.seamcheck import Command
+
+        parser = Command().create_parser("manage.py", "seamcheck")
+        return parser.parse_args(list(argv)).diff
+
+    def test_the_same_argv_parses_to_the_same_value(self):
+        from seamcheck.cli import _plain_args
+
+        self.assertEqual(_plain_args(["--diff"])["diff"], self._django_diff("--diff"))
+
+    def test_neither_door_turns_it_on_by_default(self):
+        from seamcheck.cli import _plain_args
+
+        self.assertFalse(_plain_args([])["diff"])
+        self.assertFalse(self._django_diff())

@@ -36,6 +36,14 @@ class McpToolFunctionTests(SimpleTestCase):
     def test_explain_is_honest_about_an_unknown_symbol(self):
         self.assertIn("No symbol", seamcheck_explain("view:nope", repo_root="."))
 
+    def test_explain_suggests_a_near_id_on_a_miss(self):
+        # The CLI and the MCP server must never disagree about what a typo meant - both
+        # go through api.explain_with_hint now, not just api.explain.
+        text = seamcheck_explain(GET_THING[:-1], repo_root=".")  # GET_THING minus its last char
+
+        self.assertIn("Did you mean", text)
+        self.assertIn(GET_THING, text)
+
     def test_triage_rejects_an_unknown_status(self):
         result = seamcheck_triage(GET_THING, "bogus", repo_root=".")
 
