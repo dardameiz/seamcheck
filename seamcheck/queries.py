@@ -95,7 +95,7 @@ def _normalize_file(file: str, repo_root: str) -> str:
 
 def findings(repo_root: str = ".", file: str = "", kind: str = "", status: str = "",
              owner: str = "", limit: int = 25, cursor: str = "", refresh: bool = False,
-             include_triaged: bool = False, graph=None) -> dict:
+             include_triaged: bool = False, only_blocking: bool = False, graph=None) -> dict:
     """What is wrong, narrowed by file, kind, status or owning function.
 
     By default this returns only what the tool is willing to call broken - `unresolved` and
@@ -106,12 +106,22 @@ def findings(repo_root: str = ".", file: str = "", kind: str = "", status: str =
     searched, so the answer can never be misread as the default set when it is not.
 
     A finding carrying ANY triage mark is also left out by default - "what is wrong" has to
-    mean one thing whether it is read here, rendered as SARIF, or annotated by
-    `check --format github`, and `check`'s own gate already stops an approved finding from
-    blocking the build. The same predicate `unverified()` uses (`triage.judged_ids`), reused
-    rather than re-derived, so the two cannot silently drift into disagreeing about what
-    "judged" means. Pass `include_triaged=True` for a caller that genuinely wants everything,
-    marks included.
+    mean one thing whether it is read here or asked about interactively, and `unverified()`
+    uses the same predicate (`triage.judged_ids`), reused rather than re-derived, so the two
+    cannot silently drift into disagreeing about what "judged" means. Pass
+    `include_triaged=True` for a caller that genuinely wants everything, marks included.
+
+    `only_blocking=True` is the THIRD, narrower answer - not "everything", not "nothing
+    judged" - used by SARIF and `check --format github` (`api._findings_report`): a
+    CONFIRMED mark does not silence a finding (see `triage.blocking_ids`, `check`'s own
+    gate), so with this set a CONFIRMED finding is INCLUDED (it still blocks the build)
+    while an APPROVED/DEFERRED one stays excluded. Without it, `judged_ids` excludes
+    every marked finding regardless of status - the plain, default answer above, which
+    `check --format sarif` used to be built from even though the CI gate itself judges
+    CONFIRMED findings differently: the SARIF file could say "clean" for the exact
+    finding that had just failed the build. Mutually exclusive with `include_triaged`
+    in practice - a caller asking for "only what's blocking" is not also asking for
+    "everything, judged or not" - `only_blocking` wins if both are somehow passed.
 
     `refresh` skips the scan cache in both directions - see `symbols`' docstring. `graph`
     lets a caller that already scanned (`api.report`'s SARIF/GitHub path) pass it straight
@@ -130,7 +140,18 @@ def findings(repo_root: str = ".", file: str = "", kind: str = "", status: str =
     warnings = []
     if file and not any(s.file == file for s in graph.symbols):
         warnings.append(f"No file matched {file!r} in the scan.")
-    judged = set() if include_triaged else judged_ids(load_triage(repo_root))
+    entries = load_triage(repo_root)
+    if only_blocking:
+        from seamcheck.triage import blocking_ids
+
+        # Exclude only what has ACTUALLY been silenced (a valid mark whose status is
+        # not CONFIRMED) - never a CONFIRMED or a stale mark, both of which
+        # triage.blocking_ids() (has_blocking_findings' own predicate) still counts as
+        # blocking. judged_ids() alone is a superset of "silenced"; subtracting
+        # blocking_ids() from it is what narrows it to exactly that.
+        judged = judged_ids(entries) - blocking_ids(graph, entries)
+    else:
+        judged = set() if include_triaged else judged_ids(entries)
     rows = [_row(s) for s in graph.symbols
             if s.status.value in wanted
             and s.id not in judged

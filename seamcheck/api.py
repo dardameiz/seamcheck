@@ -649,11 +649,16 @@ def _findings_report(repo_root: str, fmt: str, graph: Graph | None = None) -> st
     from seamcheck.renderers import github as github_renderer
     from seamcheck.renderers import sarif as sarif_renderer
 
-    # include_triaged defaults to False: an APPROVED finding does not block `check`'s exit
-    # code (has_blocking_findings), and it must not silently reappear here as an "error"
-    # GitHub Code Scanning has no way to suppress - "what is wrong" has to mean one thing
-    # whichever format renders it.
-    rows = queries.findings(repo_root, limit=10_000, graph=graph)["data"]["findings"]
+    # only_blocking=True, not the default: "what is wrong" here has to mean exactly what
+    # `check`'s gate (has_blocking_findings) means, because this IS the artifact CI reads
+    # to explain why the gate failed. The plain default (queries.findings()'s own
+    # "exclude anything judged") would also exclude a CONFIRMED finding - a real bug
+    # someone has already acknowledged, which the gate still fails the build on by
+    # design - so `check --format sarif` could exit 1 over a finding the SARIF file
+    # itself said nothing about. An APPROVED/DEFERRED finding is still excluded either
+    # way: only CONFIRMED is the one status these two predicates used to disagree on.
+    rows = queries.findings(repo_root, limit=10_000, only_blocking=True,
+                            graph=graph)["data"]["findings"]
     try:
         sha = current_git_sha(repo_root)
     except Exception:  # noqa: BLE001 - a directory that is not a git checkout still has

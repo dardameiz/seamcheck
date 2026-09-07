@@ -219,3 +219,65 @@ class CachedScanRoutingTests(SimpleTestCase):
 
         cached_scan.assert_called_once_with(".")
         scan.assert_not_called()
+
+
+class SarifBlockingParityTests(SimpleTestCase):
+    """`check --format sarif` (the exact recipe docs/ci.md prescribes) used to be able to
+    fail the build over a finding that was invisible in the SARIF file meant to explain
+    the failure - `has_blocking_findings()` (the gate) and `queries.findings()`'s default
+    (which fed SARIF/GitHub) disagreed about exactly one status: CONFIRMED, which the
+    gate treats as still-blocking but the old default excluded from "what is wrong"
+    along with every other judged mark. Both now derive from `triage.blocking_ids`."""
+
+    def test_a_confirmed_finding_blocks_the_gate_and_appears_in_the_sarif(self):
+        import json
+
+        from seamcheck.triage import TriageEntry, TriageStatus, fingerprint_for_symbol, save_triage
+
+        symbol = Symbol(id="url:x", kind="url", label="x", sub="", file="a.py", line=1,
+                        status=Status.UNRESOLVED, snippet="<url:x>", chain=[], note="")
+        graph = Graph(symbols=[symbol], edges=[])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            save_triage([TriageEntry(
+                symbol_id="url:x", fingerprint=fingerprint_for_symbol(symbol),
+                status=TriageStatus.CONFIRMED, who="a", when="2026-01-01",
+                reason="real bug, acknowledged",
+            )], tmp)
+
+            outcome = api.check(tmp, graph=graph)
+            sarif_text = api.report(tmp, "sarif", graph=graph)
+
+        self.assertFalse(outcome["passed"], "a CONFIRMED finding must still block the gate")
+        results = json.loads(sarif_text)["runs"][0]["results"]
+        sarif_ids = {result["properties"]["seamcheckId"] for result in results}
+        self.assertIn(
+            "url:x", sarif_ids,
+            "the finding that failed the build must be visible in the SARIF meant to "
+            "explain why - a red build with an empty report tells nobody where to look")
+
+    def test_an_approved_finding_does_not_block_and_does_not_appear_in_the_sarif(self):
+        # The other half: this fix must not overcorrect into showing EVERY judged
+        # finding - APPROVED still silences one, on the gate and in the SARIF alike.
+        import json
+
+        from seamcheck.triage import TriageEntry, TriageStatus, fingerprint_for_symbol, save_triage
+
+        symbol = Symbol(id="url:x", kind="url", label="x", sub="", file="a.py", line=1,
+                        status=Status.UNRESOLVED, snippet="<url:x>", chain=[], note="")
+        graph = Graph(symbols=[symbol], edges=[])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            save_triage([TriageEntry(
+                symbol_id="url:x", fingerprint=fingerprint_for_symbol(symbol),
+                status=TriageStatus.APPROVED, who="a", when="2026-01-01",
+                reason="false positive",
+            )], tmp)
+
+            outcome = api.check(tmp, graph=graph)
+            sarif_text = api.report(tmp, "sarif", graph=graph)
+
+        self.assertTrue(outcome["passed"], "an APPROVED finding must not block the gate")
+        results = json.loads(sarif_text)["runs"][0]["results"]
+        sarif_ids = {result["properties"]["seamcheckId"] for result in results}
+        self.assertNotIn("url:x", sarif_ids)

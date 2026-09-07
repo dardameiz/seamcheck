@@ -201,6 +201,40 @@ class FindingsTests(SimpleTestCase):
             "--include-triaged / include_triaged=True must still show it",
         )
 
+    def test_only_blocking_excludes_an_approved_finding(self):
+        # only_blocking is the predicate SARIF/GitHub (api._findings_report) use - an
+        # APPROVED mark silences a finding there exactly as it does for check's gate.
+        from seamcheck.triage import TriageEntry, TriageStatus, fingerprint_for_symbol
+
+        symbol = next(s for s in GRAPH.symbols if s.id == "redis_key:user:*:pushes")
+        entry = TriageEntry(symbol_id=symbol.id, fingerprint=fingerprint_for_symbol(symbol),
+                            status=TriageStatus.APPROVED, who="t", when="2026-01-01", reason="")
+        with mock.patch("seamcheck.queries.load_triage", return_value=[entry]):
+            out = queries.findings(".", only_blocking=True)
+
+        self.assertNotIn(symbol.id, [row["id"] for row in out["data"]["findings"]])
+
+    def test_only_blocking_includes_a_confirmed_finding_the_plain_default_excludes(self):
+        # The exact bug: has_blocking_findings() (check's gate) says a CONFIRMED mark
+        # still blocks, but the plain default here (judged_ids alone) excluded it same
+        # as any other mark - so `check --format sarif` could fail the build over a
+        # finding the rendered SARIF said nothing about. only_blocking closes the gap.
+        from seamcheck.triage import TriageEntry, TriageStatus, fingerprint_for_symbol
+
+        symbol = next(s for s in GRAPH.symbols if s.id == "redis_key:user:*:pushes")
+        entry = TriageEntry(symbol_id=symbol.id, fingerprint=fingerprint_for_symbol(symbol),
+                            status=TriageStatus.CONFIRMED, who="t", when="2026-01-01", reason="")
+        with mock.patch("seamcheck.queries.load_triage", return_value=[entry]):
+            default_out = queries.findings(".")
+            blocking_out = queries.findings(".", only_blocking=True)
+
+        self.assertNotIn(
+            symbol.id, [row["id"] for row in default_out["data"]["findings"]],
+            "the plain default excludes ANY judged mark, confirmed included")
+        self.assertIn(
+            symbol.id, [row["id"] for row in blocking_out["data"]["findings"]],
+            "only_blocking must still show a CONFIRMED finding - it still blocks the gate")
+
 
 class DiffTests(SimpleTestCase):
     """"What did this commit break" is the question CI and an agent both ask, and there was

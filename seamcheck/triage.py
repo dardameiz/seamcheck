@@ -240,12 +240,26 @@ def apply_triage(graph: Graph, entries: list[TriageEntry]) -> Graph:
     return Graph(symbols=symbols, edges=graph.edges, schema_version=graph.schema_version)
 
 
-def has_blocking_findings(graph: Graph, entries: list[TriageEntry]) -> bool:
+def blocking_ids(graph: Graph, entries: list[TriageEntry]) -> set[str]:
+    """Symbol ids that are still blocking the build, right now.
+
+    A symbol is blocking when its status is UNRESOLVED/UNUSED and either nothing has
+    judged it, or the mark that HAS is CONFIRMED - a real bug someone has already
+    acknowledged, which must keep blocking (see `TriageStatus`'s own comment: CONFIRMED
+    is the only status that does not silence a finding). This is the ONE predicate
+    "still blocking" is decided by - `has_blocking_findings` (the CI gate) and
+    `queries.findings(only_blocking=True)` (what feeds SARIF and the GitHub-annotation
+    output) both derive from it, so a CONFIRMED finding can no longer fail the build
+    while being invisible in the very report meant to say why it failed.
+    """
     valid = _valid_entries(graph, entries)
-    for symbol in graph.symbols:
-        if symbol.status not in _BLOCKING_STATUSES:
-            continue
-        entry = valid.get(symbol.id)
-        if entry is None or entry.status is TriageStatus.CONFIRMED:
-            return True
-    return False
+    return {
+        symbol.id
+        for symbol in graph.symbols
+        if symbol.status in _BLOCKING_STATUSES
+        and (symbol.id not in valid or valid[symbol.id].status is TriageStatus.CONFIRMED)
+    }
+
+
+def has_blocking_findings(graph: Graph, entries: list[TriageEntry]) -> bool:
+    return bool(blocking_ids(graph, entries))
