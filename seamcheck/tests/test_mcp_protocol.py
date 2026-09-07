@@ -4,6 +4,7 @@ Every existing MCP test calls the decorated functions as plain Python, so nothin
 the layer a client actually talks to: not the schemas, not isError, not structuredContent.
 """
 import asyncio
+import json
 import subprocess
 import tempfile
 from pathlib import Path
@@ -201,6 +202,46 @@ class SnapshotToolTests(SimpleTestCase):
         self.assertEqual(result["error"]["code"], "no_git")
 
 
+class LegacyTriageDataTests(SimpleTestCase):
+    """A hand-edited triage.json can carry a `why` written before WhyWrong existed - the
+    module's own docstring says so. MarkRow.why is typed `str`, not the closed WhyReason
+    literal, exactly so this keeps working. This seeds one on disk and calls seamcheck_check
+    through the real protocol, so a future "tighten why to the enum" change is caught by a
+    crashing test instead of a green suite and a broken tool call in someone's real repo."""
+
+    def test_a_pre_enum_why_value_does_not_crash_the_protocol_call(self):
+        symbol = Symbol(id="view:x", kind="view", label="x", sub="", file="a.py", line=1,
+                        status=Status.UNRESOLVED, snippet="def x(): ...", chain=[], note="")
+        graph = Graph(symbols=[symbol], edges=[])
+        legacy_why = "reasoned about it before the enum existed"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            triage_path = Path(tmp) / "seamcheck" / "triage.json"
+            triage_path.parent.mkdir(parents=True)
+            triage_path.write_text(json.dumps({
+                "entries": [{
+                    "symbol_id": "view:x",
+                    # Deliberately wrong, so the mark is STALE (triage.stale_entries) and
+                    # therefore a "returned" finding (triage.returned) - the one path in
+                    # api.check() that renders a MarkRow via report.mark_dict().
+                    "fingerprint": "does-not-match-the-current-evidence",
+                    "status": "approved",
+                    "who": "alice",
+                    "when": "2020-01-01",
+                    "reason": "fine at the time",
+                    "why": legacy_why,
+                    "expired": "",
+                }]
+            }))
+
+            with mock.patch("seamcheck.api.scan", return_value=graph):
+                _, structured = asyncio.run(
+                    mcp_server.mcp.call_tool("seamcheck_check", {"repo_root": tmp}))
+
+        self.assertEqual(len(structured["returned"]), 1)
+        self.assertEqual(structured["returned"][0]["why"], legacy_why)
+
+
 @override_settings(SEAMCHECK_CONFIG=_CONFIG)
 class ProtocolSmokeTests(SimpleTestCase):
     """Calls every tool through mcp.call_tool() - the actual wire path - against the real
@@ -215,15 +256,76 @@ class ProtocolSmokeTests(SimpleTestCase):
         self._call("seamcheck_check", repo_root=".")
 
     def test_symbols(self):
-        self._call("seamcheck_symbols", repo_root=".", search="get_thing")
+        # A schema-only assertion passes even if the tool returns the wrong rows entirely
+        # (convert_result only checks shape) - this checks the actual fixture content:
+        # both real symbols named for get_thing, one of them the connected view itself.
+        _, structured = self._call("seamcheck_symbols", repo_root=".", search="get_thing")
+
+        self.assertTrue(structured["ok"])
+        self.assertEqual(structured["command"], "symbols")
+        rows = {row["id"]: row for row in structured["data"]["symbols"]}
+        self.assertIn(GET_THING, rows)
+        self.assertEqual(rows[GET_THING]["kind"], "view")
+        self.assertEqual(rows[GET_THING]["status"], "connected")
+
+    def test_symbols_limit_actually_bounds_the_rows(self):
+        _, structured = self._call("seamcheck_symbols", repo_root=".", limit=3)
+
+        self.assertEqual(len(structured["data"]["symbols"]), 3)
+        self.assertEqual(structured["truncated"]["returned"], 3)
+        self.assertGreater(structured["truncated"]["total"], 3)
+        self.assertNotEqual(structured["truncated"]["cursor"], "")
 
     def test_findings(self):
-        self._call("seamcheck_findings", repo_root=".")
+        # The fixture project has exactly three findings, all unresolved fetch targets
+        # nothing in the project ever calls the routes for (fixture_module.js) - real ids,
+        # not just "some list came back".
+        _, structured = self._call("seamcheck_findings", repo_root=".")
+
+        self.assertTrue(structured["ok"])
+        self.assertEqual(structured["command"], "findings")
+        ids = {row["id"] for row in structured["data"]["findings"]}
+        self.assertEqual(ids, {"fetch:/api/does-not-exist/", "fetch:/api/from-arrow/",
+                               "fetch:/api/log/"})
+        self.assertEqual(structured["data"]["by_status"], {"unresolved": 3})
+
+    def test_findings_limit_actually_bounds_the_rows(self):
+        _, structured = self._call("seamcheck_findings", repo_root=".", limit=2)
+
+        self.assertEqual(len(structured["data"]["findings"]), 2)
+        self.assertEqual(structured["truncated"]["total"], 3)
+        self.assertNotEqual(structured["truncated"]["cursor"], "")
 
     def test_diff_against_an_unresolvable_ref_is_still_a_clean_protocol_round_trip(self):
         # No stored snapshot for this ref in the fixture project - exercises the
         # DiffEnvelope failure branch (data=None) through the real protocol.
-        self._call("seamcheck_diff", repo_root=".", since="HEAD")
+        _, structured = self._call("seamcheck_diff", repo_root=".", since="HEAD")
+
+        self.assertFalse(structured["ok"])
+        self.assertEqual(structured["command"], "diff")
+        self.assertEqual(structured["error"]["code"], "no_baseline")
+
+    def test_diff_shows_a_real_status_change_against_the_fixture(self):
+        # `before` needs only the ONE symbol whose status is being flipped - everything
+        # else in the real "now" scan simply shows up as `appeared`, which this does not
+        # assert on. The real content checked here is the row that DID change: the same
+        # get_thing view the other tests use, reported unresolved a moment ago and
+        # connected now, cross-checked byte for byte against the real fixture id.
+        before = Graph(symbols=[Symbol(
+            id=GET_THING, kind="view", label="seamcheck.tests.fixtures.fixture_views.get_thing",
+            sub="", file="seamcheck/tests/fixtures/fixture_views.py", line=4,
+            status=Status.UNRESOLVED, snippet="def get_thing(request): ...", chain=[], note="",
+        )], edges=[])
+
+        with mock.patch("seamcheck.snapshot.load_snapshot", return_value=before):
+            _, structured = self._call("seamcheck_diff", repo_root=".", since="HEAD")
+
+        self.assertTrue(structured["ok"])
+        self.assertEqual(structured["command"], "diff")
+        changed = {row["id"]: row for row in structured["data"]["changed"]}
+        self.assertIn(GET_THING, changed)
+        self.assertEqual(changed[GET_THING]["was"], "unresolved")
+        self.assertEqual(changed[GET_THING]["status"], "connected")
 
     def test_unverified(self):
         self._call("seamcheck_unverified", repo_root=".")
@@ -262,7 +364,22 @@ class ProtocolSmokeTests(SimpleTestCase):
             subprocess.run(["git", "add", "."], cwd=tmp, check=True)
             subprocess.run(["git", "commit", "-q", "-m", "x"], cwd=tmp, check=True)
 
-            self._call("seamcheck_snapshot", repo_root=tmp)
+            _, structured = self._call("seamcheck_snapshot", repo_root=tmp)
+
+            self.assertTrue(structured["ok"])
+            self.assertEqual(structured["command"], "snapshot")
+            expected_path = str(Path(tmp) / "docs" / "maps" / "connectivity-map.json")
+            self.assertEqual(structured["data"]["path"], expected_path)
+            self.assertGreater(structured["data"]["symbols"], 0)
+            # Not a hardcoded count (that only pins today's fixture): the number snapshot
+            # reports for the tree it just scanned must equal what symbols() reports for
+            # the SAME repo_root - real content, not "some positive integer came back".
+            # (repo_root itself, not just SEAMCHECK_CONFIG, affects the scan - confirmed
+            # by first writing this against repo_root="." here and getting a genuine
+            # mismatch, 21 vs 22, from comparing two different trees.)
+            _, symbols_structured = self._call("seamcheck_symbols", repo_root=tmp)
+            self.assertEqual(structured["data"]["symbols"],
+                             symbols_structured["truncated"]["total"])
 
             self.assertTrue((Path(tmp) / "docs" / "maps" / "connectivity-map.json").is_file())
             self.assertTrue((Path(tmp) / "OTHER" / "seamcheck" / "scans").is_dir())

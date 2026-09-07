@@ -176,6 +176,34 @@ class ScanCacheTests(SimpleTestCase):
                               "writing the triage file between calls must not force a rescan")
             self.assertTrue(how_second["cached"])
 
+    def test_writing_the_connectivity_map_between_two_calls_does_not_bust_the_cache(self):
+        # api.write_map() writes docs/maps/connectivity-map.json on every `seamcheck scan`
+        # and every seamcheck_snapshot MCP call, right next to the snapshot write the test
+        # above already covers - a third tool-state write path the original fix (that one
+        # enumerated `_SCANS_DIR` and `_TRIAGE_FILE`) did not enumerate, and the MCP
+        # snapshot tool is what made it reachable from an agent loop.
+        import subprocess
+
+        from seamcheck import api
+
+        with tempfile.TemporaryDirectory() as root:
+            (pathlib.Path(root) / "urls.py").write_text("x = 1")
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            subprocess.run(["git", "config", "user.email", "a@example.com"], cwd=root, check=True)
+            subprocess.run(["git", "config", "user.name", "a"], cwd=root, check=True)
+            subprocess.run(["git", "add", "."], cwd=root, check=True)
+            subprocess.run(["git", "commit", "-q", "-m", "x"], cwd=root, check=True)
+
+            with mock.patch("seamcheck.api.scan", return_value=_graph()) as scan:
+                scancache.cached_scan(root)
+                api.write_map(_graph(), root)
+                _, how_second = scancache.cached_scan(root)
+
+            self.assertEqual(
+                scan.call_count, 1,
+                "writing the connectivity map between calls must not force a rescan")
+            self.assertTrue(how_second["cached"])
+
     def test_a_dot_directory_is_not_blanket_skipped(self):
         # The walk used to skip EVERY dot-directory by convention. A project's own
         # `js_entry_files` or `templates_root` can point INTO one on purpose (`.storybook/`,

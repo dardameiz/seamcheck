@@ -16,7 +16,7 @@ from seamcheck.nodetools import report as _notify
 from seamcheck.pipeline import SCAN_PHASES, one_row_per_id, run_scan
 from seamcheck.progress import Progress, null
 from seamcheck.roots import discover_css_files, discover_js_roots, tailwind_classes
-from seamcheck.snapshot import current_git_sha, load_snapshot, save_snapshot
+from seamcheck.snapshot import _MAP_FILE, current_git_sha, load_snapshot, save_snapshot
 from seamcheck.triage import (
     TriageEntry,
     TriageStatus,
@@ -737,7 +737,7 @@ def write_map(graph: Graph, repo_root: str = ".") -> str:
 
     from seamcheck.graph import graph_to_dict
 
-    path = pathlib.Path(repo_root) / "docs" / "maps" / "connectivity-map.json"
+    path = pathlib.Path(repo_root) / _MAP_FILE
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(graph_to_dict(graph), indent=2), encoding="utf-8")
     save_snapshot(graph, current_git_sha(repo_root), repo_root)
