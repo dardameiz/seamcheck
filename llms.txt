@@ -82,11 +82,14 @@ Every code any command can return, in one table (`seamcheck/exitcodes.py`):
 
 `check` is what walks this table through `gate_code()`: 1 on new findings, and — only with
 `--since`, since a bare `check` has nothing to diff against — 2 when there is no stored
-snapshot to compare with. Any command, `check` included, can still stop with 3 or 4 before
-a scan even runs. `findings`, `symbols` and `diff` always exit 0 once they start — a failed
-*query* (bad `--status`, an unresolvable `--since`) is reported in the JSON envelope's
-`error.code`, not the exit code, because those commands answer a question rather than gate
-a build.
+snapshot to compare with. `2` belongs to `check --since` alone: a failed `triage` (an id the
+current scan does not have, a `--status`/`--wrong` word outside the fixed set, or an
+`--undo` with no mark to remove) is a bad argument, not "no baseline to compare against", so
+it returns 3, not 2. Any command, `check` and `triage` included, can still stop with 3 or 4
+before a scan even runs. `findings`, `symbols` and `diff` always exit 0 once they start — a
+failed *query* (bad `--status`, an unresolvable `--since`) is reported in the JSON
+envelope's `error.code`, not the exit code, because those commands answer a question rather
+than gate a build.
 
 ## Accuracy
 

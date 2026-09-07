@@ -6,6 +6,7 @@ from unittest import mock
 
 from django.test import SimpleTestCase
 
+from seamcheck import exitcodes
 from seamcheck.cli import COMMANDS, PRIMARY, find_project, main
 
 
@@ -335,7 +336,10 @@ class UndoFlagTests(SimpleTestCase):
             self.assertEqual(code, 0)
             self.assertIn("raised again", out.getvalue())
             self.assertEqual(load_triage(tmp), [])
-            self.assertEqual(again, 2)
+            # A second undo has nothing to remove - a bad argument, not "no baseline to
+            # compare against". EXIT_USAGE, not the bare `2` that used to collide with
+            # EXIT_NO_BASELINE (check --since's own, unrelated question).
+            self.assertEqual(again, exitcodes.EXIT_USAGE)
             scan.assert_not_called()
 
 

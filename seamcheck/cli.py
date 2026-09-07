@@ -701,10 +701,15 @@ def _run_without_django(arguments, verbose: bool) -> int:
         return _show_config_plain(root)
     with quiet(not verbose):
         if options["triage"]:
+            # A failed triage (an id the current scan does not have, a status/why word
+            # outside the fixed set, an --undo with no mark to remove) is the command
+            # being wrong, not "no baseline to compare against" - EXIT_USAGE is the code
+            # that means that; a bare literal `2` here collided with EXIT_NO_BASELINE,
+            # which is check --since's own, unrelated question.
             result = api.triage(options["triage"], options["status"] or "approved",
                                 root, options["reason"], options["why"], undo=options["undo"])
             print(result["message"])
-            return 0 if result.get("ok") else 2
+            return 0 if result.get("ok") else EXIT_USAGE
         if options["explain"]:
             print(api.explain_with_hint(api.scan(root), options["explain"], root))
             return 0

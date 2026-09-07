@@ -6,8 +6,10 @@ non-Django path returned 0 for every project that ever had a finding. Reproduced
 """
 import subprocess
 import tempfile
+from io import StringIO
 from unittest import mock
 
+from django.core.management import call_command
 from django.test import SimpleTestCase
 
 from seamcheck import api, cli, exitcodes
@@ -157,3 +159,64 @@ class EnvironmentExitCodeTests(SimpleTestCase):
             code = cli.main(["check"])
 
         self.assertEqual(code, exitcodes.EXIT_ENVIRONMENT)
+
+
+class TriageExitCodeTests(SimpleTestCase):
+    """`--triage` failing (an id the current scan does not have, a status/why word outside
+    the fixed set, an `--undo` with no mark to remove, or no disposition given at all) used
+    to `return`/`raise SystemExit` a bare literal `2` on BOTH doors - colliding with
+    `EXIT_NO_BASELINE`, `check --since`'s own, unrelated "nothing to compare against"
+    answer. A CI job that reads exit codes across a pipeline running both commands could not
+    tell a failed triage apart from a first run with no baseline. `docs/commands.md` ships
+    the 0-4 table as a closed set, so this collision was the table shipping a code the
+    triage path did not actually mean.
+
+    Fixed to route through `exitcodes.EXIT_USAGE` on both doors: a bad triage argument is
+    "the command was wrong", exactly what EXIT_USAGE already documents - not a new code.
+    """
+
+    _FAILED = {"ok": False, "message": "No symbol with id `bogus:id` in the current scan."}
+
+    def test_plain_door_reports_usage_not_no_baseline(self):
+        with mock.patch("seamcheck.api.triage", return_value=self._FAILED), \
+             mock.patch("seamcheck.cli._worth_scanning", return_value=True):
+            code = cli._run_without_django(
+                ["--triage", "bogus:id", "--wrong", "consumed-by-dependency"], verbose=False)
+
+        self.assertEqual(code, exitcodes.EXIT_USAGE)
+        self.assertNotEqual(code, exitcodes.EXIT_NO_BASELINE)
+
+    def test_django_door_reports_usage_not_no_baseline(self):
+        with mock.patch("seamcheck.api.triage", return_value=self._FAILED), \
+             self.assertRaises(SystemExit) as raised:
+            call_command("seamcheck", "--triage", "bogus:id", "--wrong",
+                         "consumed-by-dependency", stdout=StringIO(), stderr=StringIO())
+
+        code = int(str(raised.exception.code))
+        self.assertEqual(code, exitcodes.EXIT_USAGE)
+        self.assertNotEqual(code, exitcodes.EXIT_NO_BASELINE)
+
+    def test_the_two_doors_agree(self):
+        with mock.patch("seamcheck.api.triage", return_value=self._FAILED), \
+             mock.patch("seamcheck.cli._worth_scanning", return_value=True):
+            plain_code = cli._run_without_django(
+                ["--triage", "bogus:id", "--wrong", "consumed-by-dependency"], verbose=False)
+
+        with mock.patch("seamcheck.api.triage", return_value=self._FAILED), \
+             self.assertRaises(SystemExit) as raised:
+            call_command("seamcheck", "--triage", "bogus:id", "--wrong",
+                         "consumed-by-dependency", stdout=StringIO(), stderr=StringIO())
+        django_code = int(str(raised.exception.code))
+
+        self.assertEqual(plain_code, django_code)
+
+    def test_django_door_missing_disposition_reports_usage_not_no_baseline(self):
+        # No --status and no --wrong at all - api.triage is never even reached; this is
+        # the management command's own pre-check (seamcheck.py's `_triage`).
+        with self.assertRaises(SystemExit) as raised:
+            call_command("seamcheck", "--triage", "bogus:id",
+                         stdout=StringIO(), stderr=StringIO())
+
+        code = int(str(raised.exception.code))
+        self.assertEqual(code, exitcodes.EXIT_USAGE)
+        self.assertNotEqual(code, exitcodes.EXIT_NO_BASELINE)

@@ -321,11 +321,19 @@ class Command(BaseCommand):
         self.stdout.write("  seamcheck config --tunnel always|never   changes it")
 
     def _triage(self, options):
+        # A failed triage (an id the current scan does not have, a status/why word
+        # outside the fixed set, an --undo with no mark to remove, or no disposition
+        # given at all) is the command being wrong, not "no baseline to compare
+        # against" - EXIT_USAGE is the code that means that. A bare literal `2` here
+        # used to collide with EXIT_NO_BASELINE, which is check --since's own,
+        # unrelated question - see exitcodes.py.
+        from seamcheck.exitcodes import EXIT_USAGE
+
         if options.get("undo"):
             result = api.triage(options["triage"], "approved", options["repo_root"], undo=True)
             self.stdout.write(result["message"])
             if not result["ok"]:
-                raise SystemExit(2)
+                raise SystemExit(EXIT_USAGE)
             return
         # `--wrong X` says the finding was wrong, which IS the disposition - requiring
         # `--status approved` as well made the command in `seamcheck help triage` fail on
@@ -338,14 +346,14 @@ class Command(BaseCommand):
                 "or --wrong <reason> which means approved. `seamcheck help triage` lists "
                 "the reasons."
             )
-            raise SystemExit(2)
+            raise SystemExit(EXIT_USAGE)
         result = api.triage(
             options["triage"], options["status"], options["repo_root"], options["reason"],
             options.get("why", ""),
         )
         self.stdout.write(result["message"])
         if not result["ok"]:
-            raise SystemExit(2)
+            raise SystemExit(EXIT_USAGE)
 
     def _check(self, options):
         repo_root = options["repo_root"]

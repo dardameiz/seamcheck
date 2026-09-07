@@ -58,7 +58,10 @@ closed set (`seamcheck/exitcodes.py`):
 
 `check` is what actually walks this table, through `gate_code()`: 0 clean, 1 on new
 findings, and - only with `--since`, since a bare `check` has nothing to diff against and
-so cannot ask that question - 2 when `REF` has no stored snapshot. Any command, `check`
+so cannot ask that question - 2 when `REF` has no stored snapshot. `2` is `check --since`'s
+alone: a failed `triage` (an id the current scan does not have, a `--status`/`--wrong` word
+outside the fixed set, or an `--undo` with no mark to remove) is a bad argument, not "no
+baseline to compare against", so it returns 3, not 2. Any command, `check` and `triage`
 included, can still stop with 3 or 4 before a scan even runs.
 
 Useful flags: `--format terminal|markdown|html|map|json|sarif|github` · `--out FILE` ·

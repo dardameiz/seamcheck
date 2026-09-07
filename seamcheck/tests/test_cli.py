@@ -8,7 +8,7 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import SimpleTestCase, override_settings
 
-from seamcheck import api
+from seamcheck import api, exitcodes
 
 FIXTURES_DIR = str(Path(__file__).parent / "fixtures")
 _CONFIG = {
@@ -97,8 +97,12 @@ class DumpConnectivityMapTests(SimpleTestCase):
         self.assertEqual(len(calls), 1)
 
     def test_triage_without_status_is_rejected(self):
-        with self.assertRaises(SystemExit):
+        with self.assertRaises(SystemExit) as raised:
             self._run("--triage", "view:whatever")
+
+        # A missing disposition is the command being wrong, not "no baseline to compare
+        # against" - it must be EXIT_USAGE, never EXIT_NO_BASELINE's `2`.
+        self.assertEqual(int(str(raised.exception.code)), exitcodes.EXIT_USAGE)
 
     def test_out_without_format_is_rejected(self):
         # --out is only ever read inside _format_report(); every other path (bare
@@ -541,7 +545,10 @@ class UndoTests(SimpleTestCase):
 
         self.assertEqual(code, 0, out)
         self.assertIn("raised again", out)
-        self.assertEqual(again, 2)
+        # A failed triage (nothing to undo, here) is a bad argument, not "no baseline to
+        # compare against" - EXIT_USAGE, not the bare `2` that used to collide with
+        # EXIT_NO_BASELINE (check --since's own, unrelated question).
+        self.assertEqual(again, exitcodes.EXIT_USAGE)
 
     def test_check_names_a_returned_finding_with_its_date_and_reason(self):
         from seamcheck.triage import TriageEntry, TriageStatus, load_triage, save_triage
