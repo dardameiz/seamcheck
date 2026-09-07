@@ -415,17 +415,32 @@ def _rev_parse(ref: str, repo_root: str) -> str:
     ).stdout.strip()
 
 
-def _marks(graph: Graph, repo_root: str) -> list[TriageEntry]:
-    """The marks, with today's date stamped on any the scan just found expired.
+def _marks(graph: Graph, repo_root: str, *, persist: bool = False) -> list[TriageEntry]:
+    """The marks, with today's date stamped IN MEMORY on any the scan just found expired.
 
-    Every command that reads the marks against a scan comes through here, so the day a
-    mark expired is recorded by whichever scan noticed first - `check` in CI, a report,
-    the map - and never by more than one. A checkout that cannot be written to (CI with
-    a read-only tree) still gets the answer; only the stamp is lost, and the next
-    writable scan lays it down.
+    Every command that reads the marks against a scan comes through here, so every one of
+    them sees an accurate `expired` date on a mark whose evidence just moved out from
+    under it - `check`'s exit code, a report's RETURNED section, the map's cards, all
+    computed from the SAME answer.
+
+    `persist=False` (the default, and every read caller's caller: `check`, `report`, `map`)
+    computes that answer without writing anything - a read must not write, which is what
+    `seamcheck_check`/`seamcheck_report`'s MCP `readOnlyHint: True` annotation actually
+    promises. This used to write unconditionally, so those two "read-only" tools could
+    silently dirty a git-tracked `seamcheck/triage.json` the moment a stale mark was found -
+    exactly the trust break `readOnlyHint` exists to rule out for a client that skips
+    confirmation on a read-only tool.
+
+    `persist=True` is for a caller that is ALREADY a write - `api.write_map` (`scan`,
+    `seamcheck_snapshot`) and `api.triage` (recording a fresh disposition already writes
+    this file) - so the stamp is saved exactly where a person or an agent already expects
+    this repository to be touched, and nowhere else. A checkout that cannot be written to
+    (CI with a read-only tree) still gets the in-memory answer; only the stamp is lost, and
+    the next writable `scan` or `triage` lays it down.
     """
     entries = load_triage(repo_root)
-    if note_expired(entries, stale_entries(graph, entries), dt.date.today().isoformat()):
+    changed = note_expired(entries, stale_entries(graph, entries), dt.date.today().isoformat())
+    if persist and changed:
         with contextlib.suppress(OSError):
             save_triage(entries, repo_root)
     return entries
@@ -748,7 +763,10 @@ def triage(symbol_id: str, status: str, repo_root: str = ".", reason: str = "",
     if symbol is None:
         return {"ok": False, "message": f"No symbol with id `{symbol_id}` in the current scan."}
 
-    entries = [e for e in load_triage(repo_root) if e.symbol_id != symbol_id]
+    # Already a write (the new mark below), so this is also where a DIFFERENT mark this
+    # same scan found freshly stale gets its expiry stamp saved - see _marks()'s own
+    # docstring for why check/report/map, being reads, only ever compute that in memory.
+    entries = [e for e in _marks(graph, repo_root, persist=True) if e.symbol_id != symbol_id]
     entries.append(
         TriageEntry(
             symbol_id=symbol_id,
@@ -773,6 +791,11 @@ def write_map(graph: Graph, repo_root: str = ".") -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(graph_to_dict(graph), indent=2), encoding="utf-8")
     save_snapshot(graph, current_git_sha(repo_root), repo_root)
+    # Already a write (the map above, and the snapshot) - `scan` and `seamcheck_snapshot`
+    # are the other place a mark this same scan found freshly stale gets its expiry
+    # stamp SAVED, not just computed; see _marks()'s own docstring for why check/report/
+    # map, being reads, must never do this themselves.
+    _marks(graph, repo_root, persist=True)
     return str(path)
 
 

@@ -106,11 +106,12 @@ _SCANNER_EXCLUDED = EXCLUDED_DIRS | SKIP_DIRS
 
 # The tool's OWN state, which is not scanner input at all and must never feed the key or
 # the freshness check. Each is written by a different command with no idea the others
-# exist (`seamcheck scan` writes `_SCANS_DIR` and `_MAP_FILE`; `api._marks` rewrites
-# `_TRIAGE_FILE` the moment a read finds an expired mark; `seamcheck observe` writes
-# `_STORE_DIR`; every map render writes `_TREND_PATH`) - so treating any of them as scan
-# input meant the documented "scan, then ask a question" sequence never hit the cache: a
-# write busted the very cache entry the next call in the same repo needed.
+# exist (`seamcheck scan` writes `_SCANS_DIR`, `_MAP_FILE`, and - via `api._marks(...,
+# persist=True)` - any freshly-stale mark's expiry stamp in `_TRIAGE_FILE`; `api.triage`
+# writes `_TRIAGE_FILE` too, for the same reason; `seamcheck observe` writes `_STORE_DIR`;
+# every map render writes `_TREND_PATH`) - so treating any of them as scan input meant the
+# documented "scan, then ask a question" sequence never hit the cache: a write busted the
+# very cache entry the next call in the same repo needed.
 #
 # ONE registry, not five names each with their own exclusion check: `f3f2bff5b` enumerated
 # two of these by hand, a third (`_MAP_FILE`) shipped unregistered one commit later, and

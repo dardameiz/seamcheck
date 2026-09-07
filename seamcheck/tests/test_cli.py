@@ -551,6 +551,14 @@ class UndoTests(SimpleTestCase):
         self.assertEqual(again, exitcodes.EXIT_USAGE)
 
     def test_check_names_a_returned_finding_with_its_date_and_reason(self):
+        # `check` is a read (seamcheck_check is annotated readOnlyHint: True over MCP) and
+        # must never write triage.json - the RETURNED section below is computed from an
+        # in-memory stamp (api._marks(..., persist=False), the default), not one saved to
+        # disk. This used to assert the OPPOSITE (`self.assertTrue(stamped)` on the ON-DISK
+        # entry) as a feature ("the first scan to notice stamps the day") - that was
+        # exactly the write-on-read bug: a "read-only" MCP tool silently dirtying a
+        # git-tracked file. See ScanAndTriagePersistTheExpiryStampTests below for where the
+        # stamp DOES get saved now.
         from seamcheck.triage import TriageEntry, TriageStatus, load_triage, save_triage
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -560,15 +568,108 @@ class UndoTests(SimpleTestCase):
                 why="consumed-by-dependency",
             )], tmp)
             out, _ = self._run("--check", "--repo-root", tmp)
-            stamped = load_triage(tmp)[0].expired
+            on_disk = load_triage(tmp)[0].expired
 
         self.assertIn("returned: fetch:/api/does-not-exist/", out)
         self.assertIn("alice", out)
         self.assertIn("consumed-by-dependency", out)
         self.assertIn("--undo", out)
         self.assertNotIn("mark outlived its finding", out)
-        # The first scan to notice stamps the day; the file is the memory.
-        self.assertTrue(stamped)
+        self.assertEqual(on_disk, "", "a read must never write the expiry stamp to disk")
+
+
+@override_settings(SEAMCHECK_CONFIG=_CONFIG)
+class ScanAndTriagePersistTheExpiryStampTests(SimpleTestCase):
+    """`_marks(..., persist=True)` - the only place the expiry stamp is actually SAVED -
+    is reached from `write_map` (so `scan` and `seamcheck_snapshot` persist it) and from
+    `api.triage` (already a write). `check`/`report`/`map`, all reads, never do."""
+
+    def _git_repo(self, tmp):
+        import subprocess
+
+        subprocess.run(["git", "init", "-q"], cwd=tmp, check=True)
+        subprocess.run(["git", "config", "user.email", "a@example.com"], cwd=tmp, check=True)
+        subprocess.run(["git", "config", "user.name", "a"], cwd=tmp, check=True)
+        # write_map() (`scan`, `seamcheck_snapshot`) needs a real HEAD to key the
+        # snapshot by - `git init` alone has none until the first commit exists.
+        (Path(tmp) / ".gitkeep").write_text("")
+        subprocess.run(["git", "add", "."], cwd=tmp, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=tmp, check=True)
+
+    def test_bare_scan_persists_the_stamp(self):
+        from seamcheck.triage import TriageEntry, TriageStatus, load_triage, save_triage
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self._git_repo(tmp)
+            save_triage([TriageEntry(
+                symbol_id="fetch:/api/does-not-exist/", fingerprint="older-evidence",
+                status=TriageStatus.APPROVED, who="alice", when="2026-08-20", reason="",
+            )], tmp)
+            call_command("seamcheck", "--repo-root", tmp, stdout=StringIO(), stderr=StringIO())
+            on_disk = load_triage(tmp)[0].expired
+
+        self.assertTrue(on_disk, "`scan` writes the snapshot on every run - it must also "
+                                 "save an expiry stamp this same run discovered")
+
+    def test_triage_persists_a_stamp_on_a_different_entry_found_stale_in_the_same_scan(self):
+        from seamcheck.triage import TriageEntry, TriageStatus, load_triage, save_triage
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self._git_repo(tmp)
+            save_triage([TriageEntry(
+                symbol_id="fetch:/api/does-not-exist/", fingerprint="older-evidence",
+                status=TriageStatus.APPROVED, who="alice", when="2026-08-20", reason="",
+            )], tmp)
+            # Mark an UNRELATED symbol - api.triage's own write must also save the OTHER
+            # entry's freshly-discovered expiry stamp, not just the one it was asked for.
+            call_command(
+                "seamcheck", "--triage", "view:seamcheck.tests.fixtures.fixture_views.get_thing",
+                "--status", "approved", "--repo-root", tmp,
+                stdout=StringIO(), stderr=StringIO(),
+            )
+            entries = {e.symbol_id: e for e in load_triage(tmp)}
+
+        self.assertTrue(entries["fetch:/api/does-not-exist/"].expired)
+
+
+@override_settings(SEAMCHECK_CONFIG=_CONFIG)
+class ReadCommandsLeaveGitStatusCleanTests(SimpleTestCase):
+    """The original review's proposed "no side effects" test (review §7): a read command
+    must leave `git status` clean. Reproduced against a REAL git repo, not just an
+    in-memory assertion on the triage file's own contents - `readOnlyHint: True` on
+    `seamcheck_check`/`seamcheck_report` is a promise about the whole working tree."""
+
+    def test_check_against_a_stale_mark_touches_nothing_on_disk(self):
+        import contextlib
+        import subprocess
+
+        from seamcheck.triage import TriageEntry, TriageStatus, save_triage
+
+        with tempfile.TemporaryDirectory() as tmp:
+            subprocess.run(["git", "init", "-q"], cwd=tmp, check=True)
+            subprocess.run(["git", "config", "user.email", "a@example.com"], cwd=tmp, check=True)
+            subprocess.run(["git", "config", "user.name", "a"], cwd=tmp, check=True)
+            save_triage([TriageEntry(
+                symbol_id="fetch:/api/does-not-exist/", fingerprint="older-evidence",
+                status=TriageStatus.APPROVED, who="alice", when="2026-08-20", reason="",
+            )], tmp)
+            subprocess.run(["git", "add", "."], cwd=tmp, check=True)
+            subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=tmp, check=True)
+
+            # --check fails the gate on the fixture's real unresolved fetch target - that
+            # is expected and unrelated to this test, which only cares whether the
+            # WORKING TREE moved. A raised SystemExit is the gate doing its job, not this
+            # assertion's business, so it is swallowed rather than propagated.
+            with contextlib.suppress(SystemExit):
+                call_command("seamcheck", "--check", "--repo-root", tmp,
+                             stdout=StringIO(), stderr=StringIO())
+
+            status = subprocess.run(
+                ["git", "status", "--short"], cwd=tmp, capture_output=True, text=True, check=True,
+            ).stdout
+
+        self.assertEqual(status, "", "check is a read - it must not dirty the working tree:\n"
+                                     f"{status}")
 
 
 @override_settings(SEAMCHECK_CONFIG=_CONFIG)
