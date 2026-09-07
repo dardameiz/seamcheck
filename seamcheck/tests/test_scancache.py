@@ -69,13 +69,102 @@ class ScanCacheTests(SimpleTestCase):
 
     def test_the_version_is_part_of_the_key(self):
         # A cache entry that survives an upgrade is a lie about what this tool would say.
+        # Goes through _scan_tree() directly (there is no longer a `_stamp()` wrapper for
+        # it to call instead - `_stamp` had no caller anywhere but this test, so it was
+        # deleted rather than kept as dead weight; see test_tool_state_writes.py-adjacent
+        # "nothing dead ships" discipline).
         with tempfile.TemporaryDirectory() as root:
             (pathlib.Path(root) / "urls.py").write_text("x = 1")
-            first = scancache._stamp(root)
+            first, _ = scancache._scan_tree(root)
             with mock.patch("seamcheck.scancache._version", return_value="99.0.0"):
-                second = scancache._stamp(root)
+                second, _ = scancache._scan_tree(root)
 
             self.assertNotEqual(first, second)
+
+    def test_the_declared_config_is_part_of_the_key(self):
+        # The bug this closes: two scans of the SAME files, under different
+        # SEAMCHECK_CONFIG, used to hash to the SAME key - so the second one silently got
+        # the first one's graph, built from the wrong config, with nothing anywhere saying
+        # so. See test_the_declared_config_change_is_seen_cross_process below for the
+        # real-world shape (an env-var-driven config, two fresh interpreters) this was
+        # actually caught in.
+        with tempfile.TemporaryDirectory() as root:
+            (pathlib.Path(root) / "urls.py").write_text("x = 1")
+            with mock.patch("seamcheck.scancache.declared_config",
+                            return_value={"urlconf_module": "a"}):
+                first, _ = scancache._scan_tree(root)
+            with mock.patch("seamcheck.scancache.declared_config",
+                            return_value={"urlconf_module": "b"}):
+                second, _ = scancache._scan_tree(root)
+
+            self.assertNotEqual(
+                first, second,
+                "the same files under two different SEAMCHECK_CONFIGs must not share a key")
+
+    def test_a_changed_config_forces_a_rescan_not_a_stale_hit(self):
+        # The end-to-end version of the test above: not just "the key differs" but "the
+        # SECOND call actually rescans instead of serving the first call's graph back".
+        with tempfile.TemporaryDirectory() as root:
+            (pathlib.Path(root) / "urls.py").write_text("x = 1")
+            with mock.patch("seamcheck.api.scan", return_value=_graph()) as scan:
+                with mock.patch("seamcheck.scancache.declared_config",
+                                return_value={"urlconf_module": "a"}):
+                    scancache.cached_scan(root)
+                with mock.patch("seamcheck.scancache.declared_config",
+                                return_value={"urlconf_module": "b"}):
+                    scancache.cached_scan(root)
+
+            self.assertEqual(scan.call_count, 2,
+                              "a config change with the file tree untouched must still "
+                              "force a rescan, not serve the previous config's graph")
+
+    def test_the_declared_config_change_is_seen_cross_process(self):
+        # Reviewer C's exact reproduction: two FRESH interpreters (not two calls sharing
+        # one process's import cache), same files, SEAMCHECK_CONFIG built from an ordinary
+        # `os.environ.get(...)` inside settings.py - the case an in-process test, however
+        # thorough, cannot rule out (django.conf.settings is only ever imported once per
+        # process, so a single test process can never re-observe a SECOND value of an
+        # env-var-driven setting the way two real invocations of `seamcheck` would).
+        import subprocess
+        import sys
+
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as cache_home:
+            (pathlib.Path(root) / "urls.py").write_text("x = 1")
+            project = pathlib.Path(root) / "proj"
+            project.mkdir()
+            (project / "__init__.py").write_text("")
+            (project / "settings.py").write_text(
+                "import os\n"
+                "SECRET_KEY = 'x'\n"
+                "SEAMCHECK_CONFIG = {'urlconf_module': os.environ.get('SC_URLCONF', 'urls_a')}\n"
+            )
+            script = (
+                "import os, sys\n"
+                f"sys.path.insert(0, {str(root)!r})\n"
+                "os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'proj.settings')\n"
+                "import django\n"
+                "django.setup()\n"
+                "from seamcheck import scancache\n"
+                f"key, _ = scancache._scan_tree({root!r})\n"
+                "print(key)\n"
+            )
+
+            def _run(urlconf: str) -> str:
+                env = {**os.environ, "XDG_CACHE_HOME": cache_home, "SC_URLCONF": urlconf}
+                result = subprocess.run(
+                    [sys.executable, "-c", script], env=env,
+                    capture_output=True, text=True, timeout=60,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                return result.stdout.strip()
+
+            key_a = _run("urls_a")
+            key_b = _run("urls_b")
+
+            self.assertNotEqual(
+                key_a, key_b,
+                "two fresh interpreters, same files, different SEAMCHECK_CONFIG (built "
+                "from an env var at settings-import time) must not hash to the same key")
 
     def test_an_input_exactly_as_new_as_the_entry_forces_a_rescan(self):
         # The freshness check is STRICT (`<`, not `<=`): an input whose mtime reads

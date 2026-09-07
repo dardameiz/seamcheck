@@ -5,12 +5,25 @@ five explanations on the reference project were five 90-second scans - and a mis
 id cost the same 88.5 seconds as a correct one, to be told the id was wrong.
 
 The key is a hash of the file tree's SHAPE - every input file's relative path, size and
-mtime - plus the tool version and the Django settings module name. Two things are
-deliberately left out: content, because hashing a 100M-line repository to decide whether to
-scan it would cost more than the scan; and the effective config, because computing it costs
-about seven seconds on the reference project (see `api._config`) and would eat most of the
-win. The settings module name is nearly free and still tells apart two runs that would
-otherwise build different graphs from the same files.
+mtime - plus the tool version, the Django settings module name, and `SEAMCHECK_CONFIG` AS
+WRITTEN (`autoconfig.declared_config()`). Content is deliberately left out: hashing a
+100M-line repository to decide whether to scan it would cost more than the scan. The
+EFFECTIVE config (`autoconfig.effective()`, detection merged with what was declared) is
+left out too, but not for the same reason - `effective()`'s ~7-second auto-detection walk
+would genuinely eat most of the win, and everything it adds ON TOP of `declared_config()`
+is derived from files this walk already hashes (the URLconf, the templates directory, ...),
+so a real change there already moves the key through the file walk alone.
+`declared_config()` itself is a single settings-attribute read - about 89us, measured on
+the reference project - and it is NOT redundant with the file walk: a project that builds
+`SEAMCHECK_CONFIG` from an environment variable at settings-import time (`os.environ.get(
+...)` inside settings.py, an entirely ordinary pattern) can change what a scan means with
+NO file on disk moving at all. Proved cross-process, the way it would actually bite: two
+fresh interpreters, same files, `SEAMCHECK_CONFIG` built from a different env var each time
+- before this hashed the declared config, the second process silently got the first one's
+graph back, wrong URLconf and all, with nothing anywhere saying so. The settings module
+NAME stays in the key too - nearly free, and it still tells apart two runs that would
+otherwise build different graphs from the same files even when neither has set
+`SEAMCHECK_CONFIG` at all.
 
 What this guard actually covers: a cache entry is trusted only when every input file's mtime
 is STRICTLY OLDER than the entry's own timestamp, which is read from the wall clock ONCE,
@@ -238,15 +251,21 @@ def _repo_cache_dir(repo_root: str, env: dict | None = None) -> pathlib.Path:
 def _scan_tree(repo_root: str) -> tuple[str, int]:
     """The key (identity) and the latest mtime seen (freshness), from one walk.
 
-    Identity is (version, settings module, every file's relative path, size and mtime) -
-    mtime included so that an edit which does not change a file's size (a route renamed to
-    another name the same length) still changes the key, rather than being invisible to it.
-    Freshness is judged separately, by the caller, against a cache entry's own timestamp;
-    see the module docstring for what that check does and does not catch.
+    Identity is (version, settings module, declared config, every file's relative path,
+    size and mtime) - mtime included so that an edit which does not change a file's size (a
+    route renamed to another name the same length) still changes the key, rather than being
+    invisible to it. Freshness is judged separately, by the caller, against a cache entry's
+    own timestamp; see the module docstring for what that check does and does not catch.
     """
     digest = hashlib.sha256()
     digest.update(_version().encode())
     digest.update(os.environ.get("DJANGO_SETTINGS_MODULE", "").encode())
+    # declared_config(), never effective() - see the module docstring for the cost gap and
+    # why this alone is enough to close the config-drift gap. sort_keys so two equal dicts
+    # never hash differently because of iteration order; default=str so a value this
+    # module has no reason to expect JSON-serialises to SOMETHING deterministic rather
+    # than raising out of a cache lookup.
+    digest.update(json.dumps(declared_config(), sort_keys=True, default=str).encode())
     root = pathlib.Path(repo_root)
     # Computed ONCE per walk, not per file - a config-driven destination reads
     # SEAMCHECK_CONFIG, and doing that for every file in a large tree would be wasteful
@@ -277,16 +296,6 @@ def _scan_tree(repo_root: str) -> tuple[str, int]:
             digest.update(str(info.st_mtime_ns).encode())
             latest_mtime_ns = max(latest_mtime_ns, info.st_mtime_ns)
     return digest.hexdigest()[:32], latest_mtime_ns
-
-
-def _stamp(repo_root: str) -> str:
-    """The key: the file tree's shape, the tool version, and the settings module.
-
-    Not the effective config - see the module docstring for why.
-    """
-    repo_root = str(pathlib.Path(repo_root).resolve())
-    key, _ = _scan_tree(repo_root)
-    return key
 
 
 def _path(repo_root: str, key: str, env: dict | None = None) -> pathlib.Path:
