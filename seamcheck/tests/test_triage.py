@@ -9,8 +9,10 @@ from seamcheck.triage import (
     TriageEntry,
     TriageStatus,
     apply_triage,
+    blocking_ids,
     fingerprint_for_symbol,
     has_blocking_findings,
+    judged_ids,
     load_triage,
     note_expired,
     remove_mark,
@@ -144,6 +146,76 @@ class BlockingTests(SimpleTestCase):
 
         annotated = apply_triage(graph, [stale, valid])
         self.assertIn("[triage:approved]", annotated.symbols[0].note)
+
+
+class BlockingIdsTests(SimpleTestCase):
+    """`blocking_ids()` is the predicate `has_blocking_findings()` (the CI gate) and
+    `queries.findings(only_blocking=True)` (what feeds SARIF/GitHub annotations) both
+    derive from now, so the two can no longer independently disagree about a CONFIRMED
+    finding the way they used to - see test_report.py's SarifBlockingParityTests for
+    the end-to-end proof that the rendered SARIF and the gate now agree."""
+
+    def test_an_untriaged_finding_is_blocking(self):
+        symbol = _symbol()
+        graph = Graph(symbols=[symbol], edges=[])
+
+        self.assertEqual(blocking_ids(graph, []), {symbol.id})
+
+    def test_an_approved_finding_is_not_blocking(self):
+        symbol = _symbol()
+        graph = Graph(symbols=[symbol], edges=[])
+
+        self.assertEqual(blocking_ids(graph, [_entry(symbol)]), set())
+
+    def test_a_confirmed_finding_is_still_blocking(self):
+        # The exact case api._findings_report() and queries.findings()'s old default
+        # disagreed on: has_blocking_findings() said True, queries.findings() excluded
+        # it from the rendered SARIF/GitHub output entirely.
+        symbol = _symbol()
+        graph = Graph(symbols=[symbol], edges=[])
+
+        self.assertEqual(
+            blocking_ids(graph, [_entry(symbol, TriageStatus.CONFIRMED)]), {symbol.id})
+
+    def test_a_connected_symbol_is_never_blocking_regardless_of_marks(self):
+        symbol = _symbol(status=Status.CONNECTED)
+        graph = Graph(symbols=[symbol], edges=[])
+
+        self.assertEqual(blocking_ids(graph, []), set())
+
+    def test_agrees_with_has_blocking_findings_on_a_mixed_graph(self):
+        untriaged = _symbol(id_="untriaged")
+        approved = _symbol(id_="approved")
+        confirmed = _symbol(id_="confirmed")
+        connected = _symbol(id_="connected", status=Status.CONNECTED)
+        graph = Graph(symbols=[untriaged, approved, confirmed, connected], edges=[])
+        entries = [_entry(approved, TriageStatus.APPROVED),
+                  _entry(confirmed, TriageStatus.CONFIRMED)]
+
+        self.assertEqual(blocking_ids(graph, entries), {"untriaged", "confirmed"})
+        self.assertEqual(has_blocking_findings(graph, entries), bool(blocking_ids(graph, entries)))
+
+
+class JudgedIdsTests(SimpleTestCase):
+    """`unverified()`'s queue and `queries.findings()` both reuse this one predicate for
+    "has a person recorded an opinion about this symbol", so the two answers can never
+    silently drift into disagreeing about what "judged" means."""
+
+    def test_a_marked_symbol_is_judged(self):
+        symbol = _symbol()
+
+        self.assertEqual(judged_ids([_entry(symbol)]), {symbol.id})
+
+    def test_an_unmarked_symbol_is_not(self):
+        self.assertEqual(judged_ids([]), set())
+
+    def test_a_mark_whose_evidence_has_since_changed_is_still_judged(self):
+        # Looser than valid_triage_ids/has_blocking_findings on purpose: a stale mark
+        # still means a person looked at this id at some point, which is exactly what a
+        # "nobody has judged this yet" queue must not re-offer.
+        stale = _entry(_symbol(snippet="old code"))
+
+        self.assertEqual(judged_ids([stale]), {stale.symbol_id})
 
 
 class ReturnedTests(SimpleTestCase):

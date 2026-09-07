@@ -17,7 +17,30 @@ Coverage and precision have **different denominators** and neither is meaningful
 backend that answered `uncertain` everywhere would score 100% precision and be useless.
 `uncertain` is not counted as a claim in precision, because it is not a claim.
 
-## Unreleased
+## 0.12.0 - 2026-09-07
+
+**The CLI and the MCP server, rebuilt for agents.** Both worked for a person and were hostile
+to a program: answers were unbounded (one command returned 72 MB on a real project), every
+question paid a fresh ~90-second scan, and a documented exit code did not exist.
+
+- **Fixed** - the CI gate always exited 0 off Django. Forty-seven unresolved findings, green build.
+- **Fixed** - the scan cache served a graph built under a different `SEAMCHECK_CONFIG`, silently,
+  across processes.
+- **Fixed** - `check`, `report` and `map` wrote to the git-tracked `triage.json` on a read, while
+  the MCP tools told clients they were read-only.
+- **Fixed** - `findings`, `symbols` and `diff` reported failure in the body and success to the shell.
+- **Fixed** - `check --format sarif` could fail a build over a finding the SARIF file did not contain.
+- **Fixed** - `--format` accepted eight values and its error message named three.
+- **Added** - one JSON envelope, documented exit and error codes, `symbols` / `findings` / `diff`,
+  SARIF and GitHub annotations, a scan cache, and twelve MCP tools with schemas, enums and
+  read-only annotations.
+- **Changed** - both doors now read one flag table, so a flag cannot work on `manage.py seamcheck`
+  and be silently ignored by `seamcheck`.
+
+Known and unfixed: `map` blocks until Ctrl-C; the two doors still differ on some exit codes.
+
+### Earlier in this release
+
 
 ### A function, and the pages it happens on
 

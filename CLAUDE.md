@@ -42,6 +42,42 @@ grow up on. A commit may not:
 
 Record the before/after numbers in the commit message when they move.
 
+## `docs/FINDINGS-FROM-POINTLESSBUTTON.md` — written there, closed here
+
+**Two sets of agents share one file, and each has exactly one job in it.**
+
+- **Agents working in the `pointlessbutton` repository WRITE it.** That project is the
+  measurement surface: ~500k lines of real Django/JS/CSS that seamcheck did not grow up on.
+  When a scan there produces a wrong answer, a missing check, or a false-positive class, they
+  append the finding with its counts, the file it came from, and what they expected instead.
+  They do not implement anything in this repository.
+- **Agents working HERE implement them, and mark them implemented in that same file.** A
+  finding is not closed by a commit; it is closed by the entry saying so. Add the outcome
+  next to the finding — fixed / won't fix / already correct — with the commit SHA and the
+  re-measured numbers where there are any. The file's own "Verified fixed" tables are the
+  format to follow.
+
+**Read an entry to its end before implementing it.** This is a long-running log, appended over
+many sessions, and later entries correct earlier ones: one section is titled *"Correction: F28
+is WRONG, and backwards. Please do not implement it as written."* An agent working the list
+top-to-bottom implements the retracted version. Grep the id (`F28`, `T5`, `C7`) across the
+whole file and read every hit before touching code.
+
+**Never edit their half.** Do not rewrite, condense, or re-order a finding to make it tidier —
+their counts and raw numbers are the evidence, and this repository's whole premise is that a
+claim without evidence is worthless. Append your outcome; leave their text alone.
+
+**Not every entry is a bug.** The file records out-of-scope items deliberately, so they are not
+chased twice — a style-policy question a connectivity model cannot answer is correctly
+something seamcheck says nothing about. "The tool did not flag it" and "the tool should have
+flagged it" are different statements; only implement the second.
+
+**Concurrency:** that file is often being appended to by the other project's session while you
+work. Never `git add -A` or `git commit -a` in this repository — stage your own paths
+explicitly, and re-check `git status` immediately before committing. **A plain `git checkout`
+of a shared file will silently destroy the other session's uncommitted work** — this section
+itself was wiped that way once.
+
 ## What this is
 
 Seamcheck reads a project's source and reports what connects to what — specifically across

@@ -9,19 +9,21 @@ import os
 import pathlib
 
 from seamcheck.diff import DiffResult, diff_graphs
+from seamcheck.exitcodes import NO_BASELINE
 from seamcheck.extractors.preprocessor_extractor import preprocessor_files
 from seamcheck.graph import Graph, Status, relativise
 from seamcheck.nodetools import report as _notify
 from seamcheck.pipeline import SCAN_PHASES, one_row_per_id, run_scan
 from seamcheck.progress import Progress, null
 from seamcheck.roots import discover_css_files, discover_js_roots, tailwind_classes
-from seamcheck.snapshot import current_git_sha, load_snapshot, save_snapshot
+from seamcheck.snapshot import _MAP_FILE, current_git_sha, load_snapshot, save_snapshot
 from seamcheck.triage import (
     TriageEntry,
     TriageStatus,
     apply_triage,
     fingerprint_for_symbol,
     has_blocking_findings,
+    judged_ids,
     load_triage,
     note_expired,
     remove_mark,
@@ -362,6 +364,26 @@ def explain(graph: Graph, symbol_id: str) -> str:
     return "\n".join(line for line in lines if line != "")
 
 
+def explain_with_hint(graph: Graph, symbol_id: str, repo_root: str = ".") -> str:
+    """`explain`, plus - on a miss - the ids closest to the one that was typed.
+
+    A wrong id used to cost the same full scan as a correct one only to be told `No symbol
+    with id ...`, 88.5 seconds on the reference project for that sentence alone. `graph` is
+    already in hand here - both CLI doors scan before calling this - so the near-match
+    lookup (`queries.near`) is handed that graph directly rather than paying for a second
+    scan right behind the first.
+    """
+    text = explain(graph, symbol_id)
+    if not text.startswith("No symbol with id"):
+        return text
+    from seamcheck import queries
+
+    suggestions = queries.near(repo_root, symbol_id, graph=graph)
+    if not suggestions:
+        return text
+    return text + "\n\nDid you mean:\n" + "\n".join(f"  {s}" for s in suggestions)
+
+
 def diff_against(graph: Graph, ref: str, repo_root: str = ".") -> tuple[DiffResult | None, str, str]:
     """Diff `graph` against the snapshot for `ref`, or say plainly that there isn't one.
 
@@ -378,7 +400,10 @@ def diff_against(graph: Graph, ref: str, repo_root: str = ".") -> tuple[DiffResu
 
     baseline = load_snapshot(sha, repo_root)
     if baseline is None:
-        return None, sha, f"No baseline snapshot stored for {sha[:12]} yet - nothing to diff against."
+        # The NO_BASELINE prefix is load-bearing: gate_code() reads it to tell "nothing to
+        # compare against" (exit 2, first run) apart from "found something wrong" (exit 1).
+        # Do not reword it without updating seamcheck/exitcodes.py and its tests.
+        return None, sha, f"{NO_BASELINE} for {sha[:12]} yet - nothing to diff against."
     return diff_graphs(baseline, graph, load_triage(repo_root)), sha, ""
 
 
@@ -390,36 +415,100 @@ def _rev_parse(ref: str, repo_root: str) -> str:
     ).stdout.strip()
 
 
-def _marks(graph: Graph, repo_root: str) -> list[TriageEntry]:
-    """The marks, with today's date stamped on any the scan just found expired.
+def _marks(graph: Graph, repo_root: str, *, persist: bool = False) -> list[TriageEntry]:
+    """The marks, with today's date stamped IN MEMORY on any the scan just found expired.
 
-    Every command that reads the marks against a scan comes through here, so the day a
-    mark expired is recorded by whichever scan noticed first - `check` in CI, a report,
-    the map - and never by more than one. A checkout that cannot be written to (CI with
-    a read-only tree) still gets the answer; only the stamp is lost, and the next
-    writable scan lays it down.
+    Every command that reads the marks against a scan comes through here, so every one of
+    them sees an accurate `expired` date on a mark whose evidence just moved out from
+    under it - `check`'s exit code, a report's RETURNED section, the map's cards, all
+    computed from the SAME answer.
+
+    `persist=False` (the default, and every read caller's caller: `check`, `report`, `map`)
+    computes that answer without writing anything - a read must not write, which is what
+    `seamcheck_check`/`seamcheck_report`'s MCP `readOnlyHint: True` annotation actually
+    promises. This used to write unconditionally, so those two "read-only" tools could
+    silently dirty a git-tracked `seamcheck/triage.json` the moment a stale mark was found -
+    exactly the trust break `readOnlyHint` exists to rule out for a client that skips
+    confirmation on a read-only tool.
+
+    `persist=True` is for a caller that is ALREADY a write - `api.write_map` (`scan`,
+    `seamcheck_snapshot`) and `api.triage` (recording a fresh disposition already writes
+    this file) - so the stamp is saved exactly where a person or an agent already expects
+    this repository to be touched, and nowhere else. A checkout that cannot be written to
+    (CI with a read-only tree) still gets the in-memory answer; only the stamp is lost, and
+    the next writable `scan` or `triage` lays it down.
     """
     entries = load_triage(repo_root)
-    if note_expired(entries, stale_entries(graph, entries), dt.date.today().isoformat()):
+    changed = note_expired(entries, stale_entries(graph, entries), dt.date.today().isoformat())
+    if persist and changed:
         with contextlib.suppress(OSError):
             save_triage(entries, repo_root)
     return entries
 
 
-def check(repo_root: str = ".", graph: Graph | None = None) -> dict:
+def check(repo_root: str = ".", graph: Graph | None = None, since: str | None = None) -> dict:
+    """The CI gate's answer: passed or not, and everything CI might want to say why.
+
+    A bare check (`since=None`) asks "does the current scan have any untriaged blocking
+    finding at all" - baseline or backlog included - matching the promise in
+    `exitcodes.gate_code`'s docstring that a bare check never returns `EXIT_NO_BASELINE`.
+
+    Passing `since` asks the other question, "what did THIS change introduce": `passed`
+    then means the diff against that ref added nothing new, so a project with an existing
+    backlog can turn the gate on without every old finding blocking every future build.
+    The two must not be conflated - `--check --format X --since REF` (the CI use case
+    `docs/ci.md` documents) called this with no way to pass `since` at all until this
+    parameter existed, so it was always judged by the bare-check question and could never
+    report "no baseline yet" (exit 2) the way `--since` alone always could.
+
+    A THIRD outcome exists when `since` is given and cannot be resolved at all - a typo, a
+    CI variable that came through empty, a ref this checkout genuinely does not have.
+    `diff_against` returns `sha == ""` for exactly that case (see its own docstring) and
+    otherwise never does, so that is the signal used here to set `"bad_ref"` rather than
+    falling through to the bare-check question: a mistyped `$BASE_SHA` is the COMMAND being
+    wrong, not "nothing to compare yet", and conflating the two let it silently read as a
+    clean first run instead of the usage error it is. `queries.diff()` already makes this
+    same distinction with its own `no_git` failure code; this must not be the weaker one.
+
+    A caller that already has a graph (both CLI doors' own "scan once, share it between
+    the digest and the exit code" combos) passes it straight through; only a caller with
+    NO graph in hand - MCP's `seamcheck_check`, and the plain CLI door's own `check`
+    branch, which never pre-scans - pays for a scan here, and pays the CACHED price
+    (`scancache.cached_scan`) rather than a fresh one every time. This is the exact call
+    the review measured a mistyped `explain` at 88.5s for; `check` is the natural next
+    call in the same agent loop and used to cost the same uncached scan again.
+    """
     if graph is None:
-        graph = scan(repo_root)
+        from seamcheck.scancache import cached_scan
+
+        graph, _how = cached_scan(repo_root)
     from seamcheck.report import mark_dict
 
     entries = _marks(graph, repo_root)
     graph = apply_triage(graph, entries)
-    result, _, message = diff_against(graph, "HEAD", repo_root)
+    result, sha, message = diff_against(graph, since or "HEAD", repo_root)
+
+    if since and not sha:
+        return {
+            "passed": False,
+            "message": f"Could not resolve `{since}` as a git ref - check the value.",
+            "bad_ref": since,
+            "new_unresolved": [], "new_unused": [], "triage_invalidated": [], "returned": [],
+            "counts": {
+                status.value: sum(1 for s in graph.symbols if s.status is status)
+                for status in Status
+            },
+        }
 
     def _ids(symbols):
         return [{"id": s.id, "label": s.label, "kind": s.kind, "note": s.note} for s in symbols]
 
+    passed = not has_blocking_findings(graph, entries)
+    if since and not message:
+        passed = not (result.new_unresolved or result.new_unused or result.triage_invalidated)
+
     return {
-        "passed": not has_blocking_findings(graph, entries),
+        "passed": passed,
         "message": message,
         "new_unresolved": _ids(result.new_unresolved) if result else [],
         "new_unused": _ids(result.new_unused) if result else [],
@@ -433,22 +522,37 @@ def check(repo_root: str = ".", graph: Graph | None = None) -> dict:
     }
 
 
+# `seamcheck json` on the reference project is 72.6 MB - about 18 million tokens - and it
+# is the format the code names as the agent interface, so an agent that reads it to answer
+# one question has already lost before it reaches a symbol. `queries.findings`/`symbols`
+# answer the same questions in a few KB; past this many characters of rendered JSON, this
+# is the one place (every caller of `report()` passes through it: the management command,
+# the plain CLI, the MCP server) that refuses instead of dumping it.
+JSON_WARN = 2_000_000
+
+
 def report(
     repo_root: str = ".", fmt: str = "terminal", ref: str = "HEAD", graph: Graph | None = None,
-    progress: Progress | None = None,
+    progress: Progress | None = None, full: bool = False,
 ) -> str:
-    """Render the report. One model, chosen serializer - ordering lives in report.py."""
+    """Render the report. One model, chosen serializer - ordering lives in report.py.
+
+    `full=True` is the only way past the JSON_WARN size gate below - raises `TooLarge`
+    (see `seamcheck.envelope`) rather than exiting the process, because this is a library
+    function the MCP server calls too, and a server has no process to exit.
+    """
     from seamcheck.extractors.js_extractor import clear_parse_cache
 
     try:
-        return _report(repo_root, fmt, ref, graph, progress)
+        return _report(repo_root, fmt, ref, graph, progress, full)
     finally:
         # The parsed ASTs served every extractor and the map's page attribution; a
         # long-lived process (the MCP server) should not keep a repository's worth.
         clear_parse_cache()
 
 
-def _report(repo_root, fmt, ref, graph, progress) -> str:
+def _report(repo_root, fmt, ref, graph, progress, full=False) -> str:
+    from seamcheck.cliflags import FORMATS
     from seamcheck.renderers import html as html_renderer
     from seamcheck.renderers import markdown as markdown_renderer
     from seamcheck.renderers import terminal as terminal_renderer
@@ -465,20 +569,52 @@ def _report(repo_root, fmt, ref, graph, progress) -> str:
         # The review sections live inside the map now: one document, one link, one render
         # of the same scan. Kept as an alias so an existing caller does not break.
         return _render_map(repo_root, ref, progress)
-    if fmt not in renderers and fmt not in ("map", "console", "json"):
-        raise ValueError(f"Unknown format {fmt!r}. Use one of: {', '.join(sorted(renderers))}.")
+    # FORMATS (cliflags.py) is the one place the accepted set lives - not `renderers`
+    # unioned with a second, hand-typed tuple here, and not restated a third time in the
+    # refusal below: those three used to be free to disagree, and the refusal message
+    # alone knew about a THIRD of the real set.
+    if fmt not in FORMATS:
+        raise ValueError(f"Unknown format {fmt!r}. Use one of: {', '.join(sorted(FORMATS))}.")
 
+    # Resolved BEFORE the sarif/github branch below, not just before json/the renderers -
+    # `--check --format sarif` (the exact command docs/ci.md prescribes) already built this
+    # graph to answer the exit code, and returning early here used to discard it, paying for
+    # a second ~168-second scan through `_findings_report` -> `queries.findings` just to
+    # render the digest the first scan could already answer.
+    #
+    # A caller with no graph in hand (MCP's `seamcheck_report`, and the plain CLI door's
+    # `report`/`--format`/`sarif`/`github`/`json` rendering, none of which pre-scan) pays
+    # for the scan HERE - through the cache, not a fresh scan every time, the same reuse
+    # `symbols`/`findings`/`diff` already got. `progress` goes unused on that path (there
+    # is nothing to report progress on above a cache hit; a cache miss still runs the real
+    # scan, just without a bar) - it stays a parameter because `map`/`console` above still
+    # need it.
     if graph is None:
-        graph = scan(repo_root, progress)
+        from seamcheck.scancache import cached_scan
+
+        graph, _how = cached_scan(repo_root)
+    if fmt in ("sarif", "github"):
+        # A different question from the other formats: not "what changed since ref" but
+        # "what is wrong right now" - GitHub's own code-scanning baseline does the
+        # new-vs-existing bookkeeping from each result's fingerprint, so this renders the
+        # current findings list, the same one `queries.findings()` answers with, rather
+        # than the snapshot-diff Report the other formats build. Kept here rather than in
+        # just one caller for the same reason `json` moved here: a format that only works
+        # through the Django management command is the one an agent's own script hits.
+        return _findings_report(repo_root, fmt, graph)
     if fmt == "json":
         # The whole graph, for a script or an agent. Used to live only in the Django
         # management command, so `seamcheck json` on any other backend printed the
         # terminal report instead - and the agent-facing format was the one that broke.
         import json as _json
 
+        from seamcheck.envelope import TooLarge
         from seamcheck.graph import graph_to_dict
 
-        return _json.dumps(graph_to_dict(graph), indent=2)
+        text = _json.dumps(graph_to_dict(graph), indent=2)
+        if len(text) > JSON_WARN and not full:
+            raise TooLarge(len(text), len(text) // 4)
+        return text
     diff, baseline_sha, message = diff_against(graph, ref, repo_root)
     try:
         sha = current_git_sha(repo_root)
@@ -500,6 +636,40 @@ def _report(repo_root, fmt, ref, graph, progress) -> str:
     return renderers[fmt](built)
 
 
+def _findings_report(repo_root: str, fmt: str, graph: Graph | None = None) -> str:
+    """SARIF or GitHub workflow-command text, from the current findings list.
+
+    A high limit rather than none: a pull request that would annotate 10,000 lines is
+    telling you something other than what any one line says.
+
+    `graph` - when the caller already has one - is passed straight through to
+    `queries.findings()` instead of letting it scan again; see `_report()`.
+    """
+    from seamcheck import queries
+    from seamcheck.renderers import github as github_renderer
+    from seamcheck.renderers import sarif as sarif_renderer
+
+    # only_blocking=True, not the default: "what is wrong" here has to mean exactly what
+    # `check`'s gate (has_blocking_findings) means, because this IS the artifact CI reads
+    # to explain why the gate failed. The plain default (queries.findings()'s own
+    # "exclude anything judged") would also exclude a CONFIRMED finding - a real bug
+    # someone has already acknowledged, which the gate still fails the build on by
+    # design - so `check --format sarif` could exit 1 over a finding the SARIF file
+    # itself said nothing about. An APPROVED/DEFERRED finding is still excluded either
+    # way: only CONFIRMED is the one status these two predicates used to disagree on.
+    rows = queries.findings(repo_root, limit=10_000, only_blocking=True,
+                            graph=graph)["data"]["findings"]
+    try:
+        sha = current_git_sha(repo_root)
+    except Exception:  # noqa: BLE001 - a directory that is not a git checkout still has
+        # findings worth rendering; SARIF's revisionId is just left blank rather than the
+        # render failing outright.
+        sha = ""
+    if fmt == "sarif":
+        return sarif_renderer.render(rows, sha=sha, repo=repo_root)
+    return github_renderer.render(rows)
+
+
 def unverified(repo_root: str = ".", limit: int = 25, kind: str = "") -> dict:
     """Claims nobody has judged yet, so an agent can work a queue instead of a wall.
 
@@ -511,9 +681,16 @@ def unverified(repo_root: str = ".", limit: int = 25, kind: str = "") -> dict:
 
     Ordered worst-kind-first and capped, because a queue of twenty-five is worked and a
     queue of three thousand is closed.
+
+    Only reachable through MCP's `seamcheck_unverified` (neither CLI door exposes it), and
+    that tool never pre-scans, so this always pays for the scan itself - through the
+    cache, like `explain`/`check`/`report`, rather than a fresh scan on every call in the
+    documented `unverified` -> `explain` -> `triage` -> `check` loop.
     """
-    graph = scan(repo_root)
-    judged = {entry.symbol_id for entry in load_triage(repo_root)}
+    from seamcheck.scancache import cached_scan
+
+    graph, _how = cached_scan(repo_root)
+    judged = judged_ids(load_triage(repo_root))
     claims = [
         symbol for symbol in graph.symbols
         if symbol.status in (Status.UNRESOLVED, Status.UNUSED)
@@ -591,7 +768,10 @@ def triage(symbol_id: str, status: str, repo_root: str = ".", reason: str = "",
     if symbol is None:
         return {"ok": False, "message": f"No symbol with id `{symbol_id}` in the current scan."}
 
-    entries = [e for e in load_triage(repo_root) if e.symbol_id != symbol_id]
+    # Already a write (the new mark below), so this is also where a DIFFERENT mark this
+    # same scan found freshly stale gets its expiry stamp saved - see _marks()'s own
+    # docstring for why check/report/map, being reads, only ever compute that in memory.
+    entries = [e for e in _marks(graph, repo_root, persist=True) if e.symbol_id != symbol_id]
     entries.append(
         TriageEntry(
             symbol_id=symbol_id,
@@ -612,10 +792,15 @@ def write_map(graph: Graph, repo_root: str = ".") -> str:
 
     from seamcheck.graph import graph_to_dict
 
-    path = pathlib.Path(repo_root) / "docs" / "maps" / "connectivity-map.json"
+    path = pathlib.Path(repo_root) / _MAP_FILE
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(graph_to_dict(graph), indent=2), encoding="utf-8")
     save_snapshot(graph, current_git_sha(repo_root), repo_root)
+    # Already a write (the map above, and the snapshot) - `scan` and `seamcheck_snapshot`
+    # are the other place a mark this same scan found freshly stale gets its expiry
+    # stamp SAVED, not just computed; see _marks()'s own docstring for why check/report/
+    # map, being reads, must never do this themselves.
+    _marks(graph, repo_root, persist=True)
     return str(path)
 
 

@@ -59,6 +59,11 @@ If the MCP server is attached, prefer these over shelling out:
 - `seamcheck_report(fmt, repo_root)` — the rendered digest (`terminal`, `markdown`, `html`)
 - `seamcheck_explain(symbol_id, repo_root)` — one symbol's evidence as markdown
 - `seamcheck_triage(symbol_id, status, repo_root, reason)` — record a disposition
+- `seamcheck_findings(repo_root, file, kind, status, owner, limit, cursor)` — what is wrong,
+  filtered and bounded - START HERE for a question already scoped to one file
+- `seamcheck_symbols(repo_root, search, kind, limit)` — turn a name into an id
+- `seamcheck_diff(repo_root, since, limit)` — what a commit changed
+- `seamcheck_snapshot(repo_root)` — write the baseline `check`/`diff` compare against
 
 ## The workflow you are probably being asked to run
 

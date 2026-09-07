@@ -364,6 +364,20 @@ def _declared() -> dict:
         return {}
 
 
+def declared_config() -> dict:
+    """The public name for `_declared()` - just `SEAMCHECK_CONFIG` as written, none of
+    `effective()`'s auto-detection merged in (that costs ~7 seconds on the reference
+    project; see `scancache`'s own module docstring for why a caller on a hot path must
+    reach for THIS, never `effective()`).
+
+    `scancache.py` calls this rather than `_declared()` directly - a module reaching
+    across a package boundary into another module's underscore-prefixed name is a
+    layering smell the next refactor of either module could break silently, with nothing
+    to say so. `_declared()` stays, private, for `effective()`'s own use in this module.
+    """
+    return _declared()
+
+
 def effective(repo_root: str = ".") -> tuple[dict, dict[str, str]]:
     """The config a scan will actually use: what was written, over what was detected.
 

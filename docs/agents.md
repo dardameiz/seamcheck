@@ -33,8 +33,17 @@ pip install 'seamcheck[mcp]'
 claude mcp add seamcheck -- seamcheck-mcp
 ```
 
+**`seamcheck_unverified` is the first call.** It is the queue, worst-first: findings nobody
+has judged yet, each row carrying the file, the line and the note so the agent can open the
+code and decide without another round trip. The loop the rest of the tools exist to close
+is: `seamcheck_unverified` → read the code at that line → `seamcheck_triage` with a `why`
+from `seamcheck_why_wrong` → `seamcheck_share` to build a code-free report → **show it to
+you and ask before sending**. No tool here makes a network call; step five is a person's
+decision, not the agent's.
+
 | tool | what the agent gets |
 |---|---|
+| `seamcheck_unverified` | findings nobody has judged yet, worst-first - the queue to work through, start here |
 | `seamcheck_check` | every finding, with counts, what is new since the last scan, and what has `returned` — marked fine once, evidence since changed |
 | `seamcheck_explain` | one symbol: where it is, how it was reached, why it is classified so |
 | `seamcheck_report` | the digest as markdown, to paste into a PR |
@@ -42,6 +51,10 @@ claude mcp add seamcheck -- seamcheck-mcp
 | `seamcheck_services` | which services this repository declares, and which are deployable |
 | `seamcheck_share` | the code-free scan report, for an agent to show you before you send it |
 | `seamcheck_why_wrong` | the nine fixed reasons, so an agent can pick one when it triages |
+| `seamcheck_findings` | what is wrong, filtered by file/kind/status/owner and bounded - the other place to start, once the question is already scoped to one file |
+| `seamcheck_symbols` | find a symbol id by name, before spending a call on explain or triage |
+| `seamcheck_diff` | what appeared, vanished or changed status since a ref - "what did this commit break" |
+| `seamcheck_snapshot` | write the baseline `check`/`diff` compare against - previously only the CLI could |
 
 The server talks over stdin/stdout — no port, no daemon. Run it with the agent's working
 directory set to the project root. **For a Django project it has to run inside that

@@ -6,7 +6,8 @@ from unittest import mock
 
 from django.test import SimpleTestCase, override_settings
 
-from seamcheck.mcp_server import seamcheck_check, seamcheck_explain, seamcheck_triage
+from seamcheck.envelope import TooLarge
+from seamcheck.mcp_server import seamcheck_check, seamcheck_explain, seamcheck_report, seamcheck_triage
 
 FIXTURES_DIR = str(Path(__file__).parent / "fixtures")
 _CONFIG = {
@@ -35,6 +36,14 @@ class McpToolFunctionTests(SimpleTestCase):
     def test_explain_is_honest_about_an_unknown_symbol(self):
         self.assertIn("No symbol", seamcheck_explain("view:nope", repo_root="."))
 
+    def test_explain_suggests_a_near_id_on_a_miss(self):
+        # The CLI and the MCP server must never disagree about what a typo meant - both
+        # go through api.explain_with_hint now, not just api.explain.
+        text = seamcheck_explain(GET_THING[:-1], repo_root=".")  # GET_THING minus its last char
+
+        self.assertIn("Did you mean", text)
+        self.assertIn(GET_THING, text)
+
     def test_triage_rejects_an_unknown_status(self):
         result = seamcheck_triage(GET_THING, "bogus", repo_root=".")
 
@@ -61,8 +70,52 @@ class McpToolFunctionTests(SimpleTestCase):
         self.assertEqual(
             registered,
             {"seamcheck_check", "seamcheck_explain", "seamcheck_triage", "seamcheck_report",
-             "seamcheck_services", "seamcheck_unverified", "seamcheck_share", "seamcheck_why_wrong"},
+             "seamcheck_services", "seamcheck_unverified", "seamcheck_share", "seamcheck_why_wrong",
+             "seamcheck_findings", "seamcheck_symbols", "seamcheck_diff", "seamcheck_snapshot"},
         )
+
+
+class ExplainCachedScanTests(SimpleTestCase):
+    """`seamcheck_explain` used to call `api.scan()` directly - the exact call the review
+    measured at 88.5 seconds for a mistyped id, the second step of the documented
+    unverified -> explain -> triage -> check agent loop. It now shares the same cache
+    `seamcheck_symbols`/`seamcheck_findings`/`seamcheck_diff` already use."""
+
+    def test_explain_goes_through_the_cache_not_a_fresh_scan(self):
+        from seamcheck.graph import Graph
+
+        empty = Graph(symbols=[], edges=[])
+        with (
+            mock.patch("seamcheck.scancache.cached_scan",
+                       return_value=(empty, {"cached": True, "seconds": 0.0})) as cached_scan,
+            mock.patch("seamcheck.api.scan") as scan,
+        ):
+            seamcheck_explain("url:x", repo_root=".")
+
+        cached_scan.assert_called_once_with(".")
+        scan.assert_not_called()
+
+
+class ReportSizeGateTests(SimpleTestCase):
+    """A tool call must return an answer, never an exception - `TooLarge` escaping here
+    would crash the whole server process, not just refuse one oversized request.
+
+    `fmt="html"`, not `fmt="json"`: json (and map) are now refused by seamcheck_report
+    itself before api.report is ever called (see test_mcp_protocol.ReportFormatGateTests),
+    so json can no longer reach the `except TooLarge` branch this test exists to cover.
+    """
+
+    def test_too_large_becomes_a_coded_failure_not_an_escaped_exception(self):
+        with mock.patch("seamcheck.api.report", side_effect=TooLarge(72_800_000, 18_200_000)):
+            result = seamcheck_report(fmt="html", repo_root=".")
+
+        # A coded failure is a CallToolResult with isError set (mcp_server._tool_result),
+        # not a plain dict a caller has to parse to notice - see FailedEnvelopeIsErrorTests
+        # for why that distinction is the whole point of this fix.
+        self.assertTrue(result.isError)
+        self.assertFalse(result.structuredContent["ok"])
+        self.assertEqual(result.structuredContent["error"]["code"], "too_large")
+        self.assertIn("seamcheck_findings", result.structuredContent["error"]["hint"])
 
 
 class UndoTests(SimpleTestCase):

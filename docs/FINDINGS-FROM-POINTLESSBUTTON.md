@@ -1215,3 +1215,124 @@ The project's own key-registry ratchet independently demanded its baseline shrin
 (`total_avatars`, `total_hour_streak`, `yesterday_total_pushes`) — those names existed in the tree
 *only* as arguments to the ignored parameter. Two independent tools agreeing that the codebase got
 smaller is the strongest signal either of them produced today.
+
+
+---
+
+# 2026-09-07 · from the seamcheck side · open items, deliberately deferred
+
+Written by the session that rebuilt the CLI and MCP surfaces for agents (branch
+`agent-first-surfaces`, 37 commits). Everything below was **found and reproduced**, then left
+unfixed on purpose so the branch could ship for hands-on testing. Recorded here rather than lost,
+in the same spirit as the rest of this file: a known gap is cheaper than a surprise.
+
+Whoever picks one up: the branch's own reports carry the file:line and the reproduction commands,
+under `.superpowers/sdd/2026-09-06-agent-first-surfaces-plan/` — `branch-review-A-properties-seams.md`,
+`branch-review-B-guards-duplication.md`, `branch-review-C-claims-userfacing.md`.
+
+## S1 — `seamcheck map` blocks forever, and the README quickstart does not say so · HIGH
+
+`map`/`serve` end in `serve_forever()` with no timeout and no TTY guard. A human presses Ctrl-C; a
+program hangs until it is killed. `llms.txt` now warns, but `README.md`'s own quickstart
+(`pip install seamcheck && seamcheck map`) and `docs/commands.md`'s one-liner do not.
+
+**Suggested fix:** default to not serving when stdout is not a TTY — the ordinary behaviour for a
+tool that may be piped or driven by a program — keep the interactive default, and say so in both
+documents. Small; deferred only because a human tester will never hit it.
+
+## S2 — the two CLI doors still disagree on exit codes · HIGH
+
+Four `raise CommandError(...)` sites take Django's default `returncode` of 1, where `cli.main()`
+returns 3 for the same failure. Worse: an unrecognised flag on `manage.py seamcheck` exits **2**,
+which collides with `EXIT_NO_BASELINE` — and `docs/ci.md`'s own recipe reads 2 as "no baseline yet,
+do not fail the build". So a typo'd flag in CI reads as a clean first run.
+
+No document claims the two doors agree, so nothing shipped is factually *wrong* — it is silent.
+The exit-code hygiene guard (`seamcheck/tests/test_exit_code_hygiene.py`) does not cover this shape
+because these codes come from Django's `run_from_argv`, not from a literal in our source.
+
+## S3 — what the derived guards do not catch
+
+The four guards this branch added each catch the regression they were written for — that was
+verified, including against the original bug's exact shape. Their blind spots, none reachable in
+the code as it stands today:
+
+| guard | misses |
+|---|---|
+| `test_tool_state_writes.py` | a path built by string concatenation or `os.path.join`; matches `repo_root` **by name**, so an unrelated local of that name would be misflagged; multi-arg `Path()`; `open(..., "r+")` |
+| `test_exit_code_hygiene.py` | a code stashed in a local first (`code = 2; return code`); `sys.exit(N)`; a negative literal (`return -1` parses as `UnaryOp`); a helper defined in another file |
+| `test_cli_entrypoint.py` flag parity | proves a flag is recognised and reaches the options dict, never that anything **reads** it — `--no-progress` already lives in that gap |
+| `test_docs_promises.py` | substring matching: `serve` is a substring of `observe`, so a command's own doc line could be deleted and the test would keep passing |
+
+## S4 — duplication that survived
+
+- The `--json`/`--format` and `--serve`/`--no-serve` fold logic exists in both `cli.py` and
+  `Command.handle()`. They agree today and tests pin that, but the rule lives in two places.
+- Six scanner sub-walks (`find_js_files`, `inventory`, `services`, `env_extractor`,
+  `redis_extractor`, `callgraph`) each hard-code their own "skip dot-directories" rule on top of
+  `SKIP_DIRS`, so the scan cache hashes slightly more than the scanner reads. One-directional:
+  extra cache misses, never a stale answer.
+
+## S5 — smaller, each real
+
+- `check`/`report`/`map` stamp `generated_at`, so two identical runs differ. The determinism test
+  added on this branch covers only the new envelope commands.
+- `seamcheck_check` (MCP) is still unbounded — no `limit`/`cursor`/`since` — and its description
+  says findings are "new since the last snapshot" while `passed` is true for any untriaged finding,
+  new or not. On a repo with a backlog an agent draws the wrong conclusion.
+- `--limit banana` is refused by argparse and **silently falls back to the default** on the plain
+  door. The test pinning it is named for parity while what it pins is non-parity.
+- A bare `=5` argument is dropped by the plain door and refused by argparse.
+- `_map_plain` never honours `--open` in its non-serving branch; the Django door does.
+
+## S6 — performance, measured before any design work · the biggest single win in the codebase
+
+Profiled a real scan of the reference project: **53.0s clean wall, 52,174 symbols.** Under
+cProfile (147s total — the ratios are the answer, not the seconds):
+
+| where the CPU is | share |
+|---|---|
+| `pipeline.py:625-630` | **~36%** |
+| AST walking (`ast.walk` + `iter_child_nodes` + `iter_fields` + `isinstance`) | ~26% |
+| everything else (I/O, paths, graph assembly) | ~38% |
+
+**The 36% is one quadratic.** For each of ~102,000 `dom_selector` symbols it rescans the entire
+`dom_edges` list looking for an unresolved self-edge — **852,616,050 generator iterations**:
+
+```python
+and any(edge.from_id == symbol.id and edge.to_id == symbol.id
+        and edge.status is Status.UNRESOLVED for edge in dom_edges)
+```
+
+Build that id set **once**, then test `symbol.id in it`: O(N+M) instead of O(N×M), same answer,
+one small edit, worth roughly **15–19 seconds of the 53**.
+
+The ~26% in AST walking is the part worth **parallelising** — it is per-file independent, and the
+package currently uses **no parallelism at all** (`multiprocessing`/`ProcessPool`: zero call sites)
+on a 12-core machine.
+
+**A rewrite in Go or C++ is not indicated.** `ast` and `re` are already C inside CPython; the hot
+path is a Python-level algorithm choice, and no language rewrite fixes an O(N×M) loop — it just
+runs the wrong shape faster. Do the quadratic first, parallelism second, and measure again before
+anything more drastic.
+
+## S7 — three tests read a machine-wide cache, so they are not deterministic · and the gap that hid behind them
+
+`test_a_bare_check_scans_once` and two siblings wrap the **real** `api.scan` and assert it is called
+once, against `repo_root='.'` — this actual checkout — using the real on-disk cache at
+`~/.cache/seamcheck/<hash of repo path>/`, with no isolation. Any prior `seamcheck` invocation
+anywhere on the machine warms that cache and falsifies the assertion, regardless of whether the
+code is correct. A reviewer found three stale entries from its own runs already sitting there.
+
+**These tests can pass or fail on machine state.** That is worth fixing on its own: every green
+run of this suite has been trusted, and these three are only as trustworthy as whatever ran before
+them.
+
+**The gap they hid:** routing the Django door's `check` through the scan cache was correct and was
+*not* done, because it made these three tests go red and the red was read as the cache being wrong.
+So today `manage.py seamcheck --check` still pays a full scan every run while the plain
+`seamcheck check` and MCP's `seamcheck_check` do not — a two-door performance divergence, which is
+the exact class the CLI/MCP branch existed to eliminate.
+
+**Fix shape:** point the three tests at an isolated cache root (a temp directory), then convert the
+Django door's pre-scan. Small, and it closes both the non-determinism and the divergence.

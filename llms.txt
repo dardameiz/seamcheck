@@ -20,7 +20,7 @@ Express adapters are planned and do not exist yet — say so rather than implyin
 Install: `pip install seamcheck`, then add `"seamcheck"` to INSTALLED_APPS. No configuration
 is required — it works the paths out from Django's own settings and app registry, and
 `seamcheck config` shows what it resolved to and where each value came from. Anything set in
-`SEAMCHECK_CONFIG` overrides detection key by key. Requires Django 5+ and Node on PATH (the
+`SEAMCHECK_CONFIG` overrides detection key by key. Requires Django 4.2+ and Node on PATH (the
 JS/CSS parsers ship bundled — no npm, no node_modules). Without Node it returns the Python
 half and says what it lost.
 
@@ -41,8 +41,15 @@ half and says what it lost.
   real report and an invented one
 - `seamcheck help` — every command; `seamcheck help <command>` explains one, with examples
 - `seamcheck scan` — scan and summarise; also writes the snapshot the other commands diff against
-- `seamcheck check` — the CI gate. Exit 1 on new findings, 2 if the baseline is missing, 0 clean
-- `seamcheck check --since $BASE_SHA` — gate a pull request against its base commit
+- `seamcheck check` — the CI gate; see "Exit codes" below
+- `seamcheck check --since $BASE_SHA` — gate a pull request against its base commit; see
+  "Exit codes" below
+- `seamcheck findings --file PATH` — what is wrong, filtered by file/kind/status/owner and
+  bounded by `--limit`/`--cursor` — a few KB, not the whole graph. The place to start
+- `seamcheck symbols --search NAME` — a name to an id, before spending a call on explain or
+  triage
+- `seamcheck diff --since REF` — what appeared, vanished or changed status since a ref —
+  "what did this commit break", without folding it into a pass/fail gate
 - `seamcheck map` — the main one. Scans, writes one self-contained HTML file (the connectivity
   map plus the review views), then serves it and prints a loopback link and a LAN link for a
   phone. Blocks until Ctrl-C. `--no-serve` writes the file and exits, which is what CI and any
@@ -53,11 +60,37 @@ half and says what it lost.
 - `seamcheck report` — a markdown digest for a PR comment
 - `seamcheck backfill` — scan the last 20 commits so the map can show per-commit diffs;
   takes a count, e.g. `seamcheck backfill 100`
+- `seamcheck json` — the whole graph, unfiltered — 72 MB and about 18 million tokens on a
+  500k-line project; `findings`/`symbols`/`diff` answer the same questions in a few KB
 
 Global flags: `-v/--verbose` restores the host project's own start-up logging (suppressed by
 default, though `ERROR` always gets through), `-q/--quiet` drops the progress bar. Progress is
 drawn on stderr and only on a terminal, so `seamcheck json > graph.json` stays clean. Anything
 after `--` is forwarded to the management command untouched.
+
+## Exit codes
+
+Every code any command can return, in one table (`seamcheck/exitcodes.py`):
+
+| code | name | means |
+|---|---|---|
+| 0 | `EXIT_CLEAN` | ran fine; `check` found nothing new and blocking |
+| 1 | `EXIT_FINDINGS` | `check` found something new and blocking |
+| 2 | `EXIT_NO_BASELINE` | `check --since REF` has no stored snapshot for `REF` to compare against |
+| 3 | `EXIT_USAGE` | the command was wrong — an unknown flag, a bad enum value |
+| 4 | `EXIT_ENVIRONMENT` | the machine was wrong — nothing here this knows how to read, a missing import, no `node` on PATH |
+
+`check` is what walks this table through `gate_code()`: 1 on new findings, and — only with
+`--since`, since a bare `check` has nothing to diff against — 2 when there is no stored
+snapshot to compare with. `2` belongs to `check --since` alone: a failed `triage` (an id the
+current scan does not have, a `--status`/`--wrong` word outside the fixed set, or an
+`--undo` with no mark to remove) is a bad argument, not "no baseline to compare against", so
+it returns 3, not 2. Any command, `check` and `triage` included, can still stop with 3 or 4
+before a scan even runs — a directory with nothing this tool recognises never reaches the
+envelope at all. `findings`, `symbols` and `diff` exit 0 on success; a failed *query* (bad
+`--status`, an unresolvable `--since`) is reported in the JSON envelope's `error.code` AND in
+the matching process exit code (mapped onto this same 0-4 table), so a script can branch on
+either one.
 
 ## Accuracy
 
@@ -76,8 +109,11 @@ webstorm, none).
 
 ## MCP
 
-Ships an MCP server: `seamcheck-mcp` over stdio. Tools: `seamcheck_check`,
-`seamcheck_report`, `seamcheck_explain`, `seamcheck_triage`.
+Ships an MCP server: `seamcheck-mcp` over stdio. Tools: `seamcheck_unverified` (the queue
+of findings nobody has judged yet — call this first), `seamcheck_check`, `seamcheck_report`,
+`seamcheck_explain`, `seamcheck_triage`, `seamcheck_why_wrong`, `seamcheck_share`,
+`seamcheck_services`, `seamcheck_findings`, `seamcheck_symbols`, `seamcheck_diff`,
+`seamcheck_snapshot`.
 
 ## The rule for agents
 

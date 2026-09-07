@@ -7,119 +7,32 @@ import os
 import pathlib
 import sys
 
-from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
 from seamcheck import api
+from seamcheck.cliflags import add_django_arguments
 from seamcheck.progress import Progress
 from seamcheck.renderers.terminal import returned_line
+from seamcheck.scancache import resolve_map_output, resolve_report_output
 
 # Formats whose output is a whole document rather than a few lines. Printing one to a
 # terminal is a wall of markup and a lost scrollback, so each has a default destination
-# on disk and says where it went.
-_DOCUMENTS = {
-    "html": ("report_output", "docs/maps/connectivity-report.html"),
-    "map": ("map_output", "docs/maps/connectivity-map.html"),
-    "console": ("map_output", "docs/maps/connectivity-map.html"),
-}
+# on disk and says where it went - resolved by `scancache.resolve_report_output`/
+# `resolve_map_output`, the SAME functions the cache's own exclusion check calls, so this
+# command and the cache can never disagree about where a document with no explicit --out
+# actually lands.
+_DOCUMENT_FORMATS = {"html", "map", "console"}
 
 
 class Command(BaseCommand):
     help = "Scan the project's connectivity graph and report on it."
 
     def add_arguments(self, parser):
-        parser.add_argument("--json", action="store_true", help="Print the graph as JSON.")
-        parser.add_argument("--check", action="store_true", help="Diff against HEAD; exit 1 on findings.")
-        parser.add_argument("--since", metavar="REF", help="Diff against the snapshot for REF.")
-        parser.add_argument("--explain", metavar="SYMBOL_ID", help="Explain one symbol.")
-        parser.add_argument("--triage", metavar="SYMBOL_ID", help="Record a disposition.")
-        parser.add_argument("--status", help="Triage status: approved, confirmed, deferred, untriaged.")
-        parser.add_argument("--reason", default="", help="Why this disposition, in your own words.")
-        parser.add_argument("--why", "--wrong", dest="why", default="",
-                            help="Why it was wrong, as a fixed word - the only part "
-                                 "`seamcheck share` can pass on. See `help triage`.")
-        parser.add_argument("--undo", action="store_true",
-                            help="Take the mark off --triage's symbol; it is raised again.")
-        parser.add_argument("--repo-root", default=".", help="Repo to read snapshots/triage from.")
-        parser.add_argument(
-            "--backfill", type=int, metavar="N", default=None,
-            help="Scan the last N commits into snapshots, so the map's commit picker has "
-                 "history to show. Each commit is scanned in its own temporary worktree; "
-                 "roughly 30s per commit.",
-        )
-        parser.add_argument(
-            "--backfill-ref", default="HEAD", metavar="REF",
-            help="Which branch --backfill walks. Defaults to HEAD.",
-        )
-        parser.add_argument(
-            "--tunnel", action="store_true",
-            help="With --serve, also open a temporary public HTTPS link via cloudflared, "
-                 "for a device that is not on this network. Anyone with the link can read "
-                 "the report; it dies with the command.",
-        )
-        parser.add_argument(
-            "--set-tunnel", choices=["always", "never"], default=None, metavar="WHEN",
-            help="Remember, for this machine and every project on it, whether `map` and "
-                 "`serve` open the public link: `always` or `never`. Written to "
-                 "~/.config/seamcheck/settings.json. `seamcheck config` shows it.",
-        )
-        parser.add_argument(
-            "--serve", action="store_true",
-            help="Serve the report from this machine so a browser (and a phone on the "
-                 "same network) can open it. Nothing is uploaded; the server stops when "
-                 "you do.",
-        )
-        parser.add_argument(
-            "--no-serve", action="store_true",
-            help="With --format map: write the file and stop, instead of serving it. "
-                 "For CI and scripts, which want the artifact and not a running server.",
-        )
-        parser.add_argument(
-            "--local-only", action="store_true",
-            help="With --serve: bind loopback only, so nothing on the network can reach "
-                 "it. You lose the phone link.",
-        )
-        parser.add_argument(
-            "--format", default=None,
-            # No choices=: Django's CommandParser.error() raises CommandError (not
-            # SystemExit) for call_command() invocations, so argparse-level validation
-            # can't produce the SystemExit callers of an invalid --format expect.
-            # _format_report() validates instead, via api.report()'s ValueError.
-            help="Output format: terminal, markdown, html, json, map, console. "
-                 "json emits the whole graph, as --json does.",
-        )
-        parser.add_argument("--out", default=None, help="Write to PATH instead of stdout ('-' for stdout).")
-        parser.add_argument(
-            "--bundle", action="store_true",
-            help="Write the map as a folder (small index.html + data/ loaded as needed) "
-                 "rather than one file. Automatic above 50 MB.",
-        )
-        parser.add_argument(
-            "--open", action="store_true", dest="open_it",
-            help="Open the written file in your browser when it is done.",
-        )
-        parser.add_argument(
-            "--observe", nargs="*", metavar="URL",
-            help="Drive the running app in a browser and record what it actually queried "
-                 "and fetched. With no URLs, visits the pages the graph knows about at "
-                 "--base-url.",
-        )
-        parser.add_argument(
-            "--base-url", default="http://127.0.0.1:8080",
-            help="Where the application is running, for --observe.",
-        )
-        parser.add_argument(
-            "--shots", default=None, metavar="DIR",
-            help="With --observe, also screenshot each page into DIR.",
-        )
-        parser.add_argument(
-            "--show-config", action="store_true",
-            help="Print the config a scan would use, and where each value came from.",
-        )
-        parser.add_argument(
-            "--no-progress", action="store_true",
-            help="Never draw the progress bar (it is off already when output is redirected).",
-        )
+        # Every flag's name, default and shape lives in seamcheck.cliflags.FLAGS - the
+        # single source of truth `seamcheck.cli._plain_args` (the plain, non-Django door)
+        # reads too, instead of a second hand-written copy of this list. See that
+        # module's docstring for why this used to be two lists that drifted.
+        add_django_arguments(parser)
 
     def _progress(self, options, total: int) -> Progress:
         """One bar for the whole run, or a silent one.
@@ -144,15 +57,58 @@ class Command(BaseCommand):
             return self._observe(options)
         if options.get("set_tunnel"):
             return self._set_tunnel(options["set_tunnel"])
+        if options.get("symbols"):
+            from seamcheck import queries
+            from seamcheck.exitcodes import EXIT_CLEAN, envelope_exit_code
+
+            out = queries.symbols(options["repo_root"], options["search"],
+                                  options["kind"], options["limit"], options["cursor"],
+                                  refresh=options["refresh"])
+            self.stdout.write(json.dumps(out, indent=2))
+            code = envelope_exit_code(out)
+            if code != EXIT_CLEAN:
+                raise SystemExit(code)
+            return None
+        if options.get("findings"):
+            from seamcheck import queries
+            from seamcheck.exitcodes import EXIT_CLEAN, envelope_exit_code
+
+            out = queries.findings(options["repo_root"], options["file"], options["kind"],
+                                   options["status"] or "", options["owner"],
+                                   options["limit"], options["cursor"],
+                                   refresh=options["refresh"],
+                                   include_triaged=options["include_triaged"])
+            self.stdout.write(json.dumps(out, indent=2))
+            code = envelope_exit_code(out)
+            if code != EXIT_CLEAN:
+                raise SystemExit(code)
+            return None
+        if options.get("diff"):
+            from seamcheck import queries
+            from seamcheck.exitcodes import EXIT_CLEAN, envelope_exit_code
+
+            out = queries.diff(options["repo_root"], options["since"] or "HEAD~1",
+                               options["limit"], options["cursor"],
+                               refresh=options["refresh"])
+            self.stdout.write(json.dumps(out, indent=2))
+            code = envelope_exit_code(out)
+            if code != EXIT_CLEAN:
+                raise SystemExit(code)
+            return None
         if options["show_config"]:
             return self._show_config(options["repo_root"])
         if options["triage"]:
             return self._triage(options)
         if options["explain"]:
-            bar = self._progress(options, api.SCAN_STEPS)
-            graph = api.scan(options["repo_root"], bar)
-            bar.finish()
-            return self.stdout.write(api.explain(graph, options["explain"]))
+            # Through the cache, not a fresh scan - this is the exact call the review
+            # measured at 88.5s for a mistyped id. No progress bar: a cache hit is near-
+            # instant, and a miss still runs the real scan underneath, same as
+            # symbols/findings/diff already do with no bar of their own.
+            from seamcheck.scancache import cached_scan
+
+            graph, _how = cached_scan(options["repo_root"])
+            return self.stdout.write(
+                api.explain_with_hint(graph, options["explain"], options["repo_root"]))
 
         if options["backfill"] is not None:
             return self._backfill(
@@ -177,7 +133,7 @@ class Command(BaseCommand):
             # comment, fail the build" - so the digest must land before the exit, or a
             # failing build ships with nothing to read.
             if options["check"]:
-                self._exit_on_check(options["repo_root"], graph)
+                self._exit_on_check(options["repo_root"], graph, since=options["since"])
             return
         if options["check"] or options["since"]:
             return self._check(options)
@@ -223,7 +179,15 @@ class Command(BaseCommand):
         try:
             observations = observe_pages(urls, shots_dir=options["shots"], watch=watch)
         except BrowserUnavailable as error:
-            raise CommandError(str(error)) from error
+            # Playwright missing, or no browser downloaded - the machine is wrong, not
+            # the invocation. Previously raised as CommandError, which reads identically
+            # to "you typed this wrong" (--out without --format, a bad --format value) -
+            # SystemExit(EXIT_ENVIRONMENT) instead, matching the ModuleNotFoundError
+            # handling in cli.main() for the same class of problem.
+            from seamcheck.exitcodes import EXIT_ENVIRONMENT
+
+            self.stderr.write(str(error))
+            raise SystemExit(EXIT_ENVIRONMENT) from error
 
         try:
             sha = current_git_sha(repo_root)
@@ -382,11 +346,19 @@ class Command(BaseCommand):
         self.stdout.write("  seamcheck config --tunnel always|never   changes it")
 
     def _triage(self, options):
+        # A failed triage (an id the current scan does not have, a status/why word
+        # outside the fixed set, an --undo with no mark to remove, or no disposition
+        # given at all) is the command being wrong, not "no baseline to compare
+        # against" - EXIT_USAGE is the code that means that. A bare literal `2` here
+        # used to collide with EXIT_NO_BASELINE, which is check --since's own,
+        # unrelated question - see exitcodes.py.
+        from seamcheck.exitcodes import EXIT_USAGE
+
         if options.get("undo"):
             result = api.triage(options["triage"], "approved", options["repo_root"], undo=True)
             self.stdout.write(result["message"])
             if not result["ok"]:
-                raise SystemExit(2)
+                raise SystemExit(EXIT_USAGE)
             return
         # `--wrong X` says the finding was wrong, which IS the disposition - requiring
         # `--status approved` as well made the command in `seamcheck help triage` fail on
@@ -399,14 +371,14 @@ class Command(BaseCommand):
                 "or --wrong <reason> which means approved. `seamcheck help triage` lists "
                 "the reasons."
             )
-            raise SystemExit(2)
+            raise SystemExit(EXIT_USAGE)
         result = api.triage(
             options["triage"], options["status"], options["repo_root"], options["reason"],
             options.get("why", ""),
         )
         self.stdout.write(result["message"])
         if not result["ok"]:
-            raise SystemExit(2)
+            raise SystemExit(EXIT_USAGE)
 
     def _check(self, options):
         repo_root = options["repo_root"]
@@ -414,26 +386,39 @@ class Command(BaseCommand):
         graph = api.scan(repo_root, bar)
         bar.finish()
         if options["since"]:
-            result, _, message = api.diff_against(graph, options["since"], repo_root)
-            if message:
-                self.stdout.write(message)
-                # A gate asked to compare against a baseline that is not there has not
-                # passed - it has not run. Exit 2, so CI can tell "nothing new" (0) from
-                # "no findings, because nothing was checked".
+            from seamcheck.exitcodes import EXIT_CLEAN, EXIT_USAGE, gate_code
+
+            outcome = api.check(repo_root, graph=graph, since=options["since"])
+            if outcome.get("bad_ref"):
+                # The ref itself could not be resolved - a typo, a CI variable that came
+                # through empty. Different from "resolved but nothing stored for it"
+                # below: this is the COMMAND being wrong, not "nothing to compare yet",
+                # and conflating the two (both used to be "any message means exit 2") let
+                # a mistyped $BASE_SHA silently read as a clean first run.
+                self.stdout.write(outcome["message"])
                 if options["check"]:
-                    raise SystemExit(2)
+                    raise SystemExit(EXIT_USAGE)
                 return
-            self._report(result)
+            if outcome["message"]:
+                self.stdout.write(outcome["message"])
+            self._report_outcome(outcome)
             # `--since` alone answers "what changed"; with `--check` it is a gate, and a
-            # gate that prints findings and exits 0 tells CI the build is clean. This
-            # branch returned before ever reaching an exit code.
-            if options["check"] and (
-                result.new_unresolved or result.new_unused or result.triage_invalidated
-            ):
-                raise SystemExit(1)
+            # gate that prints findings and exits 0 tells CI the build is clean.
+            #
+            # Routed through the SAME gate_code(comparing=True) ladder `_exit_on_check`
+            # already uses for `--check --format X --since REF` - this used to hand-roll
+            # 2 (no baseline) / 1 (new findings) / 0 (clean) here, and "no baseline" meant
+            # any truthy `message` rather than gate_code()'s exact NO_BASELINE prefix. In
+            # this flow the two conditions coincide (`diff_against` only ever sets a
+            # message for the no-baseline case; a bad ref is handled above), so this is a
+            # consolidation, not a behavior change.
+            if options["check"]:
+                code = gate_code(outcome, comparing=True)
+                if code != EXIT_CLEAN:
+                    raise SystemExit(code)
             return
 
-        outcome = api.check(repo_root)
+        outcome = api.check(repo_root, graph=graph)
         if outcome["message"]:
             self.stdout.write(outcome["message"])
         for key in ("new_unresolved", "new_unused"):
@@ -446,15 +431,20 @@ class Command(BaseCommand):
             if item["symbol_id"] not in came_back:
                 self.stdout.write(f"mark outlived its finding: {item['symbol_id']} - {item['note']}")
         self.stdout.write(f"counts: {outcome['counts']}")
-        if not outcome["passed"]:
-            raise SystemExit(1)
+        from seamcheck.exitcodes import EXIT_CLEAN, gate_code
 
-    def _report(self, result):
-        for symbol in result.new_unresolved:
-            self.stdout.write(f"new_unresolved: {symbol.id}")
-        for symbol in result.new_unused:
-            self.stdout.write(f"new_unused: {symbol.id}")
-        for item in result.triage_invalidated:
+        code = gate_code(outcome)
+        if code != EXIT_CLEAN:
+            raise SystemExit(code)
+
+    def _report_outcome(self, outcome):
+        """`--since`'s digest: what api.check() found, read from its own answer shape
+        (dicts) rather than a raw DiffResult (Symbol objects) - the same rows either way."""
+        for item in outcome["new_unresolved"]:
+            self.stdout.write(f"new_unresolved: {item['id']}")
+        for item in outcome["new_unused"]:
+            self.stdout.write(f"new_unused: {item['id']}")
+        for item in outcome["triage_invalidated"]:
             self.stdout.write(f"triage invalidated: {item['symbol_id']} - {item['note']}")
 
     def _format_report(self, options, graph=None, bar=None):
@@ -463,11 +453,31 @@ class Command(BaseCommand):
         bar = bar or self._progress(options, 0)
 
         if fmt == "json":
-            from seamcheck.graph import graph_to_dict
+            from seamcheck.envelope import TooLarge
 
             if graph is None:
                 graph = api.scan(repo_root, bar)
-            text = json.dumps(graph_to_dict(graph), indent=2)
+            # `--out FILE` already writes to disk rather than a terminal, so it is exempt
+            # from the size gate `api.report` raises `TooLarge` for - it is the escape
+            # hatch the refusal below points to, not a second thing to refuse.
+            going_to_disk = options["out"] not in (None, "-")
+            try:
+                text = api.report(
+                    repo_root, fmt, graph=graph, progress=bar,
+                    full=going_to_disk or (options["full"] and options["yes"]),
+                )
+            except TooLarge as error:
+                from seamcheck.exitcodes import EXIT_USAGE
+
+                bar.finish()
+                self.stderr.write(
+                    f"  The whole graph is {error.size_bytes / 1e6:.1f} MB "
+                    f"(~{error.tokens:,} tokens). Refusing to print it.\n"
+                    "  `seamcheck findings` answers most questions in a few KB.\n"
+                    "  --full alone still refuses - it takes --full --yes together to "
+                    "print it anyway, so an agent needs a second, deliberate keystroke "
+                    "to do this. `--out FILE` writes it to disk instead.")
+                raise SystemExit(EXIT_USAGE) from error
         elif fmt in ("map", "console"):
             document = api.map_document(repo_root, ref=options["since"] or "HEAD",
                                         progress=bar)
@@ -479,9 +489,11 @@ class Command(BaseCommand):
                     repo_root, fmt, ref=options["since"] or "HEAD", graph=graph, progress=bar
                 )
             except ValueError as error:
+                from seamcheck.exitcodes import EXIT_USAGE
+
                 bar.finish()
                 self.stderr.write(str(error))
-                raise SystemExit(2) from error
+                raise SystemExit(EXIT_USAGE) from error
         bar.finish()
 
         serving = options["serve"] and not options["no_serve"]
@@ -491,24 +503,32 @@ class Command(BaseCommand):
             # Explicit stdout always wins, even for a document: a flag whose help text
             # promises the terminal must not silently redirect to a file.
             return self.stdout.write(text)
-        if destination is None:
-            if fmt not in _DOCUMENTS:
-                return self.stdout.write(text)
-            # A whole document with no destination goes to a file, because `seamcheck map`
-            # used to answer with 3.8 MB of markup down the terminal - which reads as the
-            # command being broken. Read config from settings, not api._config(): a command
-            # reaching into another module's private helper is how a refactor there
-            # silently breaks this one.
-            config = getattr(settings, "SEAMCHECK_CONFIG", {})
-            key, fallback = _DOCUMENTS[fmt]
-            destination = config.get(key) or fallback
 
         # Written before it is served, not instead of. Serving used to return early, so
         # the one command that renders the UI left nothing behind when you pressed Ctrl-C
         # - and the artifact is the thing you commit, diff and open again tomorrow.
-        path = pathlib.Path(repo_root) / destination
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
+        #
+        # Two branches, not one shared `path = ... if ... else ...`, on purpose: an
+        # explicit --out is a caller-chosen destination that can land anywhere, exactly
+        # like every other --out in this codebase, and cannot be a registered cache
+        # exclusion - see test_tool_state_writes.py's ALLOWLIST entry for this branch.
+        # The no-destination branch resolves through scancache.resolve_report_output/
+        # resolve_map_output, the SAME functions the cache's own exclusion check calls,
+        # so this command and the cache can never disagree about where a document with
+        # no explicit --out actually lands - and so THAT branch's write is registered,
+        # not allowlisted. Keeping them as separate write call sites, not merged behind
+        # one variable, is what lets the audit tell the two apart at all.
+        if destination is not None:
+            path = pathlib.Path(repo_root) / destination
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+        else:
+            if fmt not in _DOCUMENT_FORMATS:
+                return self.stdout.write(text)
+            path = (resolve_report_output(repo_root) if fmt == "html"
+                   else resolve_map_output(repo_root))
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
         self._wrote(path, text, open_it=options.get("open_it") and not serving)
 
         if serving:
@@ -534,11 +554,8 @@ class Command(BaseCommand):
         destination = options["out"]
         if destination == "-":
             return self.stdout.write(document.single_file())
-        if destination is None:
-            config = getattr(settings, "SEAMCHECK_CONFIG", {})
-            key, fallback = _DOCUMENTS["map"]
-            destination = config.get(key) or fallback
-        path = pathlib.Path(repo_root) / destination
+        path = (pathlib.Path(repo_root) / destination if destination is not None
+               else resolve_map_output(repo_root))
         written, note = api.write_map_document(document, str(path), bundle=options.get("bundle") or None)
         self.stdout.write(f"  wrote  {written}")
         if note:
@@ -575,9 +592,22 @@ class Command(BaseCommand):
         if not webbrowser.open(url):
             self.stderr.write("could not open a browser; the link above still works.")
 
-    def _exit_on_check(self, repo_root, graph=None):
-        if not api.check(repo_root, graph=graph)["passed"]:
-            raise SystemExit(1)
+    def _exit_on_check(self, repo_root, graph=None, since=None):
+        # `comparing=bool(since)` is what unlocks EXIT_NO_BASELINE - a bare `--check`
+        # (since=None) never asked "what changed" and must never report "no baseline" for
+        # a question it did not ask. See gate_code()'s docstring and api.check()'s.
+        from seamcheck.exitcodes import EXIT_CLEAN, EXIT_USAGE, gate_code
+
+        outcome = api.check(repo_root, graph=graph, since=since)
+        if outcome.get("bad_ref"):
+            # The ref itself could not be resolved - a typo, a CI variable that came
+            # through empty. Not "no baseline yet": the command was wrong, not the
+            # machine, so this bypasses gate_code()'s ladder entirely.
+            self.stderr.write(outcome["message"])
+            raise SystemExit(EXIT_USAGE)
+        code = gate_code(outcome, comparing=bool(since))
+        if code != EXIT_CLEAN:
+            raise SystemExit(code)
 
     def _summary(self, options):
         """The default command's answer: the totals, in words, and what to type next.

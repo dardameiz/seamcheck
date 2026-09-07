@@ -8,7 +8,7 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import SimpleTestCase, override_settings
 
-from seamcheck import api
+from seamcheck import api, exitcodes
 
 FIXTURES_DIR = str(Path(__file__).parent / "fixtures")
 _CONFIG = {
@@ -45,6 +45,17 @@ class DumpConnectivityMapTests(SimpleTestCase):
 
         self.assertIn("No symbol", output)
 
+    def test_explain_suggests_near_ids_on_a_miss(self):
+        # queries.near() had no caller anywhere in the codebase; wired in here so the
+        # 88.5-second "No symbol with id ..." finally says what you probably meant.
+        output = self._run(
+            "--explain", "view:seamcheck.tests.fixtures.fixture_views.get_thin"
+        )
+
+        self.assertIn("No symbol", output)
+        self.assertIn("Did you mean", output)
+        self.assertIn("view:seamcheck.tests.fixtures.fixture_views.get_thing", output)
+
     def test_check_says_so_plainly_when_no_baseline_snapshot_exists(self):
         # Fabricating a diff against a snapshot that was never taken would report the
         # entire graph as "new" on the first run.
@@ -67,9 +78,31 @@ class DumpConnectivityMapTests(SimpleTestCase):
 
         self.assertEqual(raised.exception.code, 1)
 
+    def test_a_bare_check_scans_once(self):
+        # _check() built its own graph (for the --since branch and the summary) and then
+        # called api.check(repo_root) with no graph, which scanned a second time - about
+        # 168 seconds on the reference project for one command. Count calls rather than
+        # asserting "it still works", which would not catch a regression back to two scans.
+        calls = []
+        real_scan = api.scan
+
+        def counting_scan(*args, **kwargs):
+            calls.append(1)
+            return real_scan(*args, **kwargs)
+
+        with mock.patch("seamcheck.api.scan", side_effect=counting_scan), \
+             self.assertRaises(SystemExit):
+            call_command("seamcheck", "--check", stdout=StringIO(), stderr=StringIO())
+
+        self.assertEqual(len(calls), 1)
+
     def test_triage_without_status_is_rejected(self):
-        with self.assertRaises(SystemExit):
+        with self.assertRaises(SystemExit) as raised:
             self._run("--triage", "view:whatever")
+
+        # A missing disposition is the command being wrong, not "no baseline to compare
+        # against" - it must be EXIT_USAGE, never EXIT_NO_BASELINE's `2`.
+        self.assertEqual(int(str(raised.exception.code)), exitcodes.EXIT_USAGE)
 
     def test_out_without_format_is_rejected(self):
         # --out is only ever read inside _format_report(); every other path (bare
@@ -223,6 +256,33 @@ class ReportFormatTests(SimpleTestCase):
 
         self.assertEqual(len(calls), 1)
 
+    def test_check_composes_with_sarif_format_scans_once(self):
+        # `check --format sarif` is the exact Gate step docs/ci.md prescribes. `_report()`
+        # used to return early through the sarif/github branch BEFORE the `if graph is
+        # None: graph = scan(...)` line, discarding the graph `--check` had already built
+        # and paying for a second ~168-second scan through `_findings_report` ->
+        # `queries.findings` to render the very digest the first scan could answer. Count
+        # calls rather than asserting "it still works", which would not catch a
+        # regression back to two scans.
+        calls = []
+        real_scan = api.scan
+
+        def counting_scan(*args, **kwargs):
+            calls.append(1)
+            return real_scan(*args, **kwargs)
+
+        with (
+            override_settings(SEAMCHECK_CONFIG=_CONFIG),
+            mock.patch("seamcheck.api.scan", side_effect=counting_scan),
+            self.assertRaises(SystemExit),
+        ):
+            call_command(
+                "seamcheck", "--check", "--format", "sarif",
+                stdout=StringIO(), stderr=StringIO(),
+            )
+
+        self.assertEqual(len(calls), 1)
+
 
 @override_settings(SEAMCHECK_CONFIG=_CONFIG)
 class CheckSinceExitCodeTests(SimpleTestCase):
@@ -268,11 +328,117 @@ class CheckSinceExitCodeTests(SimpleTestCase):
 
     def test_a_gate_with_no_baseline_did_not_pass_it_did_not_run(self):
         # Exiting 0 here tells CI the build is clean when nothing was compared at all.
-        with mock.patch.object(api, "diff_against", return_value=(None, "abc", "no baseline")):
+        #
+        # This branch now shares gate_code()'s exact NO_BASELINE-prefix match (see
+        # CheckSinceWithFormatExitCodeTests below, which already required it) instead of
+        # its own hand-rolled "any truthy message means no baseline". The literal string
+        # "no baseline" this test used to mock is not what `api.diff_against` actually
+        # ever returns - only the old, looser ladder tolerated it - so the mock is updated
+        # to the real constant rather than the production code being loosened back to
+        # match an unrealistic mock.
+        from seamcheck.exitcodes import NO_BASELINE
+
+        with mock.patch.object(api, "diff_against",
+                               return_value=(None, "abc", f"{NO_BASELINE} for abc yet.")):
             output, code = self._run("--check", "--since", "abc")
 
-        self.assertIn("no baseline", output)
+        self.assertIn(NO_BASELINE, output)
         self.assertEqual(code, 2)
+
+
+@override_settings(SEAMCHECK_CONFIG=_CONFIG)
+class CheckSinceWithFormatExitCodeTests(SimpleTestCase):
+    """`check --since REF --format sarif` is the exact docs/ci.md Gate step: the digest
+    (SARIF, markdown, whatever) goes to the pull request, the exit code gates the build.
+
+    `--format` routes through `_exit_on_check`, a second implementation of the same gate
+    that called `api.check()` with no way to pass `since` at all - so it always diffed
+    against HEAD, never called `gate_code()`, and could never return EXIT_NO_BASELINE.
+    Reproduced against a real project (pointlessbutton): `--check --since <sha with no
+    stored snapshot> --format sarif` exited 0, not 2."""
+
+    def _run(self, *args):
+        out = StringIO()
+        try:
+            call_command("seamcheck", *args, stdout=out, stderr=StringIO())
+        except SystemExit as exit_code:
+            return out.getvalue(), int(str(exit_code.code))
+        return out.getvalue(), 0
+
+    def _diff(self, **kwargs):
+        from seamcheck.diff import DiffResult
+
+        return DiffResult(**{"new_unresolved": [], "new_unused": [], "resolved": [],
+                             "triage_invalidated": [], **kwargs})
+
+    def test_a_gate_with_no_baseline_exits_2_even_with_a_format(self):
+        # gate_code() matches the exact NO_BASELINE prefix, unlike _check()'s own
+        # any-truthy-message check - use the real constant so this exercises the actual
+        # decision this call site now makes.
+        from seamcheck.exitcodes import NO_BASELINE
+
+        with mock.patch.object(api, "diff_against",
+                               return_value=(None, "abc", f"{NO_BASELINE} for abc yet.")):
+            _, code = self._run("--check", "--since", "abc", "--format", "sarif")
+
+        self.assertEqual(code, 2)
+
+    def test_a_gate_that_found_nothing_new_passes_even_with_an_existing_backlog(self):
+        # `has_blocking_findings` (the bare-check question, "any finding at all") would
+        # say True here - the whole point of --since is that an existing backlog must not
+        # block a build that added nothing to it.
+        with (
+            mock.patch.object(api, "diff_against", return_value=(self._diff(), "abc", "")),
+            mock.patch.object(api, "has_blocking_findings", return_value=True),
+        ):
+            _, code = self._run("--check", "--since", "abc", "--format", "sarif")
+
+        self.assertEqual(code, 0)
+
+    def test_a_gate_that_found_something_new_fails_with_a_format_too(self):
+        symbol = mock.Mock(id="url:gone")
+        with mock.patch.object(api, "diff_against",
+                               return_value=(self._diff(new_unresolved=[symbol]), "abc", "")):
+            _, code = self._run("--check", "--since", "abc", "--format", "sarif")
+
+        self.assertEqual(code, 1)
+
+
+@override_settings(SEAMCHECK_CONFIG=_CONFIG)
+class CheckSinceBadRefExitCodeTests(SimpleTestCase):
+    """A `since` ref that cannot be resolved AT ALL - a typo, a CI variable that came
+    through empty - is a USAGE error, not "no baseline yet" (that needs a real commit
+    with nothing stored for it). Both `_check()` and `_exit_on_check()` used to treat any
+    non-empty message from `diff_against` as "no baseline" and exit 2 either way, so a
+    mistyped `$BASE_SHA` in CI silently read as a clean first run instead of the broken
+    invocation it is. Uses a real nonexistent ref rather than mocking `diff_against`, so
+    this also proves the real `git rev-parse` failure is what `sha == ""` actually means.
+    """
+
+    def _run(self, *args):
+        out = StringIO()
+        try:
+            call_command("seamcheck", *args, stdout=out, stderr=StringIO())
+        except SystemExit as exit_code:
+            return out.getvalue(), int(str(exit_code.code))
+        return out.getvalue(), 0
+
+    def test_a_nonexistent_ref_exits_usage_and_names_the_ref(self):
+        output, code = self._run("--check", "--since", "totally-bogus-ref-xyz")
+
+        self.assertEqual(code, 3)
+        self.assertIn("totally-bogus-ref-xyz", output)
+
+    def test_a_nonexistent_ref_exits_usage_even_composed_with_a_format(self):
+        out, err = StringIO(), StringIO()
+        with override_settings(SEAMCHECK_CONFIG=_CONFIG), self.assertRaises(SystemExit) as raised:
+            call_command(
+                "seamcheck", "--check", "--since", "totally-bogus-ref-xyz",
+                "--format", "sarif", stdout=out, stderr=err,
+            )
+
+        self.assertEqual(raised.exception.code, 3)
+        self.assertIn("totally-bogus-ref-xyz", err.getvalue())
 
 
 class ServingTests(SimpleTestCase):
@@ -379,9 +545,20 @@ class UndoTests(SimpleTestCase):
 
         self.assertEqual(code, 0, out)
         self.assertIn("raised again", out)
-        self.assertEqual(again, 2)
+        # A failed triage (nothing to undo, here) is a bad argument, not "no baseline to
+        # compare against" - EXIT_USAGE, not the bare `2` that used to collide with
+        # EXIT_NO_BASELINE (check --since's own, unrelated question).
+        self.assertEqual(again, exitcodes.EXIT_USAGE)
 
     def test_check_names_a_returned_finding_with_its_date_and_reason(self):
+        # `check` is a read (seamcheck_check is annotated readOnlyHint: True over MCP) and
+        # must never write triage.json - the RETURNED section below is computed from an
+        # in-memory stamp (api._marks(..., persist=False), the default), not one saved to
+        # disk. This used to assert the OPPOSITE (`self.assertTrue(stamped)` on the ON-DISK
+        # entry) as a feature ("the first scan to notice stamps the day") - that was
+        # exactly the write-on-read bug: a "read-only" MCP tool silently dirtying a
+        # git-tracked file. See ScanAndTriagePersistTheExpiryStampTests below for where the
+        # stamp DOES get saved now.
         from seamcheck.triage import TriageEntry, TriageStatus, load_triage, save_triage
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -391,12 +568,243 @@ class UndoTests(SimpleTestCase):
                 why="consumed-by-dependency",
             )], tmp)
             out, _ = self._run("--check", "--repo-root", tmp)
-            stamped = load_triage(tmp)[0].expired
+            on_disk = load_triage(tmp)[0].expired
 
         self.assertIn("returned: fetch:/api/does-not-exist/", out)
         self.assertIn("alice", out)
         self.assertIn("consumed-by-dependency", out)
         self.assertIn("--undo", out)
         self.assertNotIn("mark outlived its finding", out)
-        # The first scan to notice stamps the day; the file is the memory.
-        self.assertTrue(stamped)
+        self.assertEqual(on_disk, "", "a read must never write the expiry stamp to disk")
+
+
+@override_settings(SEAMCHECK_CONFIG=_CONFIG)
+class ScanAndTriagePersistTheExpiryStampTests(SimpleTestCase):
+    """`_marks(..., persist=True)` - the only place the expiry stamp is actually SAVED -
+    is reached from `write_map` (so `scan` and `seamcheck_snapshot` persist it) and from
+    `api.triage` (already a write). `check`/`report`/`map`, all reads, never do."""
+
+    def _git_repo(self, tmp):
+        import subprocess
+
+        subprocess.run(["git", "init", "-q"], cwd=tmp, check=True)
+        subprocess.run(["git", "config", "user.email", "a@example.com"], cwd=tmp, check=True)
+        subprocess.run(["git", "config", "user.name", "a"], cwd=tmp, check=True)
+        # write_map() (`scan`, `seamcheck_snapshot`) needs a real HEAD to key the
+        # snapshot by - `git init` alone has none until the first commit exists.
+        (Path(tmp) / ".gitkeep").write_text("")
+        subprocess.run(["git", "add", "."], cwd=tmp, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=tmp, check=True)
+
+    def test_bare_scan_persists_the_stamp(self):
+        from seamcheck.triage import TriageEntry, TriageStatus, load_triage, save_triage
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self._git_repo(tmp)
+            save_triage([TriageEntry(
+                symbol_id="fetch:/api/does-not-exist/", fingerprint="older-evidence",
+                status=TriageStatus.APPROVED, who="alice", when="2026-08-20", reason="",
+            )], tmp)
+            call_command("seamcheck", "--repo-root", tmp, stdout=StringIO(), stderr=StringIO())
+            on_disk = load_triage(tmp)[0].expired
+
+        self.assertTrue(on_disk, "`scan` writes the snapshot on every run - it must also "
+                                 "save an expiry stamp this same run discovered")
+
+    def test_triage_persists_a_stamp_on_a_different_entry_found_stale_in_the_same_scan(self):
+        from seamcheck.triage import TriageEntry, TriageStatus, load_triage, save_triage
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self._git_repo(tmp)
+            save_triage([TriageEntry(
+                symbol_id="fetch:/api/does-not-exist/", fingerprint="older-evidence",
+                status=TriageStatus.APPROVED, who="alice", when="2026-08-20", reason="",
+            )], tmp)
+            # Mark an UNRELATED symbol - api.triage's own write must also save the OTHER
+            # entry's freshly-discovered expiry stamp, not just the one it was asked for.
+            call_command(
+                "seamcheck", "--triage", "view:seamcheck.tests.fixtures.fixture_views.get_thing",
+                "--status", "approved", "--repo-root", tmp,
+                stdout=StringIO(), stderr=StringIO(),
+            )
+            entries = {e.symbol_id: e for e in load_triage(tmp)}
+
+        self.assertTrue(entries["fetch:/api/does-not-exist/"].expired)
+
+
+@override_settings(SEAMCHECK_CONFIG=_CONFIG)
+class ReadCommandsLeaveGitStatusCleanTests(SimpleTestCase):
+    """The original review's proposed "no side effects" test (review §7): a read command
+    must leave `git status` clean. Reproduced against a REAL git repo, not just an
+    in-memory assertion on the triage file's own contents - `readOnlyHint: True` on
+    `seamcheck_check`/`seamcheck_report` is a promise about the whole working tree."""
+
+    def test_check_against_a_stale_mark_touches_nothing_on_disk(self):
+        import contextlib
+        import subprocess
+
+        from seamcheck.triage import TriageEntry, TriageStatus, save_triage
+
+        with tempfile.TemporaryDirectory() as tmp:
+            subprocess.run(["git", "init", "-q"], cwd=tmp, check=True)
+            subprocess.run(["git", "config", "user.email", "a@example.com"], cwd=tmp, check=True)
+            subprocess.run(["git", "config", "user.name", "a"], cwd=tmp, check=True)
+            save_triage([TriageEntry(
+                symbol_id="fetch:/api/does-not-exist/", fingerprint="older-evidence",
+                status=TriageStatus.APPROVED, who="alice", when="2026-08-20", reason="",
+            )], tmp)
+            subprocess.run(["git", "add", "."], cwd=tmp, check=True)
+            subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=tmp, check=True)
+
+            # --check fails the gate on the fixture's real unresolved fetch target - that
+            # is expected and unrelated to this test, which only cares whether the
+            # WORKING TREE moved. A raised SystemExit is the gate doing its job, not this
+            # assertion's business, so it is swallowed rather than propagated.
+            with contextlib.suppress(SystemExit):
+                call_command("seamcheck", "--check", "--repo-root", tmp,
+                             stdout=StringIO(), stderr=StringIO())
+
+            status = subprocess.run(
+                ["git", "status", "--short"], cwd=tmp, capture_output=True, text=True, check=True,
+            ).stdout
+
+        self.assertEqual(status, "", "check is a read - it must not dirty the working tree:\n"
+                                     f"{status}")
+
+
+@override_settings(SEAMCHECK_CONFIG=_CONFIG)
+class DiffCommandTests(SimpleTestCase):
+    """`seamcheck diff --since REF` - `queries.diff()` had no command wired to it anywhere,
+    reachable only as a library call, despite the plan's own before/after table promising
+    it. Wired exactly as `--findings` is, on both doors, with --limit/--cursor/--refresh.
+    """
+
+    def test_the_django_door_wires_diff_with_since_limit_and_cursor(self):
+        out = StringIO()
+        with mock.patch("seamcheck.queries.diff",
+                        return_value={"ok": True, "data": {}}) as diff:
+            call_command("seamcheck", "--diff", "--since", "origin/main", "--limit", "10",
+                        "--cursor", "5", stdout=out, stderr=StringIO())
+
+        diff.assert_called_once_with(".", "origin/main", 10, "5", refresh=False)
+        self.assertIn('"ok": true', out.getvalue())
+
+    def test_the_django_door_defaults_since_to_head_tilde_1(self):
+        with mock.patch("seamcheck.queries.diff", return_value={"ok": True}) as diff:
+            call_command("seamcheck", "--diff", stdout=StringIO(), stderr=StringIO())
+
+        diff.assert_called_once_with(".", "HEAD~1", 25, "", refresh=False)
+
+    def test_the_django_door_forwards_refresh(self):
+        with mock.patch("seamcheck.queries.diff", return_value={"ok": True}) as diff:
+            call_command("seamcheck", "--diff", "--refresh", stdout=StringIO(), stderr=StringIO())
+
+        diff.assert_called_once_with(".", "HEAD~1", 25, "", refresh=True)
+
+    def test_the_plain_door_wires_diff_too(self):
+        import os
+
+        from seamcheck.cli import _run_without_django
+
+        with tempfile.TemporaryDirectory() as tmp:
+            real_tmp = os.path.realpath(tmp)
+            Path(tmp, "package.json").write_text("{}")
+            cwd = os.getcwd()
+            os.chdir(tmp)
+            try:
+                with (
+                    mock.patch("seamcheck.cli._worth_scanning", return_value=True),
+                    mock.patch("seamcheck.queries.diff",
+                              return_value={"ok": True, "data": {}}) as diff,
+                ):
+                    code = _run_without_django(
+                        ["--diff", "--since", "origin/main", "--limit", "10"], verbose=False
+                    )
+            finally:
+                os.chdir(cwd)
+
+        self.assertEqual(code, 0)
+        diff.assert_called_once_with(real_tmp, "origin/main", 10, "", refresh=False)
+
+
+class ExplainWithHintTests(SimpleTestCase):
+    """`queries.near()` had no caller anywhere in the codebase. `api.explain_with_hint()`
+    is the one wired into both CLI doors and the MCP server - direct, graph-only tests
+    here rather than a full scan, since the matching itself is `queries.near`'s job
+    (already tested in test_queries.py); this only checks the wiring and the wording."""
+
+    def _graph(self):
+        from seamcheck.graph import Graph, Status, Symbol
+
+        return Graph(symbols=[
+            Symbol(id="url:api/submit/", kind="url", label="api/submit/", sub="",
+                  file="app/urls.py", line=3, status=Status.CONNECTED, snippet="",
+                  chain=[], note=""),
+        ], edges=[])
+
+    def test_a_correct_id_gets_no_hint_section(self):
+        text = api.explain_with_hint(self._graph(), "url:api/submit/")
+
+        self.assertIn("api/submit/", text)
+        self.assertNotIn("Did you mean", text)
+
+    def test_a_near_miss_names_the_real_id(self):
+        text = api.explain_with_hint(self._graph(), "url:api/submit")
+
+        self.assertIn("No symbol", text)
+        self.assertIn("Did you mean", text)
+        self.assertIn("url:api/submit/", text)
+
+    def test_nothing_close_enough_gets_no_hint_section(self):
+        text = api.explain_with_hint(self._graph(), "totally-unrelated-xyz")
+
+        self.assertIn("No symbol", text)
+        self.assertNotIn("Did you mean", text)
+
+    def test_the_plain_non_django_door_offers_the_same_hint(self):
+        # Both CLI doors call the same api.explain_with_hint - proved here by observing
+        # the plain (non-Django) door's own output, not by re-testing the matching logic.
+        import io
+        import os
+        from contextlib import redirect_stdout
+
+        from seamcheck.cli import _run_without_django
+
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "package.json").write_text("{}")
+            cwd = os.getcwd()
+            os.chdir(tmp)
+            try:
+                with (
+                    mock.patch("seamcheck.cli._worth_scanning", return_value=True),
+                    mock.patch("seamcheck.api.scan", return_value=self._graph()),
+                    redirect_stdout(io.StringIO()) as out,
+                ):
+                    code = _run_without_django(["--explain", "url:api/submit"], verbose=False)
+            finally:
+                os.chdir(cwd)
+
+        self.assertEqual(code, 0)
+        self.assertIn("Did you mean", out.getvalue())
+        self.assertIn("url:api/submit/", out.getvalue())
+
+
+class ExplainCachedScanTests(SimpleTestCase):
+    """`explain` used to call api.scan() directly on both CLI doors and the MCP tool -
+    the exact call the review measured at 88.5 seconds for a mistyped id, on the second
+    step of the documented unverified -> explain -> triage -> check agent loop. It now
+    shares the same cache symbols/findings/diff already use (see scancache.py)."""
+
+    def test_the_django_door_goes_through_the_cache_not_a_fresh_scan(self):
+        from seamcheck.graph import Graph
+
+        empty = Graph(symbols=[], edges=[])
+        with (
+            mock.patch("seamcheck.scancache.cached_scan",
+                       return_value=(empty, {"cached": True, "seconds": 0.0})) as cached_scan,
+            mock.patch("seamcheck.api.scan") as scan,
+        ):
+            call_command("seamcheck", "--explain", "url:x", stdout=StringIO(), stderr=StringIO())
+
+        cached_scan.assert_called_once_with(".")
+        scan.assert_not_called()
