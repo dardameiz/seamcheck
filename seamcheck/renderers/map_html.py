@@ -2085,9 +2085,15 @@ function pickFunction(name, hops) {
 }
 
 function clearFunction() {
-  if (!funcFilter && !funcBox.value && !query) return;
+  if (!funcFilter && !fileFilter && !funcBox.value && !query) return;
   const row = functionRow(funcFilter);
   funcFilter = null; funcHops = 1;
+  // The box picks files as well as functions (`takeResult`'s `go === "file"` branch calls
+  // openFile(), which sets fileFilter) - so its own clear control has to undo either kind
+  // of pick, not just the function half. Without this, clearing a FILE result left
+  // fileFilter set: the box read empty, but the breadcrumb and the canvas stayed narrowed
+  // to the file nobody could see was still selected.
+  fileFilter = null;
   funcBox.value = ""; query = ""; funcOff.hidden = true;
   closeFuncList();
   _layout.key = null;
@@ -2101,6 +2107,11 @@ function clearFunction() {
 }
 
 funcBox.oninput = () => {
+  // Backspacing the box to empty is how most readers clear a pick - the X is easy to
+  // miss - and it used to leave funcOff.hidden = true (the box says empty) while
+  // funcFilter/fileFilter stayed set (the map stayed narrowed): an empty-looking box
+  // with no visible way left to undo what it had filtered.
+  if (!funcBox.value && (funcFilter || fileFilter)) { clearFunction(); return; }
   query = funcBox.value.trim().toLowerCase();
   funcOff.hidden = !funcBox.value;
   offerAnything();

@@ -888,6 +888,24 @@ class FilesViewTests(SimpleTestCase):
         self.assertIn("the rest are not reached from any page", out)
         self.assertIn("FILE_TOTALS.set(f.path, Object.values(f.counts || {})", out)
 
+    def test_clearing_the_search_box_also_clears_a_file_pick(self):
+        # A `file` search result sets fileFilter via openFile() - the same box that sets
+        # funcFilter for a `function` result. clearFunction() used to reset only funcFilter,
+        # so clicking the box's own X after picking a FILE left the box empty while the
+        # breadcrumb and canvas stayed narrowed to that file: no visible way left to undo it.
+        out = map_html.render(_map())
+
+        self.assertIn("function clearFunction() {", out)
+        clear_body = out.split("function clearFunction() {", 1)[1].split("\n}", 1)[0]
+        self.assertIn("fileFilter = null", clear_body)
+
+        # Backspacing the box to empty is the other way a reader clears a pick, and it has
+        # to reach the same reset - not just hide the X while fileFilter stays set.
+        self.assertIn(
+            'if (!funcBox.value && (funcFilter || fileFilter)) { clearFunction(); return; }',
+            out,
+        )
+
 
 class PathNumberingTests(SimpleTestCase):
     def test_each_hop_is_numbered_and_the_last_one_says_so(self):
