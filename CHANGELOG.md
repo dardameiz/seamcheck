@@ -17,6 +17,49 @@ Coverage and precision have **different denominators** and neither is meaningful
 backend that answered `uncertain` everywhere would score 100% precision and be useless.
 `uncertain` is not counted as a claim in precision, because it is not a claim.
 
+## 0.14.0 - 2026-09-08
+
+**A newer seamcheck now says so, and a click stays lit.** Reported from use, driving the
+map on a real phone against a real project.
+
+- **Added** - `seamcheck` and `seamcheck-mcp` check PyPI once a day for a newer release
+  and print one line on stderr when you are behind - `pip install -U seamcheck`
+  (`pipx upgrade seamcheck`). Off with `SEAMCHECK_NO_UPDATE_CHECK=1`, and skipped
+  automatically whenever `CI` is set, so "no network... in CI" stays true. The one
+  deliberate exception to "seamcheck makes no network call" anywhere else in this
+  package - narrowly scoped (a public version number in, nothing about the scanned
+  project out) and documented everywhere that other claim is made (README, SECURITY.md,
+  docs/reporting.md, the map's own "Send a report" panel).
+- **Fixed** - clearing the search box after picking a *file* result left the map still
+  narrowed to it. The box also sets a *function* pick from the same field, and its own
+  clear button only ever reset that half - `fileFilter`, set by a file pick, was never
+  touched, so the box read empty while the canvas stayed filtered with nothing showing
+  why.
+- **Fixed** - `.hud.tr` (Back/List/Widen/the theme button, top-right on a phone) had no
+  width cap and could not wrap. Enough of those pills visible together pushed the row
+  past the left edge with nothing left to reveal what fell off it - `body` is
+  `overflow:hidden` on both axes. Capped and made to scroll sideways, the same pattern
+  `.hud.bl` already uses for the same reason.
+- **Fixed** - click a card and its whole chain lights (`.ed.lit`, the rest dimmed via
+  `.ed.faded`); move the pointer to any OTHER card afterward and the highlight visibly
+  vanished. Not because the click's state changed - `#cv.tracing .ed
+  { stroke-opacity:.07 }` is an ID selector and always outranks the click's class-only
+  `.ed.lit { stroke-opacity:1 }`, whichever node the hover was even over. Tracing is now
+  suppressed while a card is lit, the same guard already used for isolate.
+- **Changed** - "Show only this chain" is filled solid now, not outlined the same as
+  "This is wrong" and "Undo the mark" beside it - the one button in that row that
+  changes what the CANVAS shows, and it read as the least important thing there.
+- **Changed** - the canvas bands gain plain names beside the ones this tool already
+  uses: THE BROWSER's subtitle now says FRONTEND, THE SERVER's says BACKEND, and THE
+  STORE is fully renamed THE DATABASE. THE SEAM keeps its own name - it is not a side of
+  the wire, it IS the crossing, which is the reason this tool is named what it is. The
+  detail sheet's hop list (PAGE, MODULE, FETCH_TARGET, ...) now tags each hop with the
+  same phase word, for the reader who gets that list on a phone with no band to look at.
+
+**Measured:** none of this reads source any differently, so the scan numbers are
+unchanged by construction rather than by assertion. The corpus was re-run to confirm: no
+CRASH, no repo lost its routes, identical totals.
+
 ## 0.13.0 - 2026-09-08
 
 **Two buttons, and one box to search with.** Reported from use, with the phone layout as
