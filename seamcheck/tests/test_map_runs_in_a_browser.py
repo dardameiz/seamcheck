@@ -656,6 +656,68 @@ class DirectionAOnAPhone(MapRunsInABrowser):
                         "a desk monitor gets the same two buttons as a phone")
         self.assertFalse(state["pageOnGlass"], "nothing but the two buttons on the glass")
 
+    def test_the_top_right_pills_never_fall_off_the_left_edge(self):
+        """Reported live, 2026-09-08: a function filter reached while viewing a page as a
+        list showed #up (Back), #aslist (List) and #widen together, alongside the theme
+        button that is always on - four pills, and .hud.tr had no width cap and no wrap.
+        `body` is `overflow:hidden` on both axes, so the ones that stopped fitting were
+        not scrolled past, they were gone - unreachable, with no way back to the menu.
+
+        Forcing every optional pill on at once, rather than reproducing the exact click
+        path that reveals them together, tests the LAYOUT rather than one route to it -
+        any future state that shows several of these pills at once is covered too."""
+        from playwright.sync_api import sync_playwright
+
+        from seamcheck.console import build_console
+        from seamcheck.mapdata import build_map
+        from seamcheck.renderers.map_html import render
+        from seamcheck.report import build_report
+
+        graph = self._phone_graph()
+        html = render(
+            build_map(graph, {"orders-main": {s.id for s in graph.symbols}}, git_sha="0" * 12),
+            console=build_console(graph, build_report(
+                graph=graph, diff=None, entries=[], git_sha="0" * 12)))
+        path = pathlib.Path(tempfile.mkdtemp()) / "m.html"
+        path.write_text(html, encoding="utf-8")
+
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch()
+            except Exception as error:  # pragma: no cover
+                raise unittest.SkipTest(f"no chromium: {error}") from None
+            page = browser.new_page(viewport={"width": 390, "height": 780})
+            page.goto(path.as_uri(), wait_until="load")
+            page.wait_for_timeout(250)
+            _open_lens(page, "map")
+            page.wait_for_timeout(300)
+            # #tmode (theme) is always visible; #up/#aslist/#widen are each independently
+            # toggled by app state elsewhere - forced here so the test does not depend on
+            # the exact sequence that reveals them together. #widen's real label (set by
+            # draw(), never present at load) is the long one that actually overflows -
+            # a short placeholder does not reproduce the bug at all.
+            page.evaluate("""() => {
+                document.getElementById('widen').textContent = 'Widen by one hop';
+                for (const id of ['up', 'aslist', 'widen']) {
+                    document.getElementById(id).hidden = false;
+                }
+            }""")
+            page.wait_for_timeout(100)
+            boxes = page.evaluate("""() =>
+                [...document.querySelectorAll('.hud.tr > *')].map(el => {
+                    const r = el.getBoundingClientRect();
+                    return {id: el.id || el.className, x: r.x};
+                })
+            """)
+            browser.close()
+
+        self.assertTrue(boxes, "the top-right corner drew no pills at all")
+        for box in boxes:
+            self.assertGreaterEqual(
+                box["x"], -0.5,
+                f"{box['id']!r} sits at x={box['x']}, off the left edge of the screen - "
+                "and body is overflow:hidden, so there is no scroll gesture that reaches it")
+
 
 class FiltersReachTheCanvas(DirectionAOnAPhone):
     """A filter has to change the picture, not only the number beside it.
@@ -1801,6 +1863,39 @@ class TracingAWireTests(SimpleTestCase):
         }""")
         self.assertFalse(state["tracing"])
         self.assertEqual(state["hot"], 0)
+
+    def test_clicking_a_card_then_hovering_another_keeps_the_click_highlight(self):
+        """Reported live: click a card - it lights its chain (`.ed.lit`, dimming the rest
+        via `.ed.faded`) - then move the pointer to ANY other card, and the chain visibly
+        vanished. Not because the click's state changed: `#cv.tracing .ed
+        { stroke-opacity:.07 }` is an ID selector and always outranks the click's
+        class-only `.ed.lit { stroke-opacity:1 }`, so hover's dimming painted over the
+        click's regardless of which node the hover was even over. Tracing is now
+        suppressed while a card is lit, so the second system never engages at all."""
+        state = self._on_canvas("""() => {
+            const svg = document.getElementById('cv');
+            const clickedId = svg.querySelector('.nd[data-id]').dataset.id;
+            svg.querySelector('.nd[data-id]')
+               .dispatchEvent(new MouseEvent('click', {bubbles: true}));
+            const litBefore = svg.querySelectorAll('.ed.lit').length;
+            // draw() replaces svg.innerHTML on click (it redraws the chain highlight),
+            // so any card reference taken before the click is already detached - hovering
+            // it reaches nothing. Re-queried fresh, same as a real pointer would find it.
+            const other = [...svg.querySelectorAll('.nd[data-p]')]
+                .find(n => n.dataset.id !== clickedId);
+            other.dispatchEvent(new PointerEvent('pointerenter', {bubbles: true}));
+            return {
+                litBefore,
+                litAfter: svg.querySelectorAll('.ed.lit').length,
+                tracingWhileLit: svg.classList.contains('tracing'),
+            };
+        }""")
+        self.assertGreater(state["litBefore"], 0, "clicking a card must light its chain")
+        self.assertEqual(state["litAfter"], state["litBefore"],
+                         "hovering another card must not touch the clicked chain")
+        self.assertFalse(state["tracingWhileLit"],
+                         "tracing must not engage while a card is lit - it always beats "
+                         "the click's highlight on CSS specificity")
 
     def test_hovering_does_not_redraw_the_canvas(self):
         # A redraw per pointer move on a ten-thousand-node page is a frozen tab. The

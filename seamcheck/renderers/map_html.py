@@ -820,6 +820,15 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
 .repbtn:hover { filter:brightness(1.1); }
 .acts button { padding:7px 11px; font-size:12.5px; border-radius:8px; cursor:pointer;
                border:1px solid var(--line); background:var(--bg); color:var(--sig); }
+/* Reported live: "Show only this chain" read as the same faint outline as every other
+   button here, and was missed as a result - the one action in this row that changes what
+   the CANVAS shows, not just the sheet, is the one that most needs to look different from
+   "This is wrong" and "Undo the mark" beside it. Filled rather than outlined, the same
+   treatment .repbtn already uses for the report view's own primary action - #id, not a
+   class, because .acts button (element+class) otherwise outranks a same-specificity
+   class selector regardless of source order. */
+#iso { border:1px solid var(--sig); background:var(--sig); color:#fff; font-weight:600; }
+#iso:hover { filter:brightness(1.1); }
 .sheet .lbl { font-size:9.5px; text-transform:uppercase; letter-spacing:.09em;
               color:var(--muted); margin:14px 0 6px; }
 /* The NUMBER in a label is the thing being read - "3 hops", "12 from here" - and it was
@@ -840,6 +849,10 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
            display:inline-flex; align-items:center; justify-content:center;
            letter-spacing:0; }
 .hop.at .hn { background:var(--sig); color:#fff; }
+/* Frontend / Backend / Database / Seam - the canvas already groups a hop into a band a
+   reader can SEE; this is the same grouping's word, for the list a reader reads on a
+   phone where there is no band to look at. */
+.hop .hphase { color:var(--sig); font-weight:700; }
 .hop .hs { color:var(--muted); font-size:9px; letter-spacing:.04em; }
 .hop .hl { font-size:12.5px; font-family:var(--mono); word-break:break-all; }
 .hop.at { background:var(--sunk);
@@ -1215,8 +1228,25 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
      and cannot be pushed off the side by where the button happens to sit. */
   .filterwrap { position:static; }
   #filtersheet { left:0; right:auto; width:calc(100vw - 24px); max-width:none; }
-  /* Clear of the right corner's own controls, which stay on row one. */
-  .hud.tr { top:12px; right:12px; gap:6px; z-index:7; }
+  /* Clear of the right corner's own controls, which stay on row one.
+     "stay on row one" assumed a small, fixed set - but #up, #aslist and #widen are each
+     independently hidden/shown by state, and a function filter on a page reached by List
+     can show all three AT ONCE alongside the theme button: four pills, unbounded width,
+     no wrap. With no width cap the box was shrink-to-fit and grew past the LEFT edge of
+     the screen with nothing left to reveal what fell off it - `body` is `overflow:hidden`
+     on both axes (line 249), so that content was not scrolled past, it was gone.
+     `max-width` bounds it and `overflow-x:auto` lets it scroll sideways instead, same as
+     `.hud.bl` below - `justify-content:flex-end` was tried first and reverted: WebKit's
+     default (unsafe) end-alignment can make the OVERFLOWING start of a flex-end row
+     unreachable by scrolling, which is this exact bug again by a different route. Left at
+     the default start-alignment, Back (#up, first in the DOM - the control this was
+     reported over) is the one pill guaranteed visible with no scrolling at all; anchoring
+     by `right` alone (no `left`) keeps today's shape - hugging the corner, unscrollable -
+     for the common case where everything still fits. */
+  .hud.tr { top:12px; right:12px; max-width:calc(100vw - 24px); gap:6px; z-index:7;
+            overflow-x:auto; flex-wrap:nowrap;
+            scrollbar-width:none; -webkit-overflow-scrolling:touch; }
+  .hud.tr::-webkit-scrollbar { display:none; }
   .menubtn { max-width:38vw; min-width:0; overflow:hidden; text-overflow:ellipsis; }
   /* The page picker on the glass now says which page this is, so the readout was the
      same sentence twice - and the second copy floated over a band heading. */
@@ -1348,22 +1378,31 @@ const COLS = MAPDATA.columns, COMMITS = MAPDATA.commits || [];
 // Three regions and a strip, named the way a person would name them rather than by the
 // kind of symbol that happens to land there. A reader opening this map for the first time
 // does not know what a `dom_attr` is and should not have to.
+// `phase` is the plain word a reader already knows - Frontend, Backend, Database -
+// requested alongside the evocative `label`/`short` names rather than instead of them:
+// "the SEAM" is not a synonym for either side, it IS the boundary between them, and is
+// the reason this tool is named what it is - there is no plainer word for "the crossing
+// itself" to fall back to, so its phase stays "Seam". Read by hop() below, so the path
+// list says which side of the wire each step runs on, not only what kind it is.
 const BANDS = [
-  {id: "browser", label: "THE BROWSER \u2014 WHAT A PERSON TOUCHES", short: "THE BROWSER",
+  {id: "browser", label: "THE BROWSER \u2014 FRONTEND \u2014 WHAT A PERSON TOUCHES",
+   short: "THE BROWSER", phase: "Frontend",
    kinds: ["page", "module", "js_call", "dom_selector", "dead_region",
            "multi_writer_element",
            "dom_attr", "css_selector", "css_token_def", "css_token_use"]},
   {id: "seam", label: "THE SEAM \u2014 THE NETWORK BOUNDARY", short: "THE SEAM",
+   phase: "Seam",
    kinds: ["fetch_target", "json_field"]},
-  {id: "server", label: "THE SERVER \u2014 WHAT RUNS WHEN THE REQUEST LANDS",
-   short: "THE SERVER",
+  {id: "server", label: "THE SERVER \u2014 BACKEND \u2014 WHAT RUNS WHEN THE REQUEST LANDS",
+   short: "THE SERVER", phase: "Backend",
    kinds: ["url", "view", "signal_receiver", "admin_action", "template_tag",
            "url_reference", "management_command"]},
   // The second seam. A request crosses the network and lands on a route; a query crosses
   // another boundary and lands on a table. Same disease, next boundary down - and every
   // one of these kinds used to fall into the unnamed overflow group at the bottom.
-  {id: "store", label: "THE STORE \u2014 THE SECOND SEAM, WHERE THE SERVER TALKS TO ITS DATA",
-   short: "THE STORE",
+  {id: "store",
+   label: "THE DATABASE \u2014 THE SECOND SEAM, WHERE THE BACKEND TALKS TO ITS DATA",
+   short: "THE DATABASE", phase: "Database",
    kinds: ["db_table", "db_column", "db_function", "db_policy",
            "db_table_use", "db_column_use", "db_function_use",
            "redis_key", "redis_invalidation", "redis_cleanup", "redis_dead_assertion",
@@ -1390,6 +1429,11 @@ const BANDS = [
            "graphql_field", "graphql_selection",
            "job", "job_enqueue", "job_schedule", "env_var", "env_read"]},
 ];
+// One lookup, built once, shared by hop() below rather than a second copy of this same
+// kind-to-band walk - place()'s own bandOfKind stays local to it (it indexes by BAND
+// POSITION for the sort/overflow logic that follows it there, which this has no use for).
+const PHASE_OF_KIND = new Map();
+BANDS.forEach(band => band.kinds.forEach(k => PHASE_OF_KIND.set(k, band.phase)));
 // Nodes arrive as arrays against string tables, and they arrive LATE: each page's rows
 // sit in an inert <script type="text/plain"> block until the page is drawn, so a map of
 // 700,000 symbols costs the browser one page's worth of objects, not all of them. PAGES
@@ -4100,8 +4144,17 @@ function applyView() {
 // as unreadable as the thing being fixed. Class toggling on wires that are already
 // drawn - a redraw per pointer move on a ten-thousand-node page is a frozen tab.
 //
-// Off while isolating: that reader has already asked for one path, and a second
-// highlight fighting the first is worse than neither.
+// Off while isolating OR while a card is lit (the sheet is open): that reader has
+// already asked for one path, and a second highlight fighting the first is worse than
+// neither. Reported live: click a card, then move the pointer anywhere else, and the
+// chain the click lit (the `.lit`/`.faded` classes below) visibly vanished - not because
+// `lit` changed, but because `#cv.tracing .ed { stroke-opacity:.07 }` is an ID selector
+// and always outranks the click's class-only `.ed.lit { stroke-opacity:1 }`, whatever
+// node the hover is even over. The state survived; only the paint did not. Guarding
+// tracing off while `lit` is set stops the second system from ever engaging, the same
+// fix already shipped for `isolate` above - a click's highlight is exactly as deliberate
+// as an isolate, and the reader has to move the pointer to reach the sheet's own buttons
+// anyway, so hover-preview has nothing left to do until the sheet is closed.
 let tracing = null;
 
 window.trace = trace;
@@ -4125,7 +4178,7 @@ function trace(place) {
 }
 
 svg.addEventListener("pointerover", e => {
-  if (isolate || moved || pinch) return;
+  if (isolate || lit || moved || pinch) return;
   const card = e.target.closest && e.target.closest(".nd[data-p]");
   trace(card ? card.dataset.p : null);
 });
@@ -4137,7 +4190,7 @@ svg.addEventListener("pointerout", e => {
 // A pointer that leaves the canvas entirely, and the synthetic events a test sends.
 svg.addEventListener("pointerleave", () => trace(null));
 svg.addEventListener("pointerenter", e => {
-  if (isolate || moved || pinch) return;
+  if (isolate || lit || moved || pinch) return;
   const card = e.target.closest && e.target.closest(".nd[data-p]");
   if (card) trace(card.dataset.p);
 }, true);
@@ -4225,8 +4278,14 @@ function hop(id, here, step, total) {
   // end of the line.
   const mark = step ? `<span class="hn">${step}</span>` : "";
   const end = step && step === total ? `<span class="hs">last</span>` : "";
+  // Which side of the wire this hop runs on - Frontend, Backend, Database, or Seam for
+  // the crossing itself - read off the same BANDS a symbol's canvas position already
+  // comes from. Reported missing here specifically: the canvas groups hops into bands a
+  // reader can SEE, but this list is what gets read on a phone, and had no equivalent.
+  const phase = PHASE_OF_KIND.get(n.kind);
+  const phaseTag = phase ? `<span class="hphase">${esc(phase)}</span>` : "";
   return `<div class="hop${id === here ? " at" : ""}">
-    <div class="hk">${mark}${esc(n.kind)}${end}</div>
+    <div class="hk">${mark}${phaseTag}${esc(n.kind)}${end}</div>
     <div class="hl">${esc(n.label)}</div>
     ${n.file ? `<div class="hf">${loc(n.file, n.line)}</div>` : ""}
     ${code ? `<button class="code" data-code="${esc(id)}">code</button>` : ""}</div>`;

@@ -837,6 +837,23 @@ class FilterFeedbackTests(SimpleTestCase):
         self.assertIn("|| (fading && query && !ends.every(n => n && hit(n)))", out)
 
 
+class IsolateButtonTests(SimpleTestCase):
+    """"Show only this chain" is the one action in the sheet that changes what the
+    CANVAS shows, not just the sheet - reported as missed, blending into the same faint
+    outline as "This is wrong" and "Undo the mark" beside it."""
+
+    def test_it_is_filled_rather_than_outlined_like_its_siblings(self):
+        out = map_html.render(_map())
+
+        self.assertIn(
+            "#iso { border:1px solid var(--sig); background:var(--sig); color:#fff;",
+            out)
+        # An #id rule, not a class: .acts button (element+class) has the same specificity
+        # ladder rung as a bare class selector on its own, and a class-only override would
+        # lose regardless of source order.
+        self.assertIn('id="iso"', out)
+
+
 class LabelFittingTests(SimpleTestCase):
     def test_both_ends_of_a_long_label_survive(self):
         # `api/announcements/m…` and `api/announcements/p…` were the same string on
@@ -916,6 +933,48 @@ class PathNumberingTests(SimpleTestCase):
         self.assertIn('<span class="hn">${step}</span>', out)
         self.assertIn('<span class="hs">last</span>', out)
         self.assertIn("Path — browser to backend · <b>${path.length}</b> hop", out)
+
+    def test_each_hop_says_which_side_of_the_wire_it_runs_on(self):
+        # Reported missing: the canvas already groups a hop into a band (Frontend/Backend/
+        # Database/Seam) a reader can SEE, but this list is what gets read on a phone,
+        # where there is no band to look at - so a hop's own kind (PAGE, FETCH_TARGET...)
+        # was the only clue, and a reader new to the codebase does not know which of those
+        # runs in the browser and which runs on the server.
+        out = map_html.render(_map())
+
+        self.assertIn("const phase = PHASE_OF_KIND.get(n.kind);", out)
+        self.assertIn('<span class="hphase">${esc(phase)}</span>', out)
+        self.assertIn('PHASE_OF_KIND.set(k, band.phase)', out)
+
+
+class BandNamingTests(SimpleTestCase):
+    """The canvas bands, named for a reader who does not yet know this tool's own
+    vocabulary - "the SEAM" is the one word with no plainer synonym: it is not a side of
+    the wire, it IS the crossing, and the reason the tool is named what it is."""
+
+    def test_frontend_and_backend_and_database_are_named_plainly(self):
+        # — stays literal escape text here (not a real em-dash byte), matching every
+        # other label/short in BANDS: draw() parses it back apart with
+        # `.split(" — ")`, which only works if the delimiter it looks for is the
+        # same six characters that were written, not a different byte the source editor
+        # happened to insert for a human reading the comment beside it.
+        out = map_html.render(_map())
+
+        self.assertIn("THE BROWSER \\u2014 FRONTEND \\u2014 WHAT A PERSON TOUCHES", out)
+        self.assertIn("THE SERVER \\u2014 BACKEND \\u2014 WHAT RUNS WHEN THE REQUEST LANDS",
+                      out)
+        self.assertIn(
+            "THE DATABASE \\u2014 THE SECOND SEAM, WHERE THE BACKEND TALKS TO ITS DATA",
+            out)
+        self.assertIn('short: "THE DATABASE"', out)
+
+    def test_the_seam_keeps_its_own_name(self):
+        # Not renamed to Frontend or Backend - it is neither; it is the boundary between
+        # them, which a plain synonym would erase rather than explain.
+        out = map_html.render(_map())
+
+        self.assertIn('{id: "seam", label: "THE SEAM \\u2014 THE NETWORK BOUNDARY"', out)
+        self.assertIn('phase: "Seam"', out)
 
 
 class ColophonTests(SimpleTestCase):
@@ -1036,4 +1095,4 @@ class SideBySideSectionTests(SimpleTestCase):
         # labels, and the hover highlight that a touch turns on and a pan never turns off.
         self.assertIn("#cv, #cv * { user-select:none;", out)
         self.assertIn('svg.classList.add("drag"); if (window.trace) trace(null);', out)
-        self.assertIn("if (isolate || moved || pinch) return;", out)
+        self.assertIn("if (isolate || lit || moved || pinch) return;", out)
