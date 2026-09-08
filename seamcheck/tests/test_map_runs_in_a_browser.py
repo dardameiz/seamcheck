@@ -582,7 +582,8 @@ class DirectionAOnAPhone(MapRunsInABrowser):
                 // inside that corner too, so `.hud #pg` cannot tell them apart.
                 pageOnGlass: !!document.querySelector('.hud > #pgwrap #pg'),
                 lenses: !!document.querySelector('#mapsheet #nav .nv'),
-                search: !!document.querySelector('#mapsheet #q'),
+                searchInMenu: !!document.querySelector('#mapsheet #q'),
+                searchInFilters: !!document.querySelector('#filtersheet #q'),
                 status: !!document.querySelector('.hud #colourkey'),
                 reading: !document.getElementById('reading').hidden,
                 big: (document.getElementById('bignum') || {}).textContent,
@@ -596,18 +597,20 @@ class DirectionAOnAPhone(MapRunsInABrowser):
         return state
 
     def test_every_control_is_behind_one_of_the_two_buttons(self):
-        """Superseded, and by a report: "on mobile the 3 filters are not looking good,
-        they are super small". They were - the page, section and function pickers shared
-        the glass beside the menu at 34vw each. On a phone the filters now sit behind a
-        Filter button next to the menu; the view list and the search stay in the menu."""
+        """Two buttons, two questions. Menu answers "which view"; Filter answers
+        "narrowed to what". The menu used to answer both - it carried the view list AND
+        the emphasis filter AND the search - so one intention sat behind two buttons and
+        the five words naming the views were the top fifth of a panel."""
         state = self._open()
         self.assertTrue(state["menu"], "no menu was built")
-        for control in ("lenses", "search"):
-            self.assertTrue(state[control], f"the {control} control is not in the menu")
-        self.assertTrue(state["layer"] or state["layerInFilters"],
-                        "the emphasis filter is behind neither button")
-        self.assertTrue(state["page"] or state["pickersInFilters"],
-                        "the page picker is behind neither button")
+        self.assertTrue(state["lenses"], "the view list is not in the menu")
+        # ...and NOTHING else is in the menu.
+        self.assertFalse(state["layer"], "emphasis belongs behind Filter, not Menu")
+        self.assertFalse(state["searchInMenu"], "the search belongs behind Filter")
+        # Everything that narrows the map is behind the one button that says so.
+        self.assertTrue(state["layerInFilters"], "emphasis is behind neither button")
+        self.assertTrue(state["pickersInFilters"], "the page picker is behind neither button")
+        self.assertTrue(state["searchInFilters"], "the search is behind neither button")
         # Still the one filter a reader reaches for most, still on the glass.
         self.assertTrue(state["status"], "the colour key must float over the canvas")
 
@@ -640,10 +643,18 @@ class DirectionAOnAPhone(MapRunsInABrowser):
         self.assertIn("", layers, "there must be a way back to everything")
 
     def test_the_desktop_gets_the_same_menu(self):
-        """One layout, not a phone one and a desk one that drift apart."""
+        """One layout, not a phone one and a desk one that drift apart.
+
+        It used to be two: the desk monitor kept the pickers on the glass and half the
+        filters in the menu, and only a phone got the two-button split. The phone shape
+        was the better one at every width - on the glass the pickers competed with the
+        map for the top of the screen and truncated anyway."""
         state = self._open(width=1200)
-        self.assertTrue(state["menu"])
-        self.assertTrue(state["page"] and state["layer"] and state["lenses"])
+        self.assertTrue(state["menu"] and state["lenses"])
+        self.assertTrue(state["layerInFilters"] and state["pickersInFilters"]
+                        and state["searchInFilters"],
+                        "a desk monitor gets the same two buttons as a phone")
+        self.assertFalse(state["pageOnGlass"], "nothing but the two buttons on the glass")
 
 
 class FiltersReachTheCanvas(DirectionAOnAPhone):
@@ -1607,10 +1618,15 @@ class TheFunctionFilter(SimpleTestCase):
             page.wait_for_function(
                 "() => !!PAGES[Number(document.getElementById('pg').value)].nodes")
             page.wait_for_timeout(200)
-            page.fill("#fn", "sub")
+            # The search lives behind the Filter button now, with everything else that
+            # narrows the map. A closed sheet is `pointer-events:none`, so a row in it is
+            # not clickable - which is the point of it being closed.
+            page.click("#filterbtn")
+            page.fill("#q", "sub")
             page.wait_for_function("() => document.querySelectorAll('#fnlist .fnrow').length > 0")
             offered = page.evaluate(
-                "() => [...document.querySelectorAll('#fnlist .fnrow')].map(r => r.dataset.name)")
+                "() => [...document.querySelectorAll('#fnlist .fnrow')]"
+                ".map(r => r.dataset.go + ':' + r.dataset.name)")
             page.click("#fnlist .fnrow")
             page.wait_for_function("() => funcFilter === 'submit_push'")
             page.wait_for_timeout(300)
@@ -1627,6 +1643,10 @@ class TheFunctionFilter(SimpleTestCase):
             page.wait_for_function("() => funcFilter === 'record'")
             page.wait_for_timeout(300)
             called_by = page.evaluate("() => document.getElementById('callers').textContent")
+            # Picking a result closes the sheet - it sits over the canvas it just changed.
+            self.assertFalse(page.evaluate(
+                "() => document.getElementById('filtersheet').classList.contains('open')"))
+            page.click("#filterbtn")
             page.click("#fnoff")
             page.wait_for_timeout(300)
             cleared = page.evaluate("() => funcFilter")
@@ -1637,7 +1657,12 @@ class TheFunctionFilter(SimpleTestCase):
             browser.close()
 
         self.assertEqual(errors, [], page_url)
-        self.assertEqual(offered, ["submit_push"], offered)
+        # One box, three kinds of answer. It offered functions and nothing else before,
+        # so a filename typed into it answered "No function is called that" - while the
+        # box that DID know about files sat two clicks away inside the menu.
+        self.assertIn("function:submit_push", offered)
+        self.assertEqual([o for o in offered if o.startswith("function:")],
+                         ["function:submit_push"], offered)
         # What it touches: its own symbols, plus one hop - the route that dispatches to it.
         self.assertIn("redis_key_use:user:{id}:stats", drawn)
         self.assertIn("db_table_use:pointless_push", drawn)
@@ -1943,7 +1968,7 @@ class FunctionReachesTheBrowserTests(SimpleTestCase):
             _open_lens(page, "map")
             page.wait_for_selector("#cv .nd")
             kinds = page.evaluate("""async () => {
-                const fn = document.getElementById('fn');
+                const fn = document.getElementById('q');
                 fn.value = 'orders';
                 fn.dispatchEvent(new Event('input', {bubbles: true}));
                 await new Promise(r => setTimeout(r, 400));
@@ -2576,7 +2601,7 @@ class FunctionListEscapesTheSheetTests(SimpleTestCase):
             page.wait_for_function(
                 "() => getComputedStyle(document.getElementById('filtersheet')).transform"
                 " === 'none'", timeout=5000)
-            page.fill("#fn", "submitPushes")
+            page.fill("#q", "submitPushes")
             page.wait_for_selector("#fnlist .fnrow", state="attached", timeout=5000)
             page.wait_for_timeout(150)
             measured = page.evaluate("""() => {

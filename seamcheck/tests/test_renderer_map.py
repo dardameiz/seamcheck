@@ -871,7 +871,12 @@ class FilesViewTests(SimpleTestCase):
         out = map_html.render(_map())
 
         self.assertIn("function bestPageFor(path)", out)
-        self.assertIn("current = bestPageFor(fileFilter);", out)
+        self.assertIn("current = bestPageFor(path);", out)
+        # ONE way to open a file, reached from the Files row and from a `file` search
+        # result. Two copies is how the two doors come to disagree about what it means.
+        self.assertIn("function openFile(path)", out)
+        self.assertIn("openFile(el.dataset.path);", out)
+        self.assertIn('if (go === "file") { openFile(el.dataset.name); return; }', out)
 
     def test_the_breadcrumb_says_how_much_of_the_file_is_on_screen(self):
         # And counts the total from FILES, not from the drawn page: the canvas can only
@@ -956,15 +961,22 @@ class PhoneFilterButtonTests(SimpleTestCase):
         self.assertLess(out.index('id="menubtn"'), out.index('id="filterbtn"'))
         self.assertLess(out.index('id="filterbtn"'), out.index('id="pgwrap"'))
 
-    def test_the_controls_are_moved_and_never_copied(self):
+    def test_the_controls_are_written_once_and_never_copied(self):
         out = map_html.render(_map())
 
-        # One <select> per filter, wherever it currently hangs. Two of a stateful control
-        # is two answers to "what is this map showing", which is the bug the sheet would
-        # otherwise introduce.
-        for control in ('id="pg"', 'id="sec"', 'id="fn"', 'id="cm"', 'id="ly"'):
+        # One <select> per filter. Two of a stateful control is two answers to "what is
+        # this map showing" - the bug a second copy in a sheet would introduce.
+        for control in ('id="pg"', 'id="sec"', 'id="q"', 'id="cm"', 'id="ly"'):
             self.assertEqual(out.count(control), 1, control)
-        self.assertIn("filterbody.appendChild(el)", out)
+        # Written into the sheet rather than relocated into it at a breakpoint. The move
+        # existed while there were two places for a control to live; there is one now, so
+        # there is nothing to move and no map of where each came from to keep correct.
+        self.assertNotIn("filterbody.appendChild", out)
+        self.assertIn('<div class="mapsheet" id="filtersheet"><div id="filterbody">', out)
+        # The search is a SIBLING of the page pickers, not inside them: syncPageWrap()
+        # hides that pair on a view that draws no page, and the search reaches the whole
+        # scan. It used to be inside, and went dark with them.
+        self.assertLess(out.index('id="pgwrap"'), out.index('class="msearch"'))
 
     def test_the_sheet_opens_under_the_corner_not_off_the_side(self):
         out = map_html.render(_map())

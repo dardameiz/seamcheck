@@ -272,7 +272,8 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overf
 .hud.br { bottom:14px; right:14px; flex-direction:column; }
 
 .menuwrap { position:relative; }
-/* The filter button only exists where the controls do not fit on the glass. */
+/* Two buttons on the glass and nothing else: Menu (which view) and Filter (narrowed to
+   what). Every width - the phone proved the shape and the desk monitor wanted it too. */
 .filterwrap { position:relative; }
 .filterbtn .funnel { width:11px; height:9px; flex:none; background:currentColor;
   clip-path:polygon(0 0, 100% 0, 62% 46%, 62% 100%, 38% 78%, 38% 46%); opacity:.85; }
@@ -281,10 +282,21 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overf
 /* Anchored to the corner, not to the button: `right:0` on a wrap that sits 90px from
    the left edge hangs the sheet off the left of the screen. */
 #filtersheet { left:0; }
-#filterbody { display:grid; gap:9px; padding:0 8px 8px; }
-#filterbody .pagepicks { display:grid; gap:9px; }
-#filterbody .pagepick, #filterbody .funcpick { max-width:none; width:100%; }
-#filterbody .mfilters { padding:0; }
+#filterbody { display:grid; gap:9px; padding:0 0 8px; }
+#filterbody .pagepicks { display:grid; gap:9px; padding:0 8px; }
+/* Every control in here is full width. `.pagepick` caps itself in vw for life on the
+   glass, where it had to share a row with the map; in a 360px sheet that cap is what
+   truncated a page path to two words. */
+#filterbody .pagepick, #filterbody .funcpick, #filterbody #secwrap {
+  max-width:none; width:100%;
+}
+#filterbody .mfilters { padding:0 8px; }
+/* `width`, not only `max-width`. A select sizes to its widest option, so "Whole page"
+   drew two thirds the width of the page picker beside it - the same control, twice, at
+   two sizes, which reads as one of them being less important. */
+#filterbody .pagepick select, #filterbody .funcpick input {
+  width:100%; height:38px; font-size:12.5px;
+}
 /* The page picker, on the glass beside the menu, so moving from one page to the next is
    one tap instead of three. Same shape as the menu button: the two read as one strip. */
 /* Capped so the readout, which starts where the pickers end, keeps room to say anything. */
@@ -344,8 +356,18 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overf
   border-radius:8px; white-space:nowrap;
 }
 .fnrow:hover, .fnrow:focus, .fnrow.on { background:var(--sunk); outline:none; }
-.fnrow b { font-weight:600; }
-.fnrow span { color:var(--muted); margin-left:8px; font-size:11.5px; }
+.fnrow { display:grid; grid-template-columns:auto minmax(0, 1fr); gap:2px 8px;
+         align-items:baseline; }
+.fnrow b { font-weight:600; overflow:hidden; text-overflow:ellipsis; }
+.fnrow span { grid-column:1 / -1; color:var(--muted); font-size:11px;
+              overflow:hidden; text-overflow:ellipsis; }
+.fnrow span:empty { display:none; }
+.fnrow em {
+  font-style:normal; font-size:9.5px; letter-spacing:.1em; text-transform:uppercase;
+  color:var(--muted); border:1px solid var(--line); border-radius:5px; padding:1px 5px;
+}
+.fnhead { font-family:var(--mono); font-size:9.5px; letter-spacing:.14em;
+  text-transform:uppercase; color:var(--muted); padding:8px 9px 3px; }
 .fnnone { padding:8px 9px; color:var(--muted); font-size:12px; }
 .menubtn {
   display:flex; align-items:center; gap:9px; cursor:pointer; padding:8px 15px 8px 12px;
@@ -373,7 +395,6 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overf
 .mapsheet.open { opacity:1; transform:none; pointer-events:auto; }
 .mapsheet .mlab { font-family:var(--mono); font-size:10px; letter-spacing:.15em;
                   text-transform:uppercase; color:var(--muted); padding:10px 10px 6px; }
-.mapsheet .msep { height:1px; background:var(--line); margin:6px 4px; }
 .mapsheet .mfilters { display:grid; gap:7px; padding:0 8px 4px; }
 .mapsheet .mfilters label { display:grid; gap:3px; }
 .mapsheet .mfilters label > span { font-family:var(--mono); font-size:10px;
@@ -383,14 +404,10 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overf
   border:1px solid var(--line); background:var(--bg); color:var(--ink);
   font-family:var(--mono); font-size:12.5px;
 }
-.mapsheet .msearch { padding:0 8px 8px; display:grid; gap:4px; }
-.mapsheet .msearch input {
-  width:100%; padding:9px 11px; border-radius:calc(var(--r-card) - 4px);
-  border:1px solid var(--line); background:var(--bg); color:var(--ink);
-  font-family:var(--mono); font-size:12.5px;
-}
-.mapsheet .msearch input:focus { outline:none; border-color:var(--sig); }
+.mapsheet .msearch { padding:2px 8px 0; display:grid; gap:4px; }
 .mapsheet .qn { font-family:var(--mono); font-size:11px; color:var(--muted); padding:0 2px; }
+/* Said out loud when the box matched nothing: a canvas of ghosts reads as a bug. */
+.mapsheet .qn.none { color:var(--bad, var(--sig)); }
 /* The nav is the view control now, so it reads as a list of places rather than a rail. */
 .mapsheet .nav { display:grid; gap:2px; padding:0 4px; }
 
@@ -549,17 +566,6 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overf
 .row.tappable:active { transform:scale(.996); }
 .chainrow .arrow { font-style:normal; color:var(--muted); padding:0 6px; user-select:none; }
 .chainrow .t b { font-weight:600; }
-/* Results sit over the canvas, anchored under the box that produced them. */
-.found { position:absolute; left:10px; right:10px; top:96px; z-index:8; max-height:60vh;
-  overflow:auto; background:var(--panel); border:1px solid var(--line); border-radius:12px;
-  box-shadow:0 18px 40px -18px rgba(0,0,0,.7); padding:4px; }
-.found .fr { padding:8px 10px; border-bottom:1px solid var(--line); cursor:pointer;
-  display:grid; gap:2px; }
-.found .fr:last-of-type { border-bottom:0; }
-.found .fr:hover, .found .fr:focus-visible { background:var(--sunk); }
-.found .fr .t { font-size:13px; color:var(--ink); }
-.found .fr .w { font-size:11px; color:var(--muted); }
-.found .gloss { padding:7px 10px; font-size:11px; color:var(--muted); }
 .nothing { position:absolute; inset:auto 12px 78px; text-align:center; pointer-events:none;
   color:var(--muted); font-size:13px; display:grid; gap:4px; }
 .nothing b { color:var(--ink); font-size:15px; font-weight:600; }
@@ -1192,17 +1198,18 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
      squeezed into a corner it has to share. */
   /* Two buttons and nothing else. The page, section and function pickers moved into
      the Filter sheet, which is the whole point of it. */
-  /* One row. It wrapped because the menu button carries the view's NAME, so "Findings"
-     pushed Filter onto a second line while "Map" did not - the control moved depending on
-     which view you were in, which is the thing a reader notices and cannot explain. The
-     name truncates instead; the buttons keep their place. */
-  .hud.tl { top:12px; left:12px; right:12px; flex-wrap:nowrap; gap:7px; }
-  .hud.tl > .menuwrap { flex:0 1 auto; min-width:0; }
+  /* One row. It used to wrap, because the menu button carried the view's NAME: "Findings"
+     pushed Filter onto a second line while "Map" did not, so the control moved depending
+     on which view you were in - the thing a reader notices and cannot explain. Both
+     buttons are one fixed word now, so there is nothing left to push. */
+  .hud.tl { top:12px; left:12px; right:12px; max-width:none; flex-wrap:nowrap; gap:7px; }
+  .hud.tl > .menuwrap { flex:none; min-width:min-content; }
   .hud.tl > .filterwrap { flex:none; }
-  .pagepicks { flex-basis:100%; order:2; }
-  .pagepick, #secwrap { flex:1 1 0; max-width:none; }
+  /* `.pagepicks { order:2 }` used to live here, to put the page picker on its own row
+     BELOW the buttons while it was on the glass. It is in the sheet now - and `order`
+     applies to a grid item as much as a flex one, so the rule was silently reordering
+     the sheet, putting the search above the page it was meant to sit under. */
   #filterbody .pagepick select, #filterbody .funcpick input { height:44px; font-size:15px; }
-  #filterbody .pagepicks { flex-basis:auto; }
   /* The sheet hangs off the whole corner rather than off the button: static positioning
      hands it .hud.tl as its container, so it opens under the row at the screen's edge
      and cannot be pushed off the side by where the button happens to sit. */
@@ -1230,7 +1237,7 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
   .mapsheet .nv { padding:13px 12px; font-size:16px; border-radius:12px; }
   .mapsheet .nv .c { font-size:13px; }
   .mapsheet .mlab { font-size:11px; padding:13px 12px 7px; }
-  .mapsheet .mfilters select, .mapsheet .msearch input { padding:12px 12px; font-size:15px; }
+  .mapsheet .mfilters select { padding:12px 12px; font-size:15px; }
   .mapsheet .mfilters label > span { font-size:11px; }
   .pagepick select { height:36px; font-size:12px; }
   .zoom { left:auto; right:12px; top:auto;
@@ -1903,9 +1910,15 @@ sections.onchange = e => pickPage(Number(e.target.value));
 // am I working on", which is the question a developer actually has open in their editor:
 // `submit_push` writes three Redis keys, queues a task and - the day it went slow - also
 // touched Postgres. That is one picture, and until now it took reading four files.
-const funcBox = document.getElementById("fn");
+// `#q` - the search box - IS the function box. There were two, and a reader had to know
+// which of their two questions the tool considered which kind before they could type.
+const funcBox = document.getElementById("q");
 const funcOff = document.getElementById("fnoff");
 const funcList = document.getElementById("fnlist");
+// One redraw per pause in typing: draw() on every keystroke rebuilt the canvas six times
+// for a six-letter word. Declared beside the box it belongs to - it used to sit 2,700
+// lines away, next to the search box that no longer exists.
+let qTimer = null;
 let _funcHi = 0;
 
 function closeFuncList() {
@@ -1927,7 +1940,7 @@ function placeFuncList() {
   const below = window.innerHeight - at.bottom - gap - edge;
   const above = at.top - gap - edge;
   const upward = below < 180 && above > below;
-  const width = Math.min(Math.max(at.width, 260), window.innerWidth - edge * 2);
+  const width = Math.min(Math.max(at.width, 380), window.innerWidth - edge * 2);
   funcList.style.width = width + "px";
   funcList.style.left =
     Math.max(edge, Math.min(at.left, window.innerWidth - width - edge)) + "px";
@@ -1941,23 +1954,75 @@ function placeFuncList() {
   }
 }
 
-function renderFuncList(rows) {
+// WHAT ONE BOX FINDS. Reported from use: "the search everything: put it instead of the
+// function search - if searched for a file it can go to the file view, if searched for a
+// function it will open that function, any other search in one place."
+//
+// The three are different ANSWERS, not three ways of saying one. A function opens its
+// call graph - who reaches it and what it reaches, which no node on its own can show. A
+// file opens the map narrowed to that file, on the page that actually holds it. Anything
+// else is a symbol, and the answer is where it sits. Ordered by how specific the ask is:
+// somebody typing a whole function name means the function, not the 40 nodes inside it.
+function searchAnything(term, limit = 40) {
+  const needle = term.trim().toLowerCase();
+  if (needle.length < 2) return [];
+  const rows = [];
+  functionsMatching(needle, 8).forEach(r => rows.push({
+    go: "function", name: r.name, label: r.name,
+    note: r.file ? r.file.split("/").pop() : "",
+  }));
+  let files = 0;
+  (FILES.list || []).forEach(f => {
+    if (files >= 8 || !f.path.toLowerCase().includes(needle)) return;
+    files += 1;
+    const cut = f.path.lastIndexOf("/");
+    rows.push({go: "file", name: f.path, label: f.path.slice(cut + 1),
+               note: cut > 0 ? f.path.slice(0, cut) : ""});
+  });
+  searchEverywhere(needle, limit).forEach(r => rows.push({
+    go: "node", id: r.id, page: r.page, name: r.label, label: r.label,
+    note: r.kind + (r.file ? " · " + r.file.split("/").pop() : ""),
+  }));
+  return rows.slice(0, limit);
+}
+
+function renderResults(rows) {
   if (!rows.length) {
-    funcList.innerHTML = `<div class="fnnone">No function is called that.</div>`;
+    funcList.innerHTML = `<div class="fnnone">Nothing in this scan is called that.</div>`;
     funcList.hidden = false;
     _watchFuncList();
     return;
   }
+  // The badge says where the row will TAKE you before it is clicked. The three
+  // destinations are different pages, and guessing wrong costs a reload of the canvas.
   funcList.innerHTML = rows.map((r, i) =>
     `<button type="button" class="fnrow${i === _funcHi ? " on" : ""}"
-             data-name="${esc(r.name)}" data-page="${r.page}">
-       <b>${esc(r.name)}</b><span>${esc(r.file.split("/").pop())} · ${r.count}</span>
+             data-go="${esc(r.go)}" data-name="${esc(r.name)}"
+             data-id="${esc(r.id === undefined ? "" : r.id)}"
+             data-page="${r.page === undefined ? "" : r.page}"
+             title="${esc(r.name)}">
+       <em>${esc(r.go)}</em><b>${esc(r.label)}</b><span>${esc(r.note)}</span>
      </button>`).join("");
   funcList.hidden = false;
   _watchFuncList();
   funcList.querySelectorAll(".fnrow").forEach(el => {
-    el.onclick = () => pickFunction(el.dataset.name);
+    el.onclick = () => takeResult(el);
   });
+}
+
+function takeResult(el) {
+  closeFuncList();
+  // Every destination here changes what the canvas is drawing, and the sheet is over the
+  // canvas. Leaving it open means the reader picks a result and looks at the panel that
+  // produced it - on a phone, at nothing else at all.
+  if (window.setFilterSheet) setFilterSheet(false);
+  const go = el.dataset.go;
+  if (go === "function") { pickFunction(el.dataset.name); return; }
+  if (go === "file") { openFile(el.dataset.name); return; }
+  // A node result must not leave the box holding a word that now filters the canvas to
+  // nothing: jumpTo() moves the page, and `query` would still be dimming it.
+  funcBox.value = ""; query = ""; funcOff.hidden = true;
+  jumpTo(el.dataset.id, Number(el.dataset.page));
 }
 
 function _watchFuncList() {
@@ -1967,18 +2032,22 @@ function _watchFuncList() {
   window.addEventListener("scroll", placeFuncList, true);
 }
 
-function offerFunctions() {
+function offerAnything() {
   const term = funcBox.value;
   if (!term.trim()) { closeFuncList(); return; }
-  // The index is one chunk and loads once; until it is in, say so rather than showing
-  // an empty list that reads as "there are none".
-  if (!funcIndex(() => offerFunctions())) {
-    funcList.innerHTML = `<div class="fnnone">Opening the list of functions…</div>`;
+  // Three indexes, each one chunk, each read once. Until they are in, say so rather than
+  // showing an empty list that reads as "there are none" - and ask for every one of
+  // them, because a list built from two of the three is silently missing a whole kind.
+  const ready = [funcIndex(() => offerAnything()), searchIndex(() => offerAnything())];
+  withFiles(() => offerAnything());
+  if (ready.some(ix => !ix)) {
+    funcList.innerHTML = `<div class="fnnone">Opening the index…</div>`;
     funcList.hidden = false;
+    _watchFuncList();
     return;
   }
   _funcHi = 0;
-  renderFuncList(functionsMatching(term));
+  renderResults(searchAnything(term));
 }
 
 function pickFunction(name, hops) {
@@ -1993,6 +2062,9 @@ function pickFunction(name, hops) {
   funcFilter = name;
   funcHops = typeof hops === "number" ? hops : 1;
   funcBox.value = name;
+  // The box is the search box as well now. `query` is what fades non-matching nodes, and
+  // leaving it set to the picked name faded everything the pick had just drawn.
+  query = "";
   funcOff.hidden = false;
   closeFuncList();
   focus = null;
@@ -2013,10 +2085,10 @@ function pickFunction(name, hops) {
 }
 
 function clearFunction() {
-  if (!funcFilter && !funcBox.value) return;
+  if (!funcFilter && !funcBox.value && !query) return;
   const row = functionRow(funcFilter);
   funcFilter = null; funcHops = 1;
-  funcBox.value = ""; funcOff.hidden = true;
+  funcBox.value = ""; query = ""; funcOff.hidden = true;
   closeFuncList();
   _layout.key = null;
   // Back to a real page - the one that draws most of the function - rather than leaving
@@ -2028,8 +2100,14 @@ function clearFunction() {
   syncPickers();
 }
 
-funcBox.oninput = offerFunctions;
-funcBox.onfocus = () => { if (funcBox.value.trim()) offerFunctions(); };
+funcBox.oninput = () => {
+  query = funcBox.value.trim().toLowerCase();
+  funcOff.hidden = !funcBox.value;
+  offerAnything();
+  clearTimeout(qTimer);
+  qTimer = setTimeout(draw, 120);
+};
+funcBox.onfocus = () => { if (funcBox.value.trim()) offerAnything(); };
 funcBox.onkeydown = e => {
   const rows = [...funcList.querySelectorAll(".fnrow")];
   if (e.key === "Escape") { closeFuncList(); funcBox.blur(); return; }
@@ -2043,11 +2121,11 @@ funcBox.onkeydown = e => {
   }
   if (e.key === "Enter") {
     e.preventDefault();
-    const el = rows[_funcHi] || rows[0];
-    pickFunction(el.dataset.name);
+    takeResult(rows[_funcHi] || rows[0]);
   }
 };
-funcOff.onclick = clearFunction;
+// Clears the pick AND the fade, because one box set both.
+funcOff.onclick = () => { clearFunction(); draw(); };
 document.getElementById("widen").onclick = () => {
   if (!funcFilter) return;
   pickFunction(funcFilter, funcHops > 1 ? 1 : 2);
@@ -4643,63 +4721,10 @@ document.getElementById("zf").onclick = () => {
   // Back to "unset", which is the signal draw() reads to re-fit the page to the screen.
   view = {x:0, y:0, k:1}; draw();
 };
-// One redraw per pause in typing. draw() on every keystroke rebuilt the canvas six
-// times for a six-letter word; the results list is cheap and still follows each key.
-let qTimer = null;
-document.getElementById("q").addEventListener("input", e => {
-  query = e.target.value.trim().toLowerCase();
-  showResults(query);
-  clearTimeout(qTimer);
-  qTimer = setTimeout(draw, 120);
-});
-document.getElementById("q").addEventListener("focus", () => showResults(query));
-document.addEventListener("click", e => {
-  if (!e.target.closest("#found") && e.target.id !== "q") hideResults();
-});
-
-// Results as a list under the box, because a fade tells you a match exists somewhere on
-// this page and nothing about the other eighteen pages.
-function resultsBox() {
-  let box = document.getElementById("found");
-  if (!box) {
-    box = document.createElement("div");
-    box.id = "found";
-    box.className = "found";
-    document.querySelector(".content").appendChild(box);
-    box.addEventListener("click", event => {
-      const row = event.target.closest("[data-jump]");
-      if (!row) return;
-      hideResults();
-      jumpTo(row.dataset.jump, Number(row.dataset.page));
-    });
-  }
-  return box;
-}
-function hideResults() { const box = document.getElementById("found"); if (box) box.hidden = true; }
-
-function showResults(term) {
-  if (!term || term.length < 2) { hideResults(); return; }
-  const box = resultsBox();
-  box.hidden = false;
-  if (!_index) {
-    searchIndex(() => { if (query === term) showResults(term); });
-    box.innerHTML = `<div class="gap">Opening the index…</div>`;
-    return;
-  }
-  const found = searchEverywhere(term);
-  if (!found.length) {
-    box.innerHTML = `<div class="gap">Nothing in this scan is called “${esc(term)}”.</div>`;
-    return;
-  }
-  box.innerHTML = found.map(r => `<div class="fr" data-jump="${esc(r.id)}" data-page="${r.page}">
-      <span class="badge ${esc(r.status)}">${esc(r.status)}</span>
-      <div class="t">${esc(r.label)}</div>
-      <div class="w">${esc(r.kind)}${r.file ? " · " + esc(r.file) : ""}${
-        PAGES[r.page] ? " · " + esc(PAGES[r.page].title || PAGES[r.page].page) : ""}</div>
-    </div>`).join("") +
-    `<div class="gloss">${found.length === 60 ? "First 60 matches" : n(found.length) +
-      " match" + (found.length === 1 ? "" : "es")} across the whole scan. Tap one to open it.</div>`;
-}
+// The second search surface used to live here: its own box in the menu, its own results
+// panel over the canvas, its own click handling. It answered the same question as the
+// function box beside it and reached a different half of the graph. Both are one control
+// now - see searchAnything() and renderResults(), up beside the box itself.
 // --- the commit picker -------------------------------------------------------------
 const picker = document.getElementById("cm"), note = document.getElementById("cmnote");
 const gone = document.getElementById("gone");
@@ -5423,6 +5448,23 @@ function bestPageFor(path) {
   return typeof at === "number" ? at : current;
 }
 
+// Opening a file is one behaviour with two doors - a row in the Files view, and a `file`
+// result from the search - so it is one function. Two copies of this is exactly how the
+// two doors come to disagree about what "open a file" means.
+function openFile(path) {
+  fileFilter = path;
+  // ...and go to the page that actually holds this file. Keeping whatever page was
+  // selected answered "what of this file is on the page you happened to be looking at",
+  // which for push_arena.js was 3 symbols out of 674 - a blank-looking canvas that reads
+  // as the file being unwired.
+  current = bestPageFor(path);
+  // As a DRAWING. The whole promise is "show me this file on the map", and arriving in
+  // the list instead answers a different question - one the reader could already have
+  // asked from the list they were in.
+  asList = false;
+  viewer.value = "map"; switchTo("map");
+}
+
 // Every list row already carried `data-open` with its symbol id and NOTHING read it: the
 // affordance was built and never wired, so a row on a phone looked tappable and was inert.
 // One handler, delegated, for every list in the panel - the map-as-list and the sections
@@ -5474,17 +5516,7 @@ function renderPanel() {
         // The row filters the canvas; the `edit` link inside it opens an editor. Without
         // this the link did both, and the map jumped out from under the reader.
         if (e.target.closest(".loc")) return;
-        fileFilter = el.dataset.path;
-        // ...and go to the page that actually holds this file. Keeping whatever page was
-        // selected answered "what of this file is on the page you happened to be looking
-        // at", which for push_arena.js was 3 symbols out of 674 - a blank-looking canvas
-        // that reads as the file being unwired.
-        current = bestPageFor(fileFilter);
-        // As a DRAWING. The row's whole promise is "show me this file on the map", and
-        // arriving in the list instead answers a different question - one the reader could
-        // already have asked from the list they were in.
-        asList = false;
-        viewer.value = "map"; switchTo("map");
+        openFile(el.dataset.path);
       };
     });
     const box = document.getElementById("fq");
@@ -5704,11 +5736,6 @@ function switchTo(next) {
   listToggle.innerHTML = asList
     ? '<span class="swap">\u21c4</span>Map' : '<span class="swap">\u21c4</span>List';
   listToggle.title = asList ? "Show it as a map" : "Show it as a list";
-  const label = document.getElementById("menulabel");
-  if (label) {
-    const item = rail.querySelector(`.nv[data-key="${mode}"] span`);
-    label.textContent = item ? item.textContent.trim() : mode;
-  }
   // Choosing where to go is the end of using the menu, so the menu goes away. It was
   // staying open over the thing it had just navigated to.
   if (window.setSheet) setSheet(false);
@@ -5887,15 +5914,7 @@ ly.onchange = e => {
   const filterwrap = document.getElementById("filterwrap");
   const filterbtn = document.getElementById("filterbtn");
   const filtersheet = document.getElementById("filtersheet");
-  const filterbody = document.getElementById("filterbody");
   const fdot = document.getElementById("fdot");
-  const pgwrap = document.getElementById("pgwrap");
-  const mfilters = mapsheet ? mapsheet.querySelector(".mfilters") : null;
-  const mfiltersLabel = mfilters ? mfilters.previousElementSibling : null;
-  const home = new Map();          // element -> [parent, next sibling] before any move
-  [pgwrap, mfilters, mfiltersLabel].forEach(el => {
-    if (el) home.set(el, [el.parentNode, el.nextSibling]);
-  });
 
   window.setFilterSheet = open => {
     if (!filtersheet) return;
@@ -5919,26 +5938,9 @@ ly.onchange = e => {
     menubtn.addEventListener("click", () => setFilterSheet(false), true);
   }
 
-  const narrow = window.matchMedia("(max-width: 720px)");
-  let placedNarrow = null;
-  function placeFilters() {
-    const phone = narrow.matches;
-    if (placedNarrow === phone) return;
-    placedNarrow = phone;
-    if (phone) {
-      [mfiltersLabel, mfilters, pgwrap].forEach(el => {
-        if (el) filterbody.appendChild(el);
-      });
-    } else {
-      setFilterSheet(false);
-      [pgwrap, mfilters, mfiltersLabel].forEach(el => {
-        const at = home.get(el);
-        if (el && at) at[0].insertBefore(el, at[1]);
-      });
-    }
-    if (filterwrap) filterwrap.hidden = !phone;
-    if (window.chromeMeasure) requestAnimationFrame(window.chromeMeasure);
-  }
+  // Nothing to place any more. The controls are written into the sheet, at every width,
+  // so the breakpoint that used to relocate them - and the map of where each one came
+  // from, so it could be put back - are both gone.
   // A dot when something is actually narrowing the map, so the button says whether it is
   // doing anything without having to be opened.
   window.syncFilterDot = () => {
@@ -5949,16 +5951,12 @@ ly.onchange = e => {
       || (typeof layer !== "undefined" && layer));
     fdot.hidden = !on;
   };
-  placeFilters();
   syncFilterDot();
-  if (narrow.addEventListener) narrow.addEventListener("change", placeFilters);
 
   syncChrome();
   syncReadout();
   chromeMeasure();
-  window.addEventListener("resize", () => {
-    placeFilters(); chromeMeasure(); syncReadout();
-  });
+  window.addEventListener("resize", () => { chromeMeasure(); syncReadout(); });
   if (window.ResizeObserver) new ResizeObserver(() => chromeMeasure()).observe(menubtn);
 })();
 """
@@ -6596,54 +6594,66 @@ def render_document(connectivity_map: ConnectivityMap, console=None, files=None,
         '<div class="hud tl"><div class="menuwrap">'
         '<button type="button" class="menubtn" id="menubtn" aria-expanded="false">'
         '<span class="bars"><i></i><i></i><i></i></span>'
-        '<span id="menulabel">Map</span></button>'
+        '<span>Menu</span></button>'
+        # WHERE AM I GOING, and nothing else. The menu used to hold the view list AND
+        # the filters AND the search, so the five words that say what this page can do
+        # were the top fifth of a panel a reader had to read past. Two questions, two
+        # buttons: Menu answers "which view", Filter answers "narrowed to what". Reported
+        # from use, and it is the shape the phone layout already had.
         '<div class="mapsheet" id="mapsheet">'
         '<div class="mlab">View</div>'
         '<div class="nav" id="nav"></div>'
-        '<div class="msep"></div>'
+        # Kept because switchTo() writes to it; the nav above is what a reader touches.
+        '<select id="vw" hidden></select>'
+        '</div></div>'
+        # NARROWED TO WHAT. A phone had these squeezed onto the glass beside the menu -
+        # 34vw each, a page path truncated to two words, a function box too small to read
+        # what was typed into it - so they moved behind one button. That turned out to be
+        # the right shape on a desk monitor too: on the glass they competed with the map
+        # for the top of the screen and still truncated, and the other half of them lived
+        # in the menu, which put one intention behind two different buttons.
+        #
+        # Written here rather than MOVED here by script at a breakpoint. Relocating live
+        # nodes was correct while there were two places for them to live - two of a
+        # stateful select is how a filter comes to disagree with the map it filters -
+        # but there is one place now, so there is nothing to move.
+        '<div class="menuwrap filterwrap" id="filterwrap">'
+        '<button type="button" class="menubtn filterbtn" id="filterbtn" '
+        'aria-expanded="false" aria-label="Filter">'
+        '<span class="funnel" aria-hidden="true"></span><span>Filter</span>'
+        '<span class="fdot" id="fdot" hidden></span></button>'
+        '<div class="mapsheet" id="filtersheet"><div id="filterbody">'
         '<div class="mlab">Narrow it down</div>'
         '<div class="mfilters">'
         '<label><span>Commit</span><select id="cm"></select></label>'
         '<label id="lywrap"><span>Emphasis</span><select id="ly"></select></label>'
         '</div>'
-        '<div class="msep"></div>'
-        '<div class="mlab">Search everything</div>'
-        '<div class="msearch"><input id="q" type="search" placeholder="Any symbol, file, '
-        'route or element"><span id="qn" class="qn"></span></div>'
-        # Kept because switchTo() writes to it; the nav above is what a reader touches.
-        '<select id="vw" hidden></select>'
-        '</div></div>'
-        # A phone had three filter controls squeezed onto the glass beside the menu -
-        # 34vw each, a page path truncated to two words, and a function box too small to
-        # read what was typed into it. They move in here instead: one button next to the
-        # menu, and everything that narrows the map behind it. The controls are MOVED,
-        # not copied - two of a stateful select is how a filter comes to disagree with
-        # the map it filters.
-        '<div class="menuwrap filterwrap" id="filterwrap" hidden>'
-        '<button type="button" class="menubtn filterbtn" id="filterbtn" '
-        'aria-expanded="false" aria-label="Filter">'
-        '<span class="funnel" aria-hidden="true"></span><span>Filter</span>'
-        '<span class="fdot" id="fdot" hidden></span></button>'
-        '<div class="mapsheet" id="filtersheet">'
-        '<div id="filterbody"></div>'
-        '</div></div>'
-        # Choosing WHICH page you are looking at is the thing a reader does most often, and
-        # it was two taps deep inside a dropdown. It sits on the glass, next to the view.
-        # Two of them: the page a person recognises, and the section - the bundle -
-        # inside it. The second only appears when a page has more than one.
+        # Which page you are looking at, and the section - the bundle - inside it. The
+        # second only appears when a page has more than one. syncPageWrap() hides this
+        # pair on a view that draws no page, which is exactly why the search below is
+        # their SIBLING rather than inside them: the search reaches the whole scan and is
+        # never out of place. It used to be inside, and went with them.
         '<div id="pgwrap" class="pagepicks">'
         '<label class="pagepick"><select id="pg" aria-label="Page"></select></label>'
         '<label id="secwrap" class="pagepick" hidden>'
         '<select id="sec" aria-label="Section"></select></label>'
-        # The third filter, and the one a developer reaches for first: the function they
-        # have open. A text box rather than a select, because a project has thousands of
-        # functions and the reader knows the first three letters of the one they want.
-        '<div class="pagepick funcpick">'
-        '<input id="fn" type="search" autocomplete="off" aria-label="Function"'
-        ' placeholder="Function…"><button type="button" id="fnoff" hidden'
-        ' aria-label="Clear the function">\u00d7</button>'
-        '<div class="fnlist" id="fnlist" hidden></div></div>'
         '</div>'
+        # ONE box. It was two: "Function" on the glass, which opened a call graph, and
+        # "Search everything" two clicks deep in the menu, which jumped to a node. Each
+        # was right about its own half and silent about the other - a filename typed into
+        # the first answered "No function is called that", and a function name typed into
+        # the second gave the node instead of its callers. One control, three
+        # destinations now; searchAnything() decides which.
+        '<div class="msearch">'
+        '<div class="pagepick funcpick">'
+        '<input id="q" type="search" autocomplete="off" aria-label="Search everything"'
+        ' placeholder="Search anything — file, function, route…">'
+        '<button type="button" id="fnoff" hidden'
+        ' aria-label="Clear the search">\u00d7</button>'
+        '<div class="fnlist" id="fnlist" hidden></div></div>'
+        '<span id="qn" class="qn"></span>'
+        '</div>'
+        '</div></div></div>'
         "</div>",
 
         # ── appearance, top right ─────────────────────────────────────────────
