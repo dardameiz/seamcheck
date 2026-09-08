@@ -35,10 +35,12 @@ from __future__ import annotations
 import ast
 import pathlib
 from collections.abc import Iterator
+from unittest import mock
 
+from django.core.management import call_command
 from django.test import SimpleTestCase
 
-from seamcheck import exitcodes
+from seamcheck import cli, exitcodes
 
 _PACKAGE_DIR = pathlib.Path(__file__).resolve().parent.parent
 _REPO_ROOT = _PACKAGE_DIR.parent
@@ -125,3 +127,32 @@ class NoRawExitCodesTests(SimpleTestCase):
         collisions = {value: names for value, names in by_value.items() if len(names) > 1}
 
         self.assertEqual(collisions, {}, f"exit codes sharing a value: {collisions}")
+
+
+class ExplainExitsOnAWrongId(SimpleTestCase):
+    """`explain` answers in prose, so it has no envelope to carry a code - and it printed
+    "No symbol with id ..." and exited 0. That is the same "failure in the body, success to
+    the shell" that findings/symbols/diff were fixed for, in the one command whose whole
+    job is being pointed at an id that might be wrong."""
+
+    def test_an_unknown_id_is_a_usage_error_on_both_doors(self):
+        from seamcheck.exitcodes import EXIT_USAGE, UNKNOWN_SYMBOL
+
+        miss = f"{UNKNOWN_SYMBOL} `nope` in the current scan."
+        with mock.patch("seamcheck.cli._worth_scanning", return_value=True), \
+             mock.patch("seamcheck.scancache.cached_scan", return_value=(object(), {})), \
+             mock.patch("seamcheck.api.explain_with_hint", return_value=miss):
+            self.assertEqual(cli._run_without_django(["--explain", "nope"], verbose=False),
+                             EXIT_USAGE)
+
+        with mock.patch("seamcheck.scancache.cached_scan", return_value=(object(), {})), \
+             mock.patch("seamcheck.api.explain_with_hint", return_value=miss), \
+             self.assertRaises(SystemExit) as raised:
+            call_command("seamcheck", "--explain", "nope")
+        self.assertEqual(raised.exception.code, EXIT_USAGE)
+
+    def test_a_real_id_still_exits_clean(self):
+        with mock.patch("seamcheck.cli._worth_scanning", return_value=True), \
+             mock.patch("seamcheck.scancache.cached_scan", return_value=(object(), {})), \
+             mock.patch("seamcheck.api.explain_with_hint", return_value="## thing (url)"):
+            self.assertEqual(cli._run_without_django(["--explain", "thing"], verbose=False), 0)

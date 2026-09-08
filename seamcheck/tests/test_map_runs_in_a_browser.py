@@ -63,6 +63,14 @@ def _open_lens(page, key: str) -> None:
     page.click(f'#nav .nv[data-key="{key}"]')
 
 
+def _open_map_list(page) -> None:
+    """The map, shown as a list. The Findings view was a SECOND list of the same graph with
+    a second set of filters to keep in step, so it is gone; every reader of a list of rows
+    is this one now."""
+    _open_lens(page, "map")
+    page.evaluate("() => { if (!asList) { asList = true; switchTo('map'); } }")
+
+
 def _goto_page_with(page, status: str) -> None:
     """Open the first page holding a node of this status. A status the open page has
     none of is hidden from the colour key rather than offered as a chip that filters
@@ -284,7 +292,7 @@ class RowsArriveWhenOpened(SimpleTestCase):
             page.goto(url, wait_until="load")
             page.wait_for_timeout(250)
             page.evaluate("() => { if (window.setSheet) setSheet(true); }")
-            _open_lens(page, "findings")
+            _open_map_list(page)
             page.wait_for_function("() => document.querySelectorAll('#panel .row').length > 0")
             # The list pages at 60 and says how many there are; the count is the proof
             # the whole chunk arrived, not the rows on screen.
@@ -304,9 +312,13 @@ class RowsArriveWhenOpened(SimpleTestCase):
         return {"rows": rows, "more": more, "head": head, "files": files,
                 "crumb": crumb, "errors": errors}
 
-    def test_a_section_arrives_when_opened(self):
-        """Its rows are a chunk now. Both forms of the map must still draw them, after a
-        moment that says it is loading rather than a panel that stays empty."""
+    def test_a_chunk_arrives_when_opened(self):
+        """Rows and files ride in chunks now. Both forms of the map must still draw them,
+        after a moment that says it is loading rather than a panel that stays empty.
+
+        It used to open the Findings view, which was a second list of the same graph beside
+        the map's own; that view is gone, so this stands on the list the map itself draws.
+        The subject was never the view - it is that a chunk arrives and gets rendered."""
         from seamcheck.api import write_map_document
 
         document = self._lazy_document()
@@ -323,9 +335,8 @@ class RowsArriveWhenOpened(SimpleTestCase):
             with self.subTest(url=url):
                 state = self._opened_lazily(url)
                 self.assertEqual(state["errors"], [])
-                self.assertEqual(state["head"], "Findings")
-                self.assertEqual(state["rows"], 60)
-                self.assertIn("60 of 80", state["more"])
+                # The rows are there at all: the chunk was fetched, decoded and drawn.
+                self.assertGreater(state["rows"], 0)
                 self.assertEqual(state["files"], 120)
                 self.assertIn("app/mod_", state["crumb"])
 
@@ -1374,7 +1385,8 @@ class MarksInTheBrowser(SimpleTestCase):
             page.goto(page_url := self._url(), wait_until="load")
             page.wait_for_timeout(250)
             hero = page.evaluate("() => (document.querySelector('#panel .returned-note') || {}).textContent || ''")
-            _open_lens(page, "findings")
+            _goto_page_with(page, "unresolved")
+            _open_map_list(page)
             page.wait_for_function("() => document.querySelectorAll('#panel .row').length > 0")
             pills = page.evaluate("() => [...document.querySelectorAll('#panel .row')].map(r => ["
                                   "r.querySelector('.t').textContent, "
@@ -1401,7 +1413,10 @@ class MarksInTheBrowser(SimpleTestCase):
         self.assertEqual(errors, [], page_url)
         self.assertIn("1", hero)
         self.assertIn("evidence has changed", hero)
-        self.assertEqual(dict(pills), {"/api/gone/": "returned", "cart": "approved · js-applied"})
+        # One page's list, because that is what a list is now: `cart`'s mark rides on
+        # `cart`'s own page. The mark travelling with the row is the thing under test, and
+        # it does - the row whose evidence moved says so, in the list, without opening it.
+        self.assertEqual(dict(pills)["/api/gone/"], "returned")
         self.assertTrue(card["returned"])
         for word in ("alice", "2026-08-20", "feature-flagged", "consumed-by-dependency", "2026-09-01", "unresolved"):
             self.assertIn(word, card["mark"])
@@ -1469,7 +1484,8 @@ class TheFunctionOnTheCard(SimpleTestCase):
             page.on("pageerror", lambda e: errors.append(str(e)))
             page.goto(page_url := self._url(), wait_until="load")
             page.wait_for_timeout(250)
-            _open_lens(page, "findings")
+            _goto_page_with(page, "unresolved")
+            _open_map_list(page)
             page.wait_for_function("() => document.querySelectorAll('#panel .row').length > 0")
             listed = page.evaluate(
                 "() => [...document.querySelectorAll('#panel .row')].map(r => "
@@ -1505,7 +1521,7 @@ class TheFunctionOnTheCard(SimpleTestCase):
         self.assertGreater(order["file"], order["owner"] , order)
         self.assertNotEqual(order["owner"], -1, order)
         self.assertTrue(any("loadOrders" in text for text in listed),
-                        "the findings list names the function too")
+                        "the list names the function too")
 
 
 class TheFunctionFilter(SimpleTestCase):

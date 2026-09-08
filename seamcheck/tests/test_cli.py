@@ -26,6 +26,16 @@ class DumpConnectivityMapTests(SimpleTestCase):
         call_command("seamcheck", *args, stdout=out, stderr=StringIO())
         return out.getvalue()
 
+    def _run_missing(self, *args):
+        """A wrong `--explain` id exits EXIT_USAGE now instead of printing a failure and
+        reporting success. Only the explain-miss tests survive that exit - swallowing it
+        in `_run` hid the triage rejection, which is a SystemExit another test is about."""
+        out = StringIO()
+        with self.assertRaises(SystemExit) as raised:
+            call_command("seamcheck", *args, stdout=out, stderr=StringIO())
+        self.assertEqual(raised.exception.code, exitcodes.EXIT_USAGE)
+        return out.getvalue()
+
     def test_json_flag_prints_a_valid_graph(self):
         data = json.loads(self._run("--json"))
 
@@ -41,14 +51,14 @@ class DumpConnectivityMapTests(SimpleTestCase):
         self.assertIn("status", output)
 
     def test_explain_reports_unknown_symbol_clearly(self):
-        output = self._run("--explain", "view:nope")
+        output = self._run_missing("--explain", "view:nope")
 
         self.assertIn("No symbol", output)
 
     def test_explain_suggests_near_ids_on_a_miss(self):
         # queries.near() had no caller anywhere in the codebase; wired in here so the
         # 88.5-second "No symbol with id ..." finally says what you probably meant.
-        output = self._run(
+        output = self._run_missing(
             "--explain", "view:seamcheck.tests.fixtures.fixture_views.get_thin"
         )
 
@@ -784,7 +794,11 @@ class ExplainWithHintTests(SimpleTestCase):
             finally:
                 os.chdir(cwd)
 
-        self.assertEqual(code, 0)
+        # The hint is printed AND the miss is reported: a wrong id is the caller typing
+        # something wrong, so it exits EXIT_USAGE rather than printing a failure and
+        # telling the shell everything went fine. The suggestion is the useful half and
+        # survives - an agent reads both the code and the text.
+        self.assertEqual(code, exitcodes.EXIT_USAGE)
         self.assertIn("Did you mean", out.getvalue())
         self.assertIn("url:api/submit/", out.getvalue())
 
@@ -803,8 +817,12 @@ class ExplainCachedScanTests(SimpleTestCase):
             mock.patch("seamcheck.scancache.cached_scan",
                        return_value=(empty, {"cached": True, "seconds": 0.0})) as cached_scan,
             mock.patch("seamcheck.api.scan") as scan,
+            # The fixture graph is empty, so this id can never resolve - and a miss now
+            # exits. Which scan was called is the point, not whether the id was found.
+            self.assertRaises(SystemExit),
         ):
-            call_command("seamcheck", "--explain", "url:x", stdout=StringIO(), stderr=StringIO())
+            call_command("seamcheck", "--explain", "url:x",
+                         stdout=StringIO(), stderr=StringIO())
 
         cached_scan.assert_called_once_with(".")
         scan.assert_not_called()

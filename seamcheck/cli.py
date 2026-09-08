@@ -732,8 +732,14 @@ def _run_without_django(arguments, verbose: bool) -> int:
             from seamcheck.scancache import cached_scan
 
             graph, _how = cached_scan(root)
-            print(api.explain_with_hint(graph, options["explain"], root))
-            return 0
+            from seamcheck.exitcodes import EXIT_USAGE, UNKNOWN_SYMBOL
+
+            answer = api.explain_with_hint(graph, options["explain"], root)
+            print(answer)
+            # A wrong id is the caller typing something wrong, and it exited 0 - the same
+            # "failure in the body, success to the shell" that findings/symbols/diff were
+            # fixed for. The hint below the sentence is still printed; only the code moves.
+            return EXIT_USAGE if answer.startswith(UNKNOWN_SYMBOL) else 0
         if options["check"]:
             # The CI gate. `passed` is the key api.check() actually returns; this asked for
             # `findings`, which it never had, so every non-Django project passed no matter

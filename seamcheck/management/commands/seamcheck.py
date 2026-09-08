@@ -107,8 +107,14 @@ class Command(BaseCommand):
             from seamcheck.scancache import cached_scan
 
             graph, _how = cached_scan(options["repo_root"])
-            return self.stdout.write(
-                api.explain_with_hint(graph, options["explain"], options["repo_root"]))
+            from seamcheck.exitcodes import EXIT_USAGE, UNKNOWN_SYMBOL
+
+            answer = api.explain_with_hint(graph, options["explain"], options["repo_root"])
+            self.stdout.write(answer)
+            # Both doors agree, as everywhere else on this branch.
+            if answer.startswith(UNKNOWN_SYMBOL):
+                raise SystemExit(EXIT_USAGE)
+            return None
 
         if options["backfill"] is not None:
             return self._backfill(

@@ -346,7 +346,9 @@ def _with_observations(graph: Graph, repo_root: str) -> Graph:
 def explain(graph: Graph, symbol_id: str) -> str:
     symbol = next((s for s in graph.symbols if s.id == symbol_id), None)
     if symbol is None:
-        return f"No symbol with id `{symbol_id}` in the current scan."
+        from seamcheck.exitcodes import UNKNOWN_SYMBOL
+
+        return f"{UNKNOWN_SYMBOL} `{symbol_id}` in the current scan."
     lines = [
         f"## {symbol.label}  ({symbol.kind})",
         "",
@@ -374,7 +376,9 @@ def explain_with_hint(graph: Graph, symbol_id: str, repo_root: str = ".") -> str
     scan right behind the first.
     """
     text = explain(graph, symbol_id)
-    if not text.startswith("No symbol with id"):
+    from seamcheck.exitcodes import UNKNOWN_SYMBOL
+
+    if not text.startswith(UNKNOWN_SYMBOL):
         return text
     from seamcheck import queries
 

@@ -17,6 +17,26 @@ Coverage and precision have **different denominators** and neither is meaningful
 backend that answered `uncertain` everywhere would score 100% precision and be useless.
 `uncertain` is not counted as a claim in precision, because it is not a claim.
 
+## 0.12.1 - 2026-09-08
+
+**One list, not two.** The Findings view was the map's own graph shown a second time, with a
+second set of filters that had to be kept in step - and every time they drifted, the two
+views disagreed about the same question.
+
+- **Removed** - the Findings view. The map answers it, drawn or as a list, under one set of
+  controls. `seamcheck findings` and the `seamcheck_findings` MCP tool are unchanged: an
+  agent has no map, and that is still the only way a program asks what is wrong.
+- **Fixed** - `explain <wrong-id>` printed "No symbol with id ..." and exited **0**. It now
+  exits 3 on both doors, like every other coded failure. The "did you mean" hint still prints.
+- **Fixed** - list rows were never clickable, though every row already carried its symbol id.
+  A row opens the same detail the map opens, and carries its triage mark and owner.
+- **Fixed** - the page picker was granted by one function and hidden by another, so it never
+  appeared on a list. One table decides which view has which control.
+- **Fixed** - clicking a file in Files returns to the map as a drawing, which is what the row
+  promises.
+- **Changed** - on a phone the status pills are one scrollable row, and Filter no longer drops
+  to a second line on views with a longer name.
+
 ## 0.12.0 - 2026-09-07
 
 **The CLI and the MCP server, rebuilt for agents.** Both worked for a person and were hostile

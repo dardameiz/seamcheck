@@ -14,6 +14,10 @@ EXIT_ENVIRONMENT = 4    # the machine was wrong: no adapter, missing import, no 
 
 # The one string api.check() uses to say it had nothing to compare against.
 NO_BASELINE = "No baseline snapshot stored"
+# `explain` answers in prose, so its failure has no envelope to carry a code - the
+# sentence IS the signal, and three places already matched on it by hand. Named here
+# so the doors can exit on it rather than printing a failure and reporting success.
+UNKNOWN_SYMBOL = "No symbol with id"
 
 
 # Where each envelope.ERRORS code lands on the process-exit ladder, for `findings`/

@@ -424,11 +424,16 @@ class MergedReviewViewTests(SimpleTestCase):
         self.assertNotIn('"snippet": "s"', out)
         self.assertNotIn('"snippet":"s"', out)
 
-    def test_a_section_longer_than_what_was_sent_says_so(self):
+    def test_a_section_says_how_many_it_actually_holds(self):
+        """The sample line went with the Findings view. `total` did not: the payload still
+        states the true size of a section beside the rows it sent, and `changes` reads it -
+        so a number in this file can still never be mistaken for the whole of one."""
         out = map_html.render(_map(), console=self._console())
 
-        self.assertIn("Showing the first", out)
         self.assertIn('"total"', out)
+        # The reader-facing half of that promise lived in a second list of the same graph,
+        # with a second set of filters to keep in step. There is one list now.
+        self.assertNotIn("Showing the first", out)
 
     def test_the_page_renders_without_a_console_at_all(self):
         out = map_html.render(_map())
@@ -455,8 +460,13 @@ class MergedReviewViewTests(SimpleTestCase):
         # on "Backend" could not tell why "Map" was also there. "report" joined later and
         # is the one entry that is not a way of looking at the scan but a way of sending
         # it; VIEWS drops it when there is no share payload to send.
+        # No "findings" either, and for the same reason the five lens sections went: it
+        # was the map's own graph as a second list, with its own filters that had to be
+        # kept in step with the map's - and every time they drifted the two disagreed
+        # about one question. The map answers it, drawn or listed, under one set of
+        # controls.
         self.assertIn(
-            'const MENU = ["overview", "map", "findings", "files", "changes", "report"]',
+            'const MENU = ["overview", "map", "files", "changes", "report"]',
             out)
         self.assertIn('map: "Map"', out)
         self.assertNotIn("Map — what reaches what", out)

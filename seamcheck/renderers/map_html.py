@@ -544,6 +544,9 @@ body { margin:0; background:var(--bg); color:var(--ink); font-size:13.5px; overf
 /* The chain, as a line. The arrow is dimmed and unselectable so copying a row gives the
    names and not a string of glyphs between them. */
 .chainrow .t { white-space:normal; }
+.row.tappable { cursor:pointer; -webkit-tap-highlight-color:rgba(124,92,255,.18); }
+.row.tappable:hover { border-color:rgba(124,92,255,.45); }
+.row.tappable:active { transform:scale(.996); }
 .chainrow .arrow { font-style:normal; color:var(--muted); padding:0 6px; user-select:none; }
 .chainrow .t b { font-weight:600; }
 /* Results sit over the canvas, anchored under the box that produced them. */
@@ -1189,8 +1192,13 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
      squeezed into a corner it has to share. */
   /* Two buttons and nothing else. The page, section and function pickers moved into
      the Filter sheet, which is the whole point of it. */
-  .hud.tl { top:12px; left:12px; right:12px; flex-wrap:wrap; gap:7px; }
-  .hud.tl > .menuwrap { flex:none; }
+  /* One row. It wrapped because the menu button carries the view's NAME, so "Findings"
+     pushed Filter onto a second line while "Map" did not - the control moved depending on
+     which view you were in, which is the thing a reader notices and cannot explain. The
+     name truncates instead; the buttons keep their place. */
+  .hud.tl { top:12px; left:12px; right:12px; flex-wrap:nowrap; gap:7px; }
+  .hud.tl > .menuwrap { flex:0 1 auto; min-width:0; }
+  .hud.tl > .filterwrap { flex:none; }
   .pagepicks { flex-basis:100%; order:2; }
   .pagepick, #secwrap { flex:1 1 0; max-width:none; }
   #filterbody .pagepick select, #filterbody .funcpick input { height:44px; font-size:15px; }
@@ -1202,13 +1210,21 @@ button.k[aria-pressed="true"] em { color:var(--ink); }
   #filtersheet { left:0; right:auto; width:calc(100vw - 24px); max-width:none; }
   /* Clear of the right corner's own controls, which stay on row one. */
   .hud.tr { top:12px; right:12px; gap:6px; z-index:7; }
-  .menubtn { max-width:44vw; }
+  .menubtn { max-width:38vw; min-width:0; overflow:hidden; text-overflow:ellipsis; }
   /* The page picker on the glass now says which page this is, so the readout was the
      same sentence twice - and the second copy floated over a band heading. */
   .readout { display:none; }
-  .hud.bl { bottom:12px; left:12px; right:12px; gap:7px; }
-  #colourkey .seg { gap:7px; }
-  #colourkey .seg button { padding:6px 12px; font-size:12px; }
+  /* They wrapped onto two and three rows and sat half-transparent over the text they
+     were filtering - hard to read, and eating a third of a phone screen. One row that
+     scrolls sideways, opaque, and shorter: the same four controls in a third of the
+     space, and legible over whatever is behind them. */
+  .hud.bl { bottom:12px; left:0; right:0; gap:0; flex-wrap:nowrap; }
+  #colourkey { width:100%; }
+  #colourkey .seg { gap:6px; flex-wrap:nowrap; overflow-x:auto; padding:2px 12px;
+                    scrollbar-width:none; -webkit-overflow-scrolling:touch; }
+  #colourkey .seg::-webkit-scrollbar { display:none; }
+  #colourkey .seg button { padding:5px 11px; font-size:11.5px; gap:6px;
+                           background:var(--bg); border-width:1px; }
   /* A menu row is a thumb target, not a line of text. */
   .mapsheet { width:min(340px, calc(100vw - 24px)); }
   .mapsheet .nv { padding:13px 12px; font-size:16px; border-radius:12px; }
@@ -1520,6 +1536,10 @@ let CHANGED = MAPDATA.changed, only = false;
 // "someone looked, and said why"; one the code moved out from under says the finding
 // RETURNED - which is the one line a reader most needs on a card that is back.
 const MARKS = (typeof CONSOLE !== "undefined" && CONSOLE.marks) || {};
+
+// A mark, small enough to ride on a row: who judged this, and whether the code has moved
+// under the judgement since. Restored when the Findings view went - it lived there, and a
+// list without it silently forgets that somebody already looked at this row.
 function markPill(id) {
   const m = MARKS[id];
   if (!m) return "";
@@ -1528,6 +1548,7 @@ function markPill(id) {
     ? `<span class="pill returned" title="marked ${esc(m.marked)} ${by}; the evidence has changed">returned</span>`
     : `<span class="pill marked" title="${by}">${esc(m.marked)}${m.why ? " · " + esc(m.why) : ""}</span>`;
 }
+
 // The sentence a card carries. Date and reason both: "returned" alone says the tool
 // remembered something; who said what, and when the code moved, is what lets the reader
 // pick up where that person left off instead of judging it cold.
@@ -1686,7 +1707,7 @@ const statusFilter = new Set();
 const ROWS_PER_PAGE = 60;
 // Panel state lives here rather than beside the panel code: the canvas reads `mode` to
 // decide its lens, and fillPages() runs before the panel section of this file is reached.
-let mode = "map", cq = "", cstatus = "", shown = ROWS_PER_PAGE, asList = false;
+let mode = "map", shown = ROWS_PER_PAGE, asList = false;
 // Set when a reader opens one of the Overview backlog rows, so the list they land on is
 // the kind they pressed rather than all 14 kinds with theirs somewhere inside.
 let ckind = "";
@@ -2058,12 +2079,9 @@ colourkey.addEventListener("click", event => {
 
 window.syncStatusKey = syncStatusKey;
 function syncStatusKey() {
-  const select = document.getElementById("cst");
-  if (select) {
-    const one = statusFilter.size === 1 ? [...statusFilter][0] : "";
-    if (select.value !== one) select.value = one;
-    cstatus = one;
-  }
+  // It used to drive a second control too - the removed Findings list had its own status
+  // select, and keeping the two in step was half of why that view kept disagreeing with
+  // this one. The pills are the only status control now, so there is nothing to sync to.
   colourkey.querySelectorAll(".seg button[data-status]").forEach(button => {
     const status = button.dataset.status;
     const on = status ? statusFilter.has(status) : statusFilter.size === 0;
@@ -4847,15 +4865,7 @@ function why(kind, status) {
 // the same two sentences, and printed nowhere it is back to being a status word nobody
 // can act on. Runs are recomputed after every filter, so whatever is on screen at the
 // top of a group always carries its own explanation.
-function whyOncePerRun(rows) {
-  let previous = null;
-  return rows.map(r => {
-    const key = r.kind + "|" + r.status;
-    const first = key !== previous;
-    previous = key;
-    return first && r.status !== "connected" ? why(r.kind, r.status) : "";
-  });
-}
+
 
 // --- the review views, in the same shell -------------------------------------------
 // One surface, not two: a second document meant a second render, a second link and a
@@ -4868,9 +4878,28 @@ const pgwrap = document.getElementById("pgwrap"), viewer = document.getElementBy
 // set none of them, so the picker stayed gone on an ordinary page. Choosing a page
 // inside "Stripe" is a question with no answer, so it goes; inside "Redis" it is the
 // question, so it stays.
+// WHICH CONTROLS A VIEW HAS. One table, because this was decided in two places and they
+// disagreed: syncChrome granted Findings the page picker and syncPageWrap - which runs
+// after it - hid the same element, so the control existed and never appeared. A reader
+// cannot debug that; it just looks like the feature is missing.
+function viewWants(m) {
+  const onMap = SECTION_KINDS[m] !== undefined;
+  return {
+
+    overview: [],
+    map: ["cm", "pg", "ly", "status"],
+    files: [],
+    changes: ["cm"],
+  }[m] || (onMap ? ["cm", "pg", "ly", "status"] : ["cm"]);
+}
+
 function syncPageWrap() {
-  const drawable = SECTION_KINDS[mode] !== undefined && !asList;
-  pgwrap.hidden = !drawable || (SERVICE_LAYERS.has(layer) && !PAGED_LAYERS.has(layer));
+  // Page-scoped, not canvas-scoped. `mapListHtml` lists ONE page, exactly as the drawing
+  // shows one page - so hiding the picker with the canvas left the list narrowed to a page
+  // with no control to change it. The only way to see another page's rows was to switch
+  // back to the map, change the page there, and switch to the list again.
+  pgwrap.hidden = !viewWants(mode).includes("pg")
+    || (SERVICE_LAYERS.has(layer) && !PAGED_LAYERS.has(layer));
 }
 const listToggle = document.getElementById("aslist");
 listToggle.onclick = () => { asList = !asList; switchTo(mode); };
@@ -4892,7 +4921,11 @@ const OPENS_ON = "overview";
 //
 // They are Layer values now. The menu answers "what am I doing", the Layer answers "which
 // part of it", and neither pretends to be the other.
-const MENU = ["overview", "map", "findings", "files", "changes", "report"];
+// No "findings" entry. It was a SECOND list of the same graph beside the map's own, with
+// its own filters that had to be kept in step with the map's - and every time they drifted
+// the two views disagreed about the same question. The map answers it, as a drawing or as
+// a list, under one set of controls.
+const MENU = ["overview", "map", "files", "changes", "report"];
 const SECTION_BY_KEY = Object.fromEntries((D.sections || []).map(sec => [sec.key, sec]));
 
 // A section's rows are a chunk, read the first time the section is opened. Until they
@@ -5390,6 +5423,22 @@ function bestPageFor(path) {
   return typeof at === "number" ? at : current;
 }
 
+// Every list row already carried `data-open` with its symbol id and NOTHING read it: the
+// affordance was built and never wired, so a row on a phone looked tappable and was inert.
+// One handler, delegated, for every list in the panel - the map-as-list and the sections
+// both - opening the same detail sheet the canvas opens, so the two views answer a tap
+// identically rather than the list being a dead end.
+function bindRowOpens() {
+  panel.querySelectorAll("[data-open]").forEach(el => {
+    el.classList.add("tappable");
+    el.onclick = e => {
+      // A row holds its own controls - the `edit` link and the mark pill - and those keep
+      // their meaning; only the row's own surface opens the sheet.
+      if (e.target.closest("a, button, .loc, .markpill")) return;
+      show(el.dataset.open);
+    };
+  });
+}
 function renderPanel() {
   if (mode === "files") {
     const all = fileTab === "all";
@@ -5431,6 +5480,10 @@ function renderPanel() {
         // at", which for push_arena.js was 3 symbols out of 674 - a blank-looking canvas
         // that reads as the file being unwired.
         current = bestPageFor(fileFilter);
+        // As a DRAWING. The row's whole promise is "show me this file on the map", and
+        // arriving in the list instead answers a different question - one the reader could
+        // already have asked from the list they were in.
+        asList = false;
         viewer.value = "map"; switchTo("map");
       };
     });
@@ -5444,13 +5497,15 @@ function renderPanel() {
   }
   if (mode === "overview") {
     panel.innerHTML = overviewHtml();
-    // A count with no way in is decoration. Each backlog row opens Findings already
-    // narrowed to that kind - which is the question the row raises.
+    // A count with no way in is decoration. Each backlog row opens the MAP as a list,
+    // narrowed to that kind - the same destination the Findings view used to be, now that
+    // there is one list rather than two.
     panel.querySelectorAll(".rowgo").forEach(el => {
       el.onclick = () => {
-        ckind = el.dataset.kind; cstatus = ""; cq = ""; shown = ROWS_PER_PAGE;
+        ckind = el.dataset.kind; shown = ROWS_PER_PAGE;
         statusFilter.clear(); syncStatusKey();
-        viewer.value = "findings"; switchTo("findings");
+        asList = true;
+        viewer.value = "map"; switchTo("map");
       };
     });
     return;
@@ -5483,83 +5538,22 @@ function renderPanel() {
     panel.innerHTML = changesHtml();
     return;
   }
-  if (mode === "map") { panel.innerHTML = mapListHtml(); return; }
-  const sec = D.sections.find(x => x.key === mode);
-  // No section owns this view. Returning left whatever the panel last held on screen -
-  // which was the Overview - so "Show as list" on the map looked like it navigated away.
-  if (!sec) { panel.innerHTML = mapListHtml(); return; }
-  if (sec.unavailable) {
-    panel.innerHTML = `<h2>${esc(sec.title)}</h2><p class="blurb">${esc(sec.blurb)}</p>
-      <div class="gap">${esc(sec.unavailable)}</div>`;
-    return;
-  }
-  if (!withRows(sec, renderPanel)) {
-    panel.innerHTML = `<h2>${esc(sec.title)}</h2><p class="blurb">${esc(sec.blurb)}</p>
-      <div class="gap">Loading ${n(sec.total || 0)} rows…</div>`;
-    return;
-  }
-  // Offer only statuses this section actually contains. A findings list holds nothing
-  // connected by definition, so offering "connected" gave a filter that could only ever
-  // answer "No rows match" - the control implying data that cannot exist.
-  const counts = {};
-  sec.rows.forEach(r => { counts[r.status] = (counts[r.status] || 0) + 1; });
-  // Counts come from the WHOLE section where the scan sent them, not from the sample the
-  // page holds - a filter that says "unused (12)" when the section has 2,380 of them is
-  // describing the payload rather than the codebase.
-  const totals = sec.status_totals || counts;
-  const present = ["unresolved", "unused", "uncertain", "connected"].filter(v => totals[v]);
-  if (cstatus && !counts[cstatus]) cstatus = "";
+  if (mode === "map") { panel.innerHTML = mapListHtml(); bindListTools(); return; }
+  // Nothing else renders a list. The Findings view was the only reader of the generic
+  // section branch that stood here - a second list of the same graph, with a second set
+  // of filters to keep in step - and it is gone, so the branch goes with it rather than
+  // sitting unreachable. `changes`, `files`, `overview` and `report` each have their own
+  // branch above; anything else is the map, as a list.
+  panel.innerHTML = mapListHtml();
+  bindListTools();
+}
 
-  const needle = cq.toLowerCase();
-  // ONE status filter. The panel had its own `cstatus` select while the pill set
-  // `statusFilter`, so on Findings the control a reader could see was not the one doing
-  // the filtering - pressing "unresolved" changed the button and nothing else.
-  const rows = sec.rows.filter(r => (!statusFilter.size || statusFilter.has(r.status)) &&
-    (!cstatus || r.status === cstatus) && (!ckind || r.kind === ckind) &&
-    (!needle || (r.label + " " + r.file + " " + r.kind).toLowerCase().includes(needle)));
-  const page = rows.slice(0, shown);
-  const notes = whyOncePerRun(page);
-  panel.innerHTML = `<h2>${esc(sec.title)}</h2><p class="blurb">${esc(sec.blurb)}</p>
-    <div class="tools">
-      <input id="cq" type="search" placeholder="Filter ${sec.rows.length} rows" value="${esc(cq)}">
-      ${ckind ? `<button type="button" class="chip" id="ckoff">kind: ${esc(ckind)} ×</button>` : ""}
-      <select id="cst"><option value="">any status</option>
-        ${present.map(v =>
-          `<option value="${v}"${v === cstatus ? " selected" : ""}>${v} (${totals[v].toLocaleString()})</option>`
-        ).join("")}
-      </select></div>
-    ${page.map((r, i) => `<div class="row"><span class="badge ${esc(r.status)}">${esc(r.status)}</span>${markPill(r.id)}
-       <div class="t">${esc(r.label)}</div>
-       <div class="w">${esc(r.kind)}${r.file ? " · " + loc(r.file, r.line) : ""}${
-         r.owner ? ' · <span class="own">' + esc(r.owner) + "</span>" : ""}</div>
-       ${r.note ? `<div class="n">${esc(r.note)}</div>` : ""}
-       ${notes[i]}</div>`).join("")
-      || `<div class="gap">No rows match.</div>`}
-    ${rows.length > page.length
-      ? `<div class="more" id="cmore">Show more — ${page.length} of ${rows.length}</div>` : ""}
-    ${sec.total > sec.rows.length ? `<div class="gloss">Showing the first
-      ${sec.rows.length} of ${sec.total}. The rest are in the CLI:
-      <code>--check --format markdown</code>.</div>` : ""}`;
-
-  const box = document.getElementById("cq");
-  box.oninput = e => {
-    cq = e.target.value; shown = ROWS_PER_PAGE; renderPanel();
-    const again = document.getElementById("cq");
-    again.focus(); again.setSelectionRange(again.value.length, again.value.length);
-  };
+// The list's own controls: the rows open the sheet, and a kind that arrived from Overview
+// can be taken off again where it is showing.
+function bindListTools() {
+  bindRowOpens();
   const koff = document.getElementById("ckoff");
   if (koff) koff.onclick = () => { ckind = ""; shown = ROWS_PER_PAGE; renderPanel(); };
-  document.getElementById("cst").onchange = e => {
-    cstatus = e.target.value;
-    // The pill shows the same thing; two controls disagreeing about one filter is how
-    // this went wrong in the first place.
-    statusFilter.clear();
-    if (cstatus) statusFilter.add(cstatus);
-    if (window.syncStatusKey) syncStatusKey();
-    shown = ROWS_PER_PAGE; renderPanel();
-  };
-  const more = document.getElementById("cmore");
-  if (more) more.onclick = () => { shown += ROWS_PER_PAGE * 4; renderPanel(); };
 }
 
 // The trend. Answers the question a single before-and-after cannot: which way is this
@@ -5599,9 +5593,15 @@ function mapListHtml() {
     ensurePage(want).then(() => { if (currentPageIndex() === want && asList) renderPanel(); }, reportFailure);
     return `<h2>${esc(p.title || p.page)}</h2><p class="blurb">Opening…</p>`;
   }
-  const rows = p ? lensed(p).filter(n => n.kind !== "page") : [];
+  const rows = p ? lensed(p).filter(n => n.kind !== "page" && (!ckind || n.kind === ckind))
+    : [];
   const where = p ? (p.where ? `${p.title} · ${p.where}` : p.title) : "";
-  const head = `<h2>${esc(where || "Map")}</h2>`;
+  // A filter arrived from somewhere else - Overview's backlog rows send a kind - so it is
+  // shown where it applies, with its own way off. This is the one control the removed
+  // Findings view had that the map's own chrome does not.
+  const head = `<h2>${esc(where || "Map")}</h2>` + (ckind
+    ? `<div class="tools"><button type="button" class="chip" id="ckoff">kind: ${
+        esc(ckind)} ×</button></div>` : "");
   if (!rows.length) {
     return head + `<p class="blurb">Nothing matches the current filters.</p>
       <div class="gap">Clear the layer or the status filter to see the rest.</div>`;
@@ -5624,9 +5624,10 @@ function mapListHtml() {
         .map((step, i, all) => i === all.length - 1 ? `<b>${esc(step)}</b>` : esc(step))
         .join('<i class="arrow">\u2192</i>');
       return `<div class="row chainrow" data-open="${esc(r.id)}">
-        <span class="badge ${esc(r.status)}">${esc(r.status)}</span>
+        <span class="badge ${esc(r.status)}">${esc(r.status)}</span>${markPill(r.id)}
         <div class="t">${walk}</div>
-        <div class="w">${esc(r.kind)}${r.file ? " · " + loc(r.file, r.line) : ""}</div>
+        <div class="w">${esc(r.kind)}${r.file ? " · " + loc(r.file, r.line) : ""}${
+          r.owner ? ' · <span class="own">' + esc(r.owner) + "</span>" : ""}</div>
         ${r.note ? `<div class="n">${esc(r.note)}</div>` : ""}</div>`;
     }).join("") +
     (rows.length > shown.length
@@ -5712,7 +5713,7 @@ function switchTo(next) {
   // staying open over the thing it had just navigated to.
   if (window.setSheet) setSheet(false);
   closeSheet();
-  cq = ""; cstatus = ""; shown = ROWS_PER_PAGE;
+  shown = ROWS_PER_PAGE;
   focus = null; view = {x:0, y:0, k:1};
   if (drawable) draw(); else renderPanel();
 }
@@ -5841,14 +5842,7 @@ ly.onchange = e => {
   // Which controls a view actually has. Overview is a page of numbers about the whole
   // scan, so a control offering to narrow it is offering something it cannot do.
   window.syncChrome = () => {
-    const onMap = SECTION_KINDS[mode] !== undefined;
-    const wants = {
-      overview: [],
-      map: ["cm", "pg", "ly", "status"],
-      findings: ["cm", "status"],
-      files: [],
-      changes: ["cm"],
-    }[mode] || (onMap ? ["cm", "pg", "ly", "status"] : ["cm"]);
+    const wants = viewWants(mode);
 
     ["cm", "pg", "ly"].forEach(id => {
       const wrap = (document.getElementById(id) || {}).closest
@@ -5856,11 +5850,16 @@ ly.onchange = e => {
       if (wrap) wrap.hidden = !wants.includes(id);
     });
     if (key) key.hidden = !wants.includes("status");
-    // Counts on the pills, from the page actually drawn - a pill that says "unresolved"
-    // with no number is a control with no information in it.
+    // Counts on the pills, from WHAT THIS VIEW IS SHOWING - a pill that says "unresolved"
+    // with no number is a control with no information in it, and one that says 17 over a
+    // list of 2,013 is worse: it is information that is wrong. The pills used to count the
+    // drawn PAGE on every view, so on Findings - which is the whole scan, not a page -
+    // tapping "unresolved 17" opened 2,013 rows and the two numbers never met.
     if (!key.hidden) {
       const counts = {};
-      const p = typeof currentPage === "function" ? currentPage() : null;
+      const section = D.sections.find(x => x.key === mode);
+      const p = section ? null : (typeof currentPage === "function" ? currentPage() : null);
+      if (section) Object.assign(counts, section.status_totals || {});
       Object.assign(counts, p ? p.st : {});
       key.querySelectorAll(".seg button[data-status]").forEach(btn => {
         const st = btn.dataset.status;
