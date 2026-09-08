@@ -17,6 +17,52 @@ Coverage and precision have **different denominators** and neither is meaningful
 backend that answered `uncertain` everywhere would score 100% precision and be useless.
 `uncertain` is not counted as a claim in precision, because it is not a claim.
 
+## 0.13.0 - 2026-09-08
+
+**Two buttons, and one box to search with.** Reported from use, with the phone layout as
+the reference: *"I want this to be like the Mobile. I want, MENU and then FILTER."*
+
+- **Changed** - the map's chrome is two buttons at every width. **Menu** is the view list
+  and nothing else - Overview, Map, Files, Changes, Send a report. **Filter** is
+  everything that narrows what you are looking at - commit, emphasis, page, section,
+  search. The menu used to answer both questions while three more controls sat on the
+  glass beside it, so one intention was behind two different buttons and the five words
+  naming the views were the top fifth of a panel you had to read past. The phone already
+  had this shape; the desk monitor was the layout that had drifted.
+- **Changed** - the button says **Menu**, not the name of the view you are in. "Map"
+  beside "Filter" is one noun and one verb, and it was never clear which was a place. The
+  breadcrumb already says where you are.
+- **Changed** - **one search box, three destinations.** A file opens the map narrowed to
+  that file, on the page that holds it; a function opens its call graph; anything else
+  opens where it sits. Every row is badged with where it will take you. There were two
+  boxes over one intention - "Function..." on the glass and "Search everything" two clicks
+  deep in the menu - and each was right about its own half and silent about the other: a
+  filename typed into the first answered *"No function is called that"*.
+- **Changed** - the served links are labelled by **who can reach them**, not by what you
+  would do with them: `this machine` (loopback), `same wifi` (the LAN address) and
+  `anywhere` (the public HTTPS one, when it is turned on). Reported from use: *"what is
+  open and what is mobile - they seem to be the same"*. They were two different addresses
+  and nothing said so. When there is no public link the footer now says what that costs -
+  a device on cellular, or on another wifi, cannot reach **either** address above.
+- **Fixed** - the two buttons **overlapped on a phone**. `.hud.tl` carries a desktop cap of
+  `calc(100% - 250px)` so the left corner cannot grow into the right one's controls; the
+  phone rule sets both edges instead and never reset it - 140px of room on a 390px screen,
+  for 176px of buttons - so the menu's wrapper shrank below its own button and Filter was
+  drawn on top of the word "Menu".
+- **Fixed** - a leftover `order:2`, written when the page picker was on the glass and had
+  to drop to its own row. `order` applies to a grid item as much as a flex one, so it was
+  silently reordering the filter sheet and putting the search above the page picker it
+  belongs under.
+- **Fixed** - a `<select>` sizes to its widest option, so "Whole page" drew two thirds the
+  width of the page picker above it: the same control, twice, at two sizes.
+- **Fixed** - a result row is two lines. Side by side in a 324px list the name and the path
+  both ellipsised, so six files read as six rows of `pointless/static/pointl...` with the
+  filename - the part anybody typed - cut off the end.
+
+**Measured:** nothing in this release reads source, so the scan numbers are unchanged by
+construction rather than by assertion. The corpus was re-run to prove it: 34 repos,
+**identical totals**, no CRASH, and no repo lost its routes.
+
 ## 0.12.1 - 2026-09-08
 
 **One list, not two.** The Findings view was the map's own graph shown a second time, with a
