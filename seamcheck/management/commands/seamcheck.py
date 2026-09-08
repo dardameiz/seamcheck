@@ -689,9 +689,12 @@ class Command(BaseCommand):
             sources=sources, repo_root=repo_root, assets=assets,
         )
         self.stdout.write("")
-        self.stdout.write(f"  open   {addresses['local']}")
+        # Labelled by reach, not by intent - see the same block in cli.py. The two
+        # doors print the same three lines; a person who moves between them must not
+        # have to learn two vocabularies for one set of addresses.
+        self.stdout.write(f"  this machine  {addresses['local']}")
         if "lan" in addresses:
-            self.stdout.write(f"  phone  {addresses['lan']}")
+            self.stdout.write(f"  same wifi     {addresses['lan']}")
         proxy = None
         opened = False
         if tunnel:
@@ -705,28 +708,29 @@ class Command(BaseCommand):
                 self.stderr.write("  no public link; the addresses above still work.")
             else:
                 path = addresses["local"][addresses["local"].index("/", 8):]
-                self.stdout.write(f"  public {public}{path}   ({why})")
+                self.stdout.write(f"  anywhere      {public}{path}")
+                self.stdout.write(f"  \u2514\u2500 {why}")
                 opened = True
         self.stdout.write("")
         if opened:
             self.stdout.write(
-                "  The public link is readable by ANYONE who has it, from anywhere, for"
-                "\n  as long as this command runs. It dies when you stop it. Turn it off"
-                "\n  for good with `seamcheck config --tunnel never`, or for this run"
-                "\n  with --local-only."
+                "  \"anywhere\" is the public one: readable by ANYONE holding that link,"
+                "\n  from any network, for as long as this command runs. It dies when you"
+                "\n  stop it. Turn it off for good with `seamcheck config --tunnel"
+                "\n  never`, or for this run with --local-only."
             )
         else:
             self.stdout.write(
-                "  Served from this machine only, for as long as this command runs."
+                "  Served to this machine only, for as long as this command runs."
                 if local_only else
-                "  Served from this machine, reachable by anyone on this network holding"
-                "\n  the link. Nothing is uploaded. --local-only drops the phone link and"
-                "\n  binds loopback instead."
+                "  Nothing is uploaded. \"same wifi\" is reachable by anyone on this"
+                "\n  network holding the link; --local-only drops it and binds loopback."
             )
             if not local_only and not tunnel:
                 self.stdout.write(
-                    "  A phone off this wifi cannot reach that address:"
-                    "\n  `seamcheck config --tunnel always` gives every run a link that can."
+                    "  There is no \"anywhere\" link - a device on cellular, or on"
+                    "\n  another wifi, cannot reach either address above. `seamcheck"
+                    "\n  config --tunnel always` adds one to every run."
                 )
         self.stdout.write("  Ctrl-C to stop.")
         # Block-buffered when redirected, and serve_forever never lets the buffer fill;

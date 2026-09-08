@@ -141,9 +141,11 @@ COMMANDS: dict[str, Command] = {
         detail=(
             "Scans, writes the whole UI as a single self-contained HTML file - the graph, "
             "the review sections, the file tree, the commit picker - and then serves that "
-            "file from this machine so you have a link to click. Two links, in fact: one "
-            "for this machine and one to type on a phone on the same wifi. Ctrl-C stops "
-            "the server; the file stays where it was written.\n\n"
+            "file from this machine so you have a link to click. The links are labelled by "
+            "who can reach them: `this machine` (loopback), `same wifi` (any device on "
+            "this network) and, once turned on, `anywhere` (a public HTTPS link that "
+            "works on cellular). Ctrl-C stops the server; the file stays where it was "
+            "written.\n\n"
             "It serves rather than printing a file:// path because a file:// link is not "
             "much of a link: VS Code's terminal opens it inside VS Code, and a phone "
             "cannot use it at all. An http:// one gets handed to a real browser.\n\n"
@@ -152,7 +154,7 @@ COMMANDS: dict[str, Command] = {
             "NOT on this wifi cannot open the second link at all; "
             "`seamcheck config --tunnel always` remembers, for this machine, that every "
             "run should also print a public HTTPS one. `--local-only` "
-            "binds loopback instead, at the cost of the phone link. `--tunnel` goes the "
+            "binds loopback instead, at the cost of the `same wifi` link. `--tunnel` goes the "
             "other way and opens a temporary public HTTPS address for a device that is "
             "not on this wifi."
         ),
@@ -160,7 +162,7 @@ COMMANDS: dict[str, Command] = {
             ("seamcheck map", "scan, write, serve, print the links"),
             ("seamcheck map --open", "...and open the browser for you"),
             ("seamcheck map --no-serve", "just write the file - for CI and scripts"),
-            ("seamcheck map --local-only", "no phone link; loopback only"),
+            ("seamcheck map --local-only", "this machine only; no other link"),
             ("seamcheck map --since main", "highlight what changed against main"),
             ("seamcheck map --out /tmp/map.html", "choose where it lands"),
             ("seamcheck map --out /tmp/map/", "a folder: small index.html, data loaded as needed"),
@@ -880,9 +882,13 @@ def _serve_plain(rendered: str, root: str, options: dict, assets=None) -> int:
         sources=set(api.LAST_MAP_FILES), repo_root=root, assets=assets,
     )
     print("")
-    print(f"  open   {addresses['local']}")
+    # Labelled by WHO CAN REACH each one, not by what you would do with it. "open" and
+    # "phone" described the intent, so two addresses that differ in reach - loopback vs
+    # LAN - read as the same link twice, and the question they answer ("can I open this
+    # from the sofa?") went unanswered. Reported from use.
+    print(f"  this machine  {addresses['local']}")
     if "lan" in addresses:
-        print(f"  phone  {addresses['lan']}")
+        print(f"  same wifi     {addresses['lan']}")
     proxy = None
     # The flag is one rung of a ladder that starts at --local-only and ends at this
     # machine's stored answer, so a person who turned the public link on once gets it
@@ -900,15 +906,18 @@ def _serve_plain(rendered: str, root: str, options: dict, assets=None) -> int:
             print("  no public link; the addresses above still work.", file=sys.stderr)
         else:
             path = addresses["local"][addresses["local"].index("/", 8):]
-            print(f"  public {public}{path}   ({why})")
+            print(f"  anywhere      {public}{path}")
+            print(f"  \u2514\u2500 {why}")
             opened = True
     print("")
     if opened:
-        print("  The public link is readable by ANYONE who has it, from anywhere, while"
-              "\n  this runs. `seamcheck config --tunnel never` turns it off for good.")
+        print("  \"anywhere\" is the public one: readable by ANYONE holding that link,"
+              "\n  from any network, while this runs. It dies when you stop it."
+              "\n  `seamcheck config --tunnel never` turns it off for good.")
     elif not options["local_only"] and not tunnel:
-        print("  A phone off this wifi cannot reach that address:"
-              "\n  `seamcheck config --tunnel always` gives every run a link that can.")
+        print("  Nothing is uploaded, and there is no \"anywhere\" link - a device on"
+              "\n  cellular, or on another wifi, cannot reach either address above."
+              "\n  `seamcheck config --tunnel always` adds one to every run.")
     # The link must reach the terminal now, not when the buffer fills: stdout is block-
     # buffered when it goes to a file, and serve_forever never lets it fill. A run whose
     # output was redirected served for hours with its address unseen.

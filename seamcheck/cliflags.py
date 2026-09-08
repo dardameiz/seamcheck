@@ -137,7 +137,7 @@ FLAGS: tuple[Flag, ...] = (
     Flag(
         ("--local-only",), "local_only", "flag",
         help="With --serve: bind loopback only, so nothing on the network can reach "
-             "it. You lose the phone link.",
+             "it. You lose the \"same wifi\" link.",
     ),
     Flag(
         ("--format",), "format",
