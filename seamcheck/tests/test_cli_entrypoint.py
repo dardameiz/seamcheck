@@ -333,6 +333,60 @@ class VersionTests(SimpleTestCase):
         self.assertIn("seamcheck ", out.getvalue())
 
 
+class UpdateNoticeTests(SimpleTestCase):
+    """`main()` prints updatecheck.notice()'s message once, on stderr, after the command
+    it rides on - never on stdout, so a `--format json` pipeline stays clean either way."""
+
+    def test_a_pending_update_is_printed_on_stderr_not_stdout(self):
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch("seamcheck.updatecheck.notice",
+                         return_value="seamcheck: a newer version is available (0.13.0 → 0.14.0)"), \
+             redirect_stdout(out), redirect_stderr(err):
+            self.assertEqual(main(["--version"]), 0)
+
+        self.assertIn("0.13.0", err.getvalue())
+        self.assertIn("0.14.0", err.getvalue())
+        self.assertNotIn("0.14.0", out.getvalue())
+
+    def test_nothing_pending_prints_nothing_extra(self):
+        err = io.StringIO()
+        with mock.patch("seamcheck.updatecheck.notice", return_value=None), \
+             redirect_stderr(err):
+            self.assertEqual(main(["--version"]), 0)
+
+        self.assertEqual(err.getvalue(), "")
+
+    def test_quiet_suppresses_the_notice(self):
+        err = io.StringIO()
+        with mock.patch("seamcheck.updatecheck.notice",
+                         return_value="seamcheck: a newer version is available") as notice, \
+             redirect_stderr(err):
+            self.assertEqual(main(["--version", "-q"]), 0)
+
+        notice.assert_not_called()
+        self.assertEqual(err.getvalue(), "")
+
+    def test_a_broken_notice_never_fails_the_command(self):
+        # A cache file this process cannot parse, or any other surprise from updatecheck,
+        # must not turn a working `seamcheck --version` into a crash.
+        err = io.StringIO()
+        with mock.patch("seamcheck.updatecheck.notice", side_effect=OSError("boom")), \
+             redirect_stderr(err):
+            self.assertEqual(main(["--version"]), 0)
+
+        self.assertEqual(err.getvalue(), "")
+
+    def test_it_runs_after_an_ordinary_command_too(self):
+        # Not just the -V/help shortcuts: the notice has to reach every _dispatch return.
+        with _Dispatch(), mock.patch(
+                "seamcheck.updatecheck.notice", return_value="seamcheck: update available"):
+            err = io.StringIO()
+            with redirect_stderr(err):
+                main(["scan"])
+
+        self.assertIn("update available", err.getvalue())
+
+
 class UndoFlagTests(SimpleTestCase):
     """`seamcheck triage X --undo` takes the mark off, on both front doors."""
 

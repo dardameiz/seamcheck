@@ -20,10 +20,15 @@ route names. No code. No repository name, no git remote, no SHA. Every value is 
 word seamcheck itself defines — which you can verify by reading one file,
 [`seamcheck/share.py`](seamcheck/share.py), rather than taking my word for it.
 
-**Nothing is sent.** Seamcheck makes no network calls at all, and never has. The report is
+**Nothing about the scan is sent.** This command makes no network call. The report is
 printed, written to `seamcheck-share.md`, and followed by a link that opens a pre-filled
 GitHub issue in your browser — which submits nothing until you press the button. Or paste it
 into an email. Or read it, decide it is too much, and delete it; that is a fine outcome too.
+
+(Elsewhere, running `seamcheck` checks once a day whether a newer version exists on PyPI — a
+public version number in, nothing about your project out. See
+[`seamcheck/updatecheck.py`](seamcheck/updatecheck.py); `SEAMCHECK_NO_UPDATE_CHECK=1` turns
+it off.)
 
 One thing worth saying plainly: **if the repository belongs to an employer or a client, that
 is their call rather than yours.** Please do not send metrics about someone else's code

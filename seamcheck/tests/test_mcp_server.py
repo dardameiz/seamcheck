@@ -138,3 +138,35 @@ class UndoTests(SimpleTestCase):
             self.assertFalse(result["ok"])
             self.assertIn("No mark", result["message"])
             scan.assert_not_called()
+
+
+class UpdateNoticeAtStartupTests(SimpleTestCase):
+    """`main()` runs this once before `mcp.run()` blocks on stdin - see mcp_server.py's
+    `_print_update_notice_if_any` docstring for why there is no later point in a
+    long-lived stdio server where printing again would reach anyone."""
+
+    def test_a_pending_update_is_printed_on_stderr(self):
+        from seamcheck.mcp_server import _print_update_notice_if_any
+
+        with mock.patch("seamcheck.updatecheck.notice",
+                         return_value="seamcheck: a newer version is available"), \
+             mock.patch("sys.stderr") as stderr:
+            _print_update_notice_if_any()
+
+        printed = "".join(call.args[0] for call in stderr.write.call_args_list)
+        self.assertIn("a newer version is available", printed)
+
+    def test_nothing_pending_prints_nothing(self):
+        from seamcheck.mcp_server import _print_update_notice_if_any
+
+        with mock.patch("seamcheck.updatecheck.notice", return_value=None), \
+             mock.patch("sys.stderr") as stderr:
+            _print_update_notice_if_any()
+
+        stderr.write.assert_not_called()
+
+    def test_a_broken_notice_does_not_stop_the_server_from_starting(self):
+        from seamcheck.mcp_server import _print_update_notice_if_any
+
+        with mock.patch("seamcheck.updatecheck.notice", side_effect=OSError("boom")):
+            _print_update_notice_if_any()  # must not raise

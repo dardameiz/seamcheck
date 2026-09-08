@@ -108,10 +108,10 @@ COMMANDS: dict[str, Command] = {
             "identity, no git SHA. Every value is a number or a word seamcheck itself "
             "defines, which is a property you can check by reading one file - "
             "seamcheck/share.py - rather than a promise.\n\n"
-            "Nothing is sent. Seamcheck makes no network calls at all. The report is "
-            "printed, written to seamcheck-share.md, and accompanied by a link that opens "
-            "a pre-filled GitHub issue in your browser - which submits nothing until you "
-            "press the button.\n\n"
+            "Nothing about the scan is sent. This command makes no network call; the "
+            "report is printed, written to seamcheck-share.md, and accompanied by a "
+            "link that opens a pre-filled GitHub issue in your browser - which submits "
+            "nothing until you press the button.\n\n"
             "It exists because the scans worth learning from are the ones that got a "
             "private repository wrong, and those are exactly the ones nobody can send. "
             "One aggregate line - a data layer detected, no schema present, hundreds of "
@@ -1255,8 +1255,8 @@ def _setup_django_if_any() -> None:
 def _share(rest: list[str]) -> int:
     """Build the shareable report, write it, and print where to send it.
 
-    No network call is made here or anywhere in this package. The report is printed and
-    written to a file; the person decides what to do with it.
+    No network call is made here. The report is printed and written to a file; the
+    person decides what to do with it.
     """
     from seamcheck import share
 
@@ -1281,7 +1281,7 @@ def _share(rest: list[str]) -> int:
     if not quiet_mode:
         print("\n" + "-" * 72)
         print("This report contains no file paths, names, routes, snippets or repository")
-        print("identity. Nothing has been sent anywhere - seamcheck makes no network calls.")
+        print("identity, and this command made no network call - nothing has been sent.")
         print(written)
         print("\n  Open a pre-filled issue (nothing is submitted until you press the button):")
         print("  " + share.issue_url(payload))
@@ -1291,7 +1291,7 @@ def _share(rest: list[str]) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
+def _dispatch(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     argv, passthrough = _split_passthrough(argv)
     argv, verbose, no_progress = _split_flags(argv)
@@ -1411,6 +1411,38 @@ def main(argv: list[str] | None = None) -> int:
         except SystemExit as exit_code:  # --check and friends signal through the exit code
             return int(exit_code.code or 0)
     return 0
+
+
+def _maybe_print_update_notice(argv: list[str]) -> None:
+    """One line on stderr when a newer seamcheck exists - never stdout, so a `--format
+    json` pipeline stays clean whether or not this has anything to say.
+
+    `-q`/`--quiet` already means "no progress bar"; a reader who asked for less noise
+    should not get an extra line they did not ask for either. Failure here - a broken
+    cache file, an import error - must never turn a working command red, so everything
+    the check itself does not already swallow is swallowed again here.
+    """
+    _, _, quiet_mode = _split_flags(argv)
+    if quiet_mode:
+        return
+    try:
+        from seamcheck.updatecheck import notice
+
+        message = notice()
+    except Exception:  # noqa: BLE001 - see docstring
+        return
+    if message:
+        print(message, file=sys.stderr)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Console-script entry point. `_dispatch` is every actual code path, unchanged and
+    still directly testable; this only adds the one thing that has to happen exactly
+    once regardless of which of `_dispatch`'s several `return`s fired."""
+    argv = list(sys.argv[1:] if argv is None else argv)
+    exit_code = _dispatch(argv)
+    _maybe_print_update_notice(argv)
+    return exit_code
 
 
 if __name__ == "__main__":

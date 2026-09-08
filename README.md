@@ -14,15 +14,18 @@ why nothing else catches them.
 pip install seamcheck && seamcheck map
 ```
 
-It reads your source. It never runs your code, and it makes no network call — no API key,
-no account, nothing to sign up for.
+It reads your source. It never runs your code, and it sends none of it anywhere — no API
+key, no account, nothing to sign up for. Running `seamcheck` does check once a day whether
+a newer version exists on PyPI — a public version number in, nothing about your project
+out; `SEAMCHECK_NO_UPDATE_CHECK=1` turns that off.
 
 The report is served from your machine: one link for this computer, one to type on a phone
 on the same wifi. A phone usually is not on that wifi, so
 `seamcheck config --tunnel always` remembers, for this machine, that every run should also
-print a public HTTPS link. That is the one thing here that leaves the machine — anyone
-holding the link can read the report while the command runs, and it dies when you stop it.
-It is off until you ask for it, and `--local-only` overrules it for a single run.
+print a public HTTPS link. That is the one thing here that can carry your actual scan off
+the machine — anyone holding the link can read the report while the command runs, and it
+dies when you stop it. It is off until you ask for it, and `--local-only` overrules it for
+a single run.
 
 ## For agents
 

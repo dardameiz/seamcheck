@@ -13,10 +13,14 @@ THE LOOP THESE TOOLS EXIST FOR, in order, because the individual tools do not im
   5. SHOW IT AND ASK        paste the report into the conversation, say what it contains,
                             and ask whether to send it. Then hand over the link.
 
-Step 5 is not optional and no tool here performs it. Nothing in this package makes a
-network call: the report is prepared, and a person decides. An agent that opens the link
-itself, or that submits on the user's behalf without being asked, has taken a decision
-that was never its own - and the repository may belong to an employer who never agreed.
+Step 5 is not optional and no tool here performs it. None of these tools makes a network
+call: the report is prepared, and a person decides. An agent that opens the link itself,
+or that submits on the user's behalf without being asked, has taken a decision that was
+never its own - and the repository may belong to an employer who never agreed.
+
+(Separately, launching this server checks once whether a newer seamcheck exists on PyPI -
+a public version number in, nothing about this project out. See updatecheck.py; off with
+SEAMCHECK_NO_UPDATE_CHECK=1.)
 
 Four more tools answer questions OUTSIDE that loop, cheaply, because the only way to ask
 them used to be `seamcheck json` - 72 MB, about 18 million tokens on the reference project:
@@ -538,6 +542,27 @@ def _setup_django_if_present() -> None:
         raise SystemExit(2) from None
 
 
+def _print_update_notice_if_any() -> None:
+    """Same check the CLI runs before its own return - see updatecheck.py for what it
+    does and does not send. stderr, never stdout: stdout is the protocol channel, and a
+    stray line on it corrupts the session rather than producing a readable notice.
+
+    Run once, before `mcp.run()` blocks on stdin for the rest of the process's life -
+    there is no later point in a long-lived stdio server where printing again would
+    reach anyone, and the whole session is one invocation for update-check purposes.
+    """
+    import sys
+
+    try:
+        from seamcheck.updatecheck import notice
+
+        message = notice()
+    except Exception:  # noqa: BLE001 - never let this keep the server from starting
+        return
+    if message:
+        print(message, file=sys.stderr)
+
+
 def main() -> None:
     """Entry point for the `seamcheck-mcp` command.
 
@@ -545,6 +570,7 @@ def main() -> None:
     daemon. The agent's working directory is the project.
     """
     _setup_django_if_present()
+    _print_update_notice_if_any()
     mcp.run()
 
 

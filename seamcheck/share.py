@@ -7,9 +7,10 @@ because nothing like that project was in the corpus. One line - *Supabase detect
 schema present, 728 uses reported unresolved* - would have made it obvious, and that line
 contains nothing of theirs.
 
-So: no telemetry, no endpoint, no daemon, no network call anywhere in this package. This
+So: no telemetry, no endpoint, no daemon, no network call anywhere in THIS file. This
 builds a report, prints it, and stops. The person reading it decides whether to send it,
-and sends it themselves.
+and sends it themselves. (Elsewhere in the package, `updatecheck.py` makes one - a public
+PyPI version number in, nothing about this scan out. Unrelated module, unrelated claim.)
 
 **The rule that makes it safe is structural rather than careful: every value is a number
 or a word from a vocabulary this file defines.** No free text, ever - free text is where

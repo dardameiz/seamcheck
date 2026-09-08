@@ -3,8 +3,17 @@
 ## Scope
 
 Seamcheck is a local, offline development tool. It reads source files, shells out to
-`node` for the bundled JavaScript and CSS parsers, and writes JSON to disk. It makes no
-network requests, opens no ports, and is not intended to run in production.
+`node` for the bundled JavaScript and CSS parsers, and writes JSON to disk. It opens no
+ports and is not intended to run in production.
+
+It makes exactly one kind of network request on its own: an HTTPS GET to PyPI's public
+JSON API, at most once a day, to check whether a newer version exists
+(`seamcheck/updatecheck.py`; off with `SEAMCHECK_NO_UPDATE_CHECK=1`, and skipped
+automatically whenever `CI` is set). Nothing about the scanned project is sent in that
+request, and the version string that comes back is only compared and printed — never
+executed, never interpolated into a path or a shell command. `seamcheck config --tunnel
+always` is the one *opt-in* exception that can carry an actual scan report off the
+machine; see the README for what that sends and to whom.
 
 The one place it executes project code is the URLconf module, which Django's own
 `include()` resolution requires importing. Every other extractor parses source text into
