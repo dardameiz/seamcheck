@@ -2012,8 +2012,36 @@ kwargs — a `--build-manifest`/`--build-ignore` CLI surface is the natural next
 bugs above): `discover_dynamic_import_targets` finds exactly 62 dynamic-import targets on
 pointlessbutton today (matching the known count of button loaders in `js/main.js`), and
 `find_build_gaps` reports **0 gaps** — correct, since the obfuscator regression this check is
-built to catch was already fixed on the PB side (commit `0246c7824`, per pointlessbutton-71:
-41/62 bundled before, 62/62 after). `python -m pytest -q` — full suite green apart from one
-unrelated pre-existing failure, `test_a_pending_update_is_printed_on_stderr_not_stdout` (a
-hardcoded version-string assertion against package metadata, not touched by this work). `ruff
-check` clean on every changed/new file.
+built to catch was already fixed on the PB side (commit `0246c7824`).
+
+**True-positive run (2026-09-12, at pointlessbutton-71's suggestion — "0 gaps proves the check
+stays quiet when nothing is wrong; it has not been shown to FIRE on the defect it targets"):**
+`git worktree add` at `0246c7824~1` — the parent commit, where the obfuscator had NOT yet been
+excluded from `main.js` and its own dist/ is committed, so no rebuild was needed. Known ground
+truth (pointlessbutton-71): 21 of 62 button modules missing from that build, named list supplied.
+
+**Result: 59 flagged, not 21 — but the 21 named ones are ALL present, zero misses.** The 38
+extra: at that commit, Vite's own chunking merged large groups of buttons into a handful of
+SHARED anonymous chunks (`_chunk-LYiTCPvz.js` alone is `main.js`'s `dynamicImports` target for
+25 different buttons) with **no `src` field at all** — so this check's `src`-identity match
+cannot tell "genuinely missing" apart from "bundled fine, but Vite did not preserve which source
+file this shared chunk came from." Confirmed this is specific to that historical build, not a
+standing flaw: on the CURRENT commit, every one of `main.js`'s 62 `dynamicImports` entries has
+its own clean, distinct `src` — no merging at all, which is why the current-commit run above
+came back with genuine, trustworthy zeros rather than an accidental one.
+
+**Disposition: real precision gap, zero false negatives, not fixed this pass.** The check as
+built is sound for catching the incident (nothing in the 21 was missed) but overclaims scope
+when a bundler's chunk-merging drops `src` attribution for otherwise-fine modules. A more
+robust version would fall back from per-file identity matching to a **count check** on entries
+whose `dynamicImports` contains `src`-less chunks — comparing `len(dynamicImports)` against the
+number of distinct `import()` call sites in source for that entry, which is closer to how the
+ORIGINAL 41-of-62 ground truth was itself first measured (`manifest['js/main.js'].dynamicImports
+.length`) and does not require per-file attribution at all. Left as the next refinement rather
+than built now, so the false-positive-avalanche risk of a rushed fix is not traded for a
+false-negative one.
+
+`python -m pytest -q` — full suite green apart from one unrelated pre-existing failure,
+`test_a_pending_update_is_printed_on_stderr_not_stdout` (a hardcoded version-string assertion
+against package metadata, not touched by this work). `ruff check` clean on every changed/new
+file.
