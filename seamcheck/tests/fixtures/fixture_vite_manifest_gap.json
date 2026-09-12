@@ -1,0 +1,8 @@
+{
+  "fixture_dynamic_entry.js": {
+    "file": "assets/fixture_dynamic_entry.abc123.js",
+    "src": "fixture_dynamic_entry.js",
+    "isEntry": true,
+    "dynamicImports": ["fixture_dynamic_target.js"]
+  }
+}

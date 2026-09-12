@@ -276,12 +276,41 @@ def _walk(node, enclosing: str = ""):
             push((item, enclosing) for item in reversed(node))
 
 
+def _imported_paths_with_kind(ast: dict) -> list[tuple[str, bool]]:
+    """Every module this file's `import` graph reaches - static AND dynamic - as
+    (import_path, is_dynamic).
+
+    A dynamic `import('./x.js')` is as real an edge as `import ... from './x.js'`, but it
+    is a `CallExpression`-shaped `ImportExpression` node, not an `ImportDeclaration`, so it
+    was invisible to this walk. That made every caller - `extract_js`'s own entry walk and
+    `discover_js_files`, which feeds the DOM/CSS/multi-writer passes their whole reachable
+    file set - blind to code-split code. The reference case: 62 button modules loaded
+    exactly this way from one entry file; none of them were ever in the entry graph.
+
+    The static/dynamic distinction is kept, not collapsed, because `build_graph.py` needs
+    it: a bundler's manifest gets its own entry per TRUE entry point and per dynamic-import
+    TARGET, but a module reached only by static imports commonly folds into a shared chunk
+    with no manifest key of its own - normal, not a gap. Only "is this ever a dynamic-import
+    target" carries the expectation of a standalone manifest entry.
+
+    Only a bare string literal is followed. `import(variable)` and an interpolated
+    template literal are left alone - same "built at runtime, not proven" line every other
+    dynamic edge in this file draws.
+    """
+    paths: list[tuple[str, bool]] = []
+    for node, _ in _walk(ast):
+        node_type = node["type"]
+        if node_type == "ImportDeclaration" and node.get("source"):
+            paths.append((node["source"]["value"], False))
+        elif node_type == "ImportExpression":
+            source = node.get("source") or {}
+            if source.get("type") == "Literal" and isinstance(source.get("value"), str):
+                paths.append((source["value"], True))
+    return paths
+
+
 def _imported_paths(ast: dict) -> list[str]:
-    return [
-        node["source"]["value"]
-        for node, _ in _walk(ast)
-        if node["type"] == "ImportDeclaration" and node.get("source")
-    ]
+    return [path for path, _is_dynamic in _imported_paths_with_kind(ast)]
 
 
 def _resolve_import(current_file: str, import_path: str) -> str | None:
@@ -363,7 +392,7 @@ def _http_call_target(node: dict) -> tuple[bool, dict | None]:
 
 
 def discover_js_files(entry_files: list[str], project_root: str) -> list[str]:
-    """Every module reachable from the entries by static import.
+    """Every module reachable from the entries by static OR dynamic import.
 
     Shared so the DOM extractor sees the same file set: handing it only the entry
     points hides every write made by an imported module.
@@ -386,6 +415,43 @@ def discover_js_files(entry_files: list[str], project_root: str) -> list[str]:
                 if resolved and resolved not in visited:
                     to_visit.append(resolved)
     return sorted(visited)
+
+
+def discover_dynamic_import_targets(entry_files: list[str], project_root: str) -> set[str]:
+    """Every module reached by AT LEAST ONE dynamic `import()` anywhere in the entry graph.
+
+    A narrower set than `discover_js_files`, and the one `build_graph.py` actually wants.
+    A bundler's manifest gets its own top-level entry per TRUE entry point and per dynamic-
+    import TARGET (Vite's own architecture treats every `import()` target as a chunking
+    root); a module reached ONLY by static `import ... from` commonly folds into a shared
+    chunk with no manifest key of its own - measured on this tool's own reference project:
+    checking every reachable file (not just dynamic-import targets) produced ~190 false
+    "gaps", every one of them a normal statically-shared module, none of them missing from
+    the build in any real sense.
+    """
+    visited: set[str] = set()
+    dynamic_targets: set[str] = set()
+    to_visit = [os.path.join(project_root, name) for name in entry_files]
+    while to_visit:
+        batch = [
+            path
+            for path in dict.fromkeys(to_visit)
+            if path not in visited and path.endswith(_JS_EXTENSIONS) and os.path.isfile(path)
+        ]
+        to_visit = []
+        if not batch:
+            break
+        visited.update(batch)
+        for path, ast in iter_parsed(batch):
+            for import_path, is_dynamic in _imported_paths_with_kind(ast):
+                resolved = _resolve_import(path, import_path)
+                if not resolved:
+                    continue
+                if is_dynamic:
+                    dynamic_targets.add(resolved)
+                if resolved not in visited:
+                    to_visit.append(resolved)
+    return dynamic_targets
 
 
 # A path-shaped string: leading slash, no whitespace, at least one more segment.

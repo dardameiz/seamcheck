@@ -1917,3 +1917,103 @@ found one stops drowning.
   connectivity.
 
 **Counts:** 1 finding · confirmed right · 1 of 3,438 in the unused+unresolved set · list index 2,536.
+
+---
+
+## F37 — IMPLEMENTED (2026-09-12): the build-graph divergence check
+
+(F37 itself was written up by pointlessbutton-71's session, per its own attribution note below
+this entry — F29-F32 predate both of us, F33-F36 came from a scan agent it dispatched, F37-F42
+are its own. This entry only records the implementation.)
+
+Built, not just written up. Three pieces, all tested — the third exists only because running
+this against the actual reference project (not just synthetic fixtures) surfaced two real bugs
+in the first pass, both fixed before this was called done.
+
+**1. The import walk now follows `import()`, not just `import ... from`.** `_imported_paths`
+(`js_extractor.py`) used to see only `ImportDeclaration`; a dynamic `import('./x.js')` is an
+`ImportExpression` node and was invisible to it entirely. That made `discover_js_files` — the
+function every DOM/CSS/multi-writer pass in `pipeline.py` calls to get "everything reachable
+from an entry" — blind to code-split modules project-wide, not just on this reference project.
+Only a bare string-literal specifier is followed (`import(variable)` and an interpolated
+template literal are left alone, same "not proven" line every other dynamic edge in that file
+already draws). A second function, `discover_dynamic_import_targets`, exposes JUST the modules
+that are EVER a dynamic-import target (see point 3 for why that narrower set exists). Tests:
+`JsFileDiscoveryTests` + `DynamicImportTargetsTests` in `test_js_extractor.py`.
+
+**2. `seamcheck/build_graph.py` — the actual F37 check.** `read_build_manifest(path)` parses a
+Vite `manifest.json`; `find_build_gaps(check_files, manifest_path, build_root, entry_files=,
+ignore=)` diffs a set of modules against it and returns one `build_gap` symbol (kind
+`build_gap`, status `unresolved`) per module absent from the manifest. Guards, all tested:
+  - an unreadable/missing manifest → no findings (a project with no build step, or not yet
+    built, is not a claim);
+  - a `build_root` that matches nothing in the manifest → no findings, not a false-positive
+    wall (a wrong root would otherwise flag literally everything checked) — anchored on
+    `entry_files` when given, since those always have a real manifest key even in the
+    worst-case incident this whole check exists to catch (see point 3);
+  - an explicit `ignore` set for genuinely-externalised/CDN/dev-only modules, never guessed.
+
+**3. Two real bugs, found by running it against THIS project, not a fixture — fixed before
+calling this done:**
+
+  - **~190 false positives from statically-shared modules.** First pass checked
+    `discover_js_files`'s FULL reachable set (every module, however it was imported) against the
+    manifest. On this project's own build that flagged `base_button.js`, `button_manager.js`,
+    `stats_manager.js` and ~190 others the exact same way as a real gap — every one of them a
+    perfectly normal module Vite folded into a shared chunk because it is only ever reached by
+    static `import ... from`. Vite's manifest gets a standalone entry per TRUE entry point and
+    per dynamic-import TARGET; a statically-shared module has no such promise, and reporting
+    its absence as a "gap" is exactly the false-positive-avalanche shape this project's own
+    CLAUDE.md warns audit tooling about repeatedly. **Fix:** narrowed the checked set from "every
+    reachable file" to "every file that is EVER a dynamic-import target"
+    (`discover_dynamic_import_targets`) — the only set a manifest entry is actually guaranteed
+    for. Re-run after the fix: 62 dynamic-import targets found on this project, 0 false gaps.
+  - **The root-sanity guard could hide a total failure.** The guard added in the first pass
+    backed off to "no findings" whenever NOTHING in the checked set matched the manifest, to
+    protect against a wrong `build_root` producing a false-positive wall. Once the checked set
+    was narrowed to dynamic-import targets only, that guard became indistinguishable from the
+    worst real incident: if an obfuscator broke EVERY dynamic import (not just 21 of 62, as it
+    did here), 100% of the checked set would legitimately miss the manifest even with a
+    correctly-guessed root — and the guard would silently swallow exactly the incident it exists
+    to catch. **Fix:** the guard now anchors on `entry_files` (true entry points, which always
+    have a manifest key) when the caller provides them, falling back to the checked set itself
+    only when they are not given. `check_files` can now be 100% absent from the manifest and
+    still be trusted, as long as a real entry point is present too.
+
+**Wired in, opt-in, zero cost when absent:** `autoconfig.py` detects a manifest at the
+conventional Vite locations (`dist/.vite/manifest.json` etc.), searched under the repo root, the
+detected Django static root, AND one level of wildcard nesting below each (`*/dist/.vite/…`) —
+needed because Django's own `<app>/static/<app>/…` namespacing convention put this project's
+real manifest one directory deeper than its detected `static_root`, which the first pass of this
+same detection code missed on its own reference project. Deliberately NOT via `_find_file`,
+since `dist`/`.vite` are `EXCLUDED_DIRS` everywhere else in that module on purpose, and this is
+the one file inside them the tool actually wants, read directly by path, never walked as source.
+The Vite ROOT (not just the manifest path) is recorded too, as `js_vite_root` — derived from
+WHERE the manifest was actually found, not from `vite.config.js`'s own location or the JS
+project root: this project's own `vite.config.js` sits at the repo root but sets
+`root: 'pointless/static/pointless'`, so neither of the other two guesses would have lined up
+with what the manifest's paths are actually relative to. `api.py` passes both through to
+`run_scan()`, which — only when a manifest path is given — appends `find_build_gaps`'s result to
+the symbol list, anchored by the real entry files. `report.py` gets a title: "Reachable in
+source, missing from the build". Config key is `js_vite_manifest` / `js_vite_root` (matching
+this project's own pre-existing, previously-unconsumed `SEAMCHECK_CONFIG["js_vite_manifest"]"`
+declaration in `myproject/settings.py` — renamed from an initial `vite_manifest` guess to match
+it, per pointlessbutton-71's catch). Tests: six cases in `test_autoconfig.py` (repo root, under
+static root, app-namespace nesting one level deeper, a `vite.config.js` at the repo root with a
+custom `root:`, absent → no key); `RunScanSurfacesBuildGapsTests` in `test_build_graph.py` proves
+the full `run_scan(build_manifest_path=...)` path end to end, and that omitting the flag is a
+no-op, not a crash.
+
+**Not done:** webpack/rollup/esbuild manifest shapes (Vite only, for now); no CLI flag to
+override the manifest path or the ignore list (currently library-only via `run_scan`'s new
+kwargs — a `--build-manifest`/`--build-ignore` CLI surface is the natural next step).
+
+**Verified against the real reference project, not just fixtures** (this is what caught both
+bugs above): `discover_dynamic_import_targets` finds exactly 62 dynamic-import targets on
+pointlessbutton today (matching the known count of button loaders in `js/main.js`), and
+`find_build_gaps` reports **0 gaps** — correct, since the obfuscator regression this check is
+built to catch was already fixed on the PB side (commit `0246c7824`, per pointlessbutton-71:
+41/62 bundled before, 62/62 after). `python -m pytest -q` — full suite green apart from one
+unrelated pre-existing failure, `test_a_pending_update_is_printed_on_stderr_not_stdout` (a
+hardcoded version-string assertion against package metadata, not touched by this work). `ruff
+check` clean on every changed/new file.

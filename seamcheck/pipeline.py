@@ -238,6 +238,9 @@ def run_scan(
     static_urls: bool = False,
     server_adapter: str | None = None,
     static_roots: list[str] | None = None,
+    build_manifest_path: str | None = None,
+    build_root: str | None = None,
+    build_ignore: frozenset[str] = frozenset(),
 ) -> Graph:
     progress = progress or null()
 
@@ -453,6 +456,28 @@ def run_scan(
     # And the whole first-party tree, not just the import graph, for the same reason the
     # call reader takes it: a page routed to by the filesystem is imported by nothing.
     js_files = discover_js_files(js_entry_files, js_project_root)
+    if build_manifest_path:
+        # Whether the bundler's own output actually contains what this entry graph says is
+        # a dynamic-import target. A module reached by a real import() can be perfectly
+        # wired up in source and still never reach a player, because an obfuscator/
+        # minifier/chunking plugin dropped it on the way to the bundle. The source graph
+        # has no way to see that; this is the one place that reads the build's own record
+        # instead of the source's claim about itself. See build_graph.py.
+        #
+        # Deliberately NOT `js_files` (every reachable module): a bundler's manifest gets
+        # its own entry per TRUE entry point and per dynamic-import target, but a module
+        # reached only by static `import ... from` commonly folds into a shared chunk with
+        # no manifest key of its own - checked once against this project's own build, that
+        # produced ~190 false gaps, none of them missing from the build in any real sense.
+        from seamcheck.build_graph import find_build_gaps
+        from seamcheck.extractors.js_extractor import discover_dynamic_import_targets
+
+        dynamic_targets = discover_dynamic_import_targets(js_entry_files, js_project_root)
+        symbols += find_build_gaps(
+            sorted(dynamic_targets), build_manifest_path, build_root or js_project_root,
+            entry_files=[os.path.join(js_project_root, name) for name in js_entry_files],
+            ignore=build_ignore,
+        )
     # Two file sets, on purpose, and the distinction is claims versus evidence.
     #
     # The entry graph - what the pages actually load - is where DOM CLAIMS may come from:

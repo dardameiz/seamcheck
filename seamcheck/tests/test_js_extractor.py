@@ -77,6 +77,48 @@ class JsFileDiscoveryTests(SimpleTestCase):
         self.assertTrue(any(f.endswith("fixture_entry.js") for f in files))
         self.assertTrue(any(f.endswith("fixture_module.js") for f in files))
 
+    def test_a_dynamic_import_with_a_literal_path_is_followed(self):
+        # `() => import('./x.js')` used to be invisible to this walk entirely - it is an
+        # ImportExpression, not an ImportDeclaration - so a whole code-split module (the
+        # reference project's own button loaders) never entered the reachable set at all.
+        from seamcheck.extractors.js_extractor import discover_js_files
+
+        files = discover_js_files(["fixture_dynamic_entry.js"], FIXTURES_DIR)
+
+        self.assertTrue(any(f.endswith("fixture_dynamic_entry.js") for f in files))
+        self.assertTrue(any(f.endswith("fixture_dynamic_target.js") for f in files))
+
+    def test_a_dynamic_import_built_from_a_variable_is_not_followed(self):
+        # import(`./buttons/${name}.js`) cannot be resolved to one file - following it
+        # would have to guess a path, which is exactly the "not proven" line this reader
+        # draws everywhere else. It must not crash, and must not invent a file.
+        from seamcheck.extractors.js_extractor import discover_js_files
+
+        files = discover_js_files(["fixture_dynamic_entry.js"], FIXTURES_DIR)
+
+        self.assertFalse(any("${name}" in f or "buttons" in f for f in files))
+
+
+class DynamicImportTargetsTests(SimpleTestCase):
+    def test_only_dynamic_import_targets_are_returned_not_the_whole_reachable_set(self):
+        # build_graph.py's whole reason to want this narrower set instead of
+        # discover_js_files's full reachable one: fixture_dynamic_entry.js itself, and
+        # fixture_module.js (statically imported elsewhere), must NOT appear here even
+        # though they are reachable - only what is EVER a dynamic-import TARGET.
+        from seamcheck.extractors.js_extractor import discover_dynamic_import_targets
+
+        targets = discover_dynamic_import_targets(["fixture_dynamic_entry.js"], FIXTURES_DIR)
+
+        self.assertTrue(any(f.endswith("fixture_dynamic_target.js") for f in targets))
+        self.assertFalse(any(f.endswith("fixture_dynamic_entry.js") for f in targets))
+
+    def test_an_unresolvable_dynamic_import_contributes_no_target(self):
+        from seamcheck.extractors.js_extractor import discover_dynamic_import_targets
+
+        targets = discover_dynamic_import_targets(["fixture_dynamic_entry.js"], FIXTURES_DIR)
+
+        self.assertFalse(any("${name}" in f or "buttons" in f for f in targets))
+
 
 class DisplayStringsAreNotEndpointsTests(SimpleTestCase):
     """`textContent = '/24'` is the "/24" in "period 3/24", not a route.

@@ -240,6 +240,18 @@ def scan(
     build_output = config.get("tailwind_build_output")
     tailwind_path = os.path.join(repo_root, build_output) if build_output else None
 
+    # A Vite build manifest, if the project has one and has been built. `js_vite_root` is
+    # the directory autoconfig actually found the manifest UNDER - not the JS project root
+    # `discover_js_files` walks from, which is commonly the whole repo, and not "next to
+    # vite.config.js" either: this project's own vite.config.js sits at the repo root but
+    # sets `root: 'pointless/static/pointless'`, so neither guess lines up with what the
+    # manifest's own paths are relative to. `find_build_gaps` backs off to no findings
+    # rather than a false-positive wall if this ever turns out wrong anyway.
+    vite_manifest = config.get("js_vite_manifest")
+    vite_manifest_path = os.path.join(repo_root, vite_manifest) if vite_manifest else None
+    js_vite_root = config.get("js_vite_root")
+    vite_root = os.path.join(repo_root, js_vite_root) if js_vite_root else js_project_root
+
     # The configured CSS root, if it exists, and every static candidate too. A wrong
     # guess at the CSS directory - `src` on a project whose stylesheets live under
     # `pointless/static` - found 4 stylesheets in 511k lines and reported every class in
@@ -291,6 +303,8 @@ def scan(
         # The directories that actually serve files, so a `/static/…` reference can be
         # asked of the filesystem rather than of the route table.
         static_roots=static_candidates,
+        build_manifest_path=vite_manifest_path,
+        build_root=vite_root,
     ), repo_root))
     return _with_stores_reached(_with_observations(scanned, repo_root), repo_root)
 

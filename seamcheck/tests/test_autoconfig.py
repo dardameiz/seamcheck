@@ -95,6 +95,85 @@ class DetectionTests(SimpleTestCase):
             self.assertIn(key, why)
             self.assertTrue(why[key])
 
+    def test_a_vite_manifest_at_the_conventional_dist_location_is_found(self):
+        with tempfile.TemporaryDirectory() as repo:
+            manifest_dir = pathlib.Path(repo) / "dist" / ".vite"
+            manifest_dir.mkdir(parents=True)
+            (manifest_dir / "manifest.json").write_text("{}")
+
+            config, why = detect(repo)
+
+            self.assertEqual(config["js_vite_manifest"], "dist/.vite/manifest.json")
+            self.assertIn("found in the repo", why["js_vite_manifest"])
+            # The manifest was found directly under the repo root, so that IS the Vite
+            # root its own paths are relative to.
+            self.assertEqual(config["js_vite_root"], ".")
+
+    def test_no_manifest_present_yields_nothing_rather_than_a_guess(self):
+        with tempfile.TemporaryDirectory() as repo:
+            config, _ = detect(repo)
+
+            self.assertNotIn("js_vite_manifest", config)
+            self.assertNotIn("js_vite_root", config)
+
+    def test_a_manifest_under_the_detected_static_root_is_also_found(self):
+        # This project's own shape: the Django app's static dir IS the Vite project root,
+        # so the manifest sits under STATICFILES_DIRS, not the repo root.
+        with tempfile.TemporaryDirectory() as repo:
+            static_dir = pathlib.Path(repo) / "app" / "static"
+            manifest_dir = static_dir / "dist" / ".vite"
+            manifest_dir.mkdir(parents=True)
+            (manifest_dir / "manifest.json").write_text("{}")
+            (static_dir / "app.css").write_text("body{}")
+
+            with override_settings(STATICFILES_DIRS=[str(static_dir)]):
+                config, why = detect(repo)
+
+            self.assertEqual(config.get("static_root"), "app/static")
+            self.assertEqual(config["js_vite_manifest"], "app/static/dist/.vite/manifest.json")
+            # THE point of this test: the Vite root is "app/static" (where the manifest
+            # was actually found), not "." (the repo root) and not a guess at where
+            # vite.config.js lives - which this fixture does not even create.
+            self.assertEqual(config["js_vite_root"], "app/static")
+
+    def test_an_app_namespaced_static_dir_is_still_found_one_level_deeper(self):
+        # Django's own `<app>/static/<app>/...` convention: STATICFILES_DIRS names
+        # `app/static`, but the app's OWN static files (and its Vite build) live one
+        # level deeper, at `app/static/app/...` - the reference project's exact shape.
+        with tempfile.TemporaryDirectory() as repo:
+            static_dir = pathlib.Path(repo) / "app" / "static"
+            namespaced = static_dir / "app"
+            manifest_dir = namespaced / "dist" / ".vite"
+            manifest_dir.mkdir(parents=True)
+            (manifest_dir / "manifest.json").write_text("{}")
+            (static_dir / "app.css").write_text("body{}")
+
+            with override_settings(STATICFILES_DIRS=[str(static_dir)]):
+                config, _ = detect(repo)
+
+            self.assertEqual(config["js_vite_manifest"], "app/static/app/dist/.vite/manifest.json")
+            self.assertEqual(config["js_vite_root"], "app/static/app")
+
+    def test_a_vite_config_at_the_repo_root_with_a_custom_build_root_is_not_confused(self):
+        # The reference project's own shape: vite.config.js sits at the repo root but sets
+        # `root: 'app/static'`, so "next to the config file" would have been the wrong
+        # answer. js_vite_root must come from where the manifest itself was found, not
+        # from vite.config.js's own location.
+        with tempfile.TemporaryDirectory() as repo:
+            (pathlib.Path(repo) / "vite.config.js").write_text(
+                "export default { root: 'app/static' }"
+            )
+            static_dir = pathlib.Path(repo) / "app" / "static"
+            manifest_dir = static_dir / "dist" / ".vite"
+            manifest_dir.mkdir(parents=True)
+            (manifest_dir / "manifest.json").write_text("{}")
+            (static_dir / "app.css").write_text("body{}")
+
+            with override_settings(STATICFILES_DIRS=[str(static_dir)]):
+                config, _ = detect(repo)
+
+            self.assertEqual(config["js_vite_root"], "app/static")
+
 
 class PrecedenceTests(SimpleTestCase):
     def test_written_config_wins_key_by_key(self):

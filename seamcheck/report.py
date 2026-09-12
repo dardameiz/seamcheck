@@ -56,6 +56,10 @@ _GROUP_TITLES = {
     "job_schedule": "Schedules",
     "env_var": "Configuration keys",
     "env_read": "Configuration the code reads",
+    # Reachable from a real entry by a real import()/import, yet absent from the build
+    # manifest - the source graph is right that the edge exists; the bundler's own output
+    # says it never shipped. See build_graph.py.
+    "build_gap": "Reachable in source, missing from the build",
 }
 
 # A caveat for a kind with a known recall gap in the extractor that produces it - shown

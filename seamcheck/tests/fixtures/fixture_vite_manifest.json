@@ -1,0 +1,16 @@
+{
+  "js/main.js": {
+    "file": "assets/main.4889e940.js",
+    "src": "js/main.js",
+    "isEntry": true,
+    "dynamicImports": ["buttons/js/aurora_borealis.js"]
+  },
+  "buttons/js/aurora_borealis.js": {
+    "file": "assets/aurora_borealis.abc123.js",
+    "src": "buttons/js/aurora_borealis.js",
+    "isDynamicEntry": true
+  },
+  "_vendor-chunk.js": {
+    "file": "assets/vendor.def456.js"
+  }
+}

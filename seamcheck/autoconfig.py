@@ -43,6 +43,17 @@ _COLLECTED_HINTS = ("staticfiles", "static_root", "static_collected", "collected
 
 _VITE_NAMES = ("vite.config.js", "vite.config.mjs", "vite.config.ts", "vite.config.cjs")
 _TAILWIND_HINTS = ("tailwind-output.css", "tailwind.css", "output.css", "tailwind.min.css")
+# Conventional locations for a Vite build manifest, checked in order. Deliberately NOT
+# `_find_file`: `dist` and `.vite` are EXCLUDED_DIRS everywhere else in this module, on
+# purpose, because a bundler's output is a copy of the source and walking it as source
+# doubles every symbol. This is the one file inside it this tool deliberately wants - read
+# directly by path (see build_graph.py), never walked as a directory of source to scan.
+_VITE_MANIFEST_HINTS = (
+    os.path.join("dist", ".vite", "manifest.json"),
+    os.path.join("build", ".vite", "manifest.json"),
+    os.path.join(".vite", "manifest.json"),
+    os.path.join("dist", "manifest.json"),
+)
 
 
 def excluded(path: pathlib.Path, repo_root: pathlib.Path) -> bool:
@@ -167,6 +178,41 @@ def _find_file(repo_root: pathlib.Path, names: tuple[str, ...]) -> pathlib.Path 
     return matches[0] if matches else None
 
 
+def _find_vite_manifest(
+    repo_root: pathlib.Path, extra_roots: list[pathlib.Path]
+) -> tuple[pathlib.Path, pathlib.Path] | None:
+    """(manifest path, the Vite root its own paths are relative to), or None.
+
+    Checks `repo_root` and any `extra_roots` (typically the detected static root - a Django
+    project's Vite build usually lands under `STATICFILES_DIRS`, not the repo root). First
+    hit wins; a stale manifest from a build directory nobody ships is a smaller cost than
+    silently preferring the wrong one on a project with more than one candidate.
+
+    The second element matters on its own: a project commonly sets Vite's `root` to its
+    static/frontend directory even though `vite.config.js` itself sits at the repo root
+    (this tool's own reference project does exactly that), so neither "next to the config
+    file" nor "the JS project root" reliably names the directory a manifest's own paths are
+    written relative to. The base this function actually found the manifest UNDER is that
+    directory, by construction - no parsing of the config file required.
+
+    Also tries one level of wildcard nesting below each base: Django's own
+    `<app>/static/<app>/...` convention means the detected `static_root` commonly lands one
+    directory short of where a project's Vite build actually lives (verified live: the
+    reference project's own `static_root` detects as `pointless/static`, one level above
+    the real `pointless/static/pointless/dist/.vite/manifest.json`).
+    """
+    for base in (repo_root, *extra_roots):
+        for hint in _VITE_MANIFEST_HINTS:
+            depth = len(pathlib.Path(hint).parts)
+            for candidate in (base / hint, *sorted(base.glob("*/" + hint))):
+                if candidate.is_file():
+                    vite_root = candidate
+                    for _ in range(depth):
+                        vite_root = vite_root.parent
+                    return candidate, vite_root
+    return None
+
+
 def _settings():
     """Django's settings, or None when this is not a Django project.
 
@@ -248,6 +294,13 @@ def detect(repo_root: str = ".") -> tuple[dict, dict[str, str]]:
     if tailwind:
         put("tailwind_build_output", _rel(tailwind, root), "found in the repo")
 
+    static_root = config.get("static_root")
+    found = _find_vite_manifest(root, [root / static_root] if static_root else [])
+    if found:
+        manifest, vite_root = found
+        put("js_vite_manifest", _rel(manifest, root), "found in the repo")
+        put("js_vite_root", _rel(vite_root, root), "the directory the manifest was found under")
+
     return config, why
 
 
@@ -285,6 +338,13 @@ def _detect_without_django(root, put, config, why):
     tailwind = _find_file(root, _TAILWIND_HINTS)
     if tailwind:
         put("tailwind_build_output", _rel(tailwind, root), "found in the repo")
+
+    static_root = config.get("static_root")
+    found = _find_vite_manifest(root, [root / static_root] if static_root else [])
+    if found:
+        manifest, vite_root = found
+        put("js_vite_manifest", _rel(manifest, root), "found in the repo")
+        put("js_vite_root", _rel(vite_root, root), "the directory the manifest was found under")
 
     # The JavaScript. Django projects find their entries through `{% static %}` script
     # tags and a Vite config, and neither exists here - so without this the frontend half
