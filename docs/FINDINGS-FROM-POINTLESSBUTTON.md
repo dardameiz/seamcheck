@@ -1336,3 +1336,584 @@ the exact class the CLI/MCP branch existed to eliminate.
 
 **Fix shape:** point the three tests at an isolated cache root (a temp directory), then convert the
 Django door's pre-scan. Small, and it closes both the non-determinism and the divergence.
+
+## F29 — connected but unreachable: a CSS rule matches, so the graph sees an edge, but nothing can reveal the element
+
+(Recorded from CLAUDE.md, 2026-09-07, where it was already assigned this number.) Two whole dead
+features in pointlessbutton — a purchase confirmation popup and a filter bar — are *connected but
+unreachable*. A CSS rule matches them, so the reference graph has an inbound edge; nothing in any
+script can ever reveal them. Seamcheck models whether a name is **referenced**, not whether an
+element can be **reached at runtime**. Both were found by a human reading JS.
+
+## F30 — the same CSS property written by four files, each correct on its own
+
+**The evidence, unedited.** Push Arena, 2026-09-12. Three nested boxes share one rectangle:
+
+```
+.main-push-area-wrapper   border-radius: 19px      css/pages/push-arena/main-push-area.css
+.main-push-area           border-radius: 16px      css/pages/push-arena/main-push-area.css
+                          border-radius: var(--mobile-border-radius)   mobile-core.css     @media (max-width:1199px)
+                          border-radius: 12px                          mobile-breakpoints.css @media (max-width:430px)
+                          border-radius: 10px                          mobile-breakpoints.css @media (max-width:360px)
+#activeButton             border-radius: 16px      × 59 files in buttons/css/*.css
+                          border-radius: 16px      inline, buttons/js/retro_arcade.js:88 and fish_hunter.js:249
+```
+
+Measured on the running page at 430px: **19 / 12 / 16**. The innermost box paints its corner 4px
+inside the clip meant to contain it, so a wedge of page background shows at every corner of the
+game's main play area. It shipped because on desktop the three happen to agree (19/16/16 nests
+correctly) and because the defect is only *visible* against a light-coloured scene — with a dark
+button equipped the wedge is the same colour as the page.
+
+**Why it was missed.** Every one of those declarations is reachable, referenced and used. There is
+no dead code here and no broken link. Seamcheck asks "is this name referenced"; the question this
+bug needs is "**how many places write this property on this element, and do they agree**". Related
+to, but not the same as, the multiple-writers rule the project already applies to DOM updates —
+here the writers are CSS rules in five files across three media queries plus two `style.cssText`
+strings, and the winner depends on bundle order, which a Vite build re-decides on every deploy.
+
+**The lens that would catch it.** For each element selector that the CSS graph can resolve, group
+the declarations of a *layout-visual* property (`border-radius`, `padding`, `overflow`, `z-index`)
+by property and count the distinct **literal** values across all matching rules, ignoring rules that
+consume the same custom property. Flag where a literal appears in N≥2 files for the same element AND
+at least one of the values differs. The signal is not "duplicated" — it is "duplicated **and
+disagreeing**".
+
+**False-positive class it produces, so the cost is visible:** deliberate responsive overrides, which
+are extremely common (`padding` at three breakpoints is normal and correct). This lens is only
+useful if it can tell a *breakpoint ladder* (same property, monotonic values, one file, one element)
+from a *drift* (same property, values that are not related to each other, different files, elements
+that are nested inside one another). The nesting relationship is the discriminator worth building:
+three boxes with identical `getBoundingClientRect` and three different radii is a shape a static
+graph can approximate from the selectors, and it is almost never intentional.
+
+**Counts from this project:** 1 element, 4 writers of one property, 59 downstream files carrying a
+literal that contradicted it, and 2 more writing it inline from JavaScript. The static test written
+to close it flags **59 offenders** on the pre-fix tree — that is the scale a tool would have
+surfaced in one run.
+
+## F31 — a database row naming code that does not exist: the product with no implementation
+
+**The evidence, unedited.** `StoreItem(item_type='button', item_id='pinata')` was a sellable,
+giftable, 300-PBit product in pointlessbutton for months. It had
+`static/pointless/img/buttons/pinata/preview.svg` and `static/pointless/sounds/pinata.mp4`. It had
+**no `static/pointless/buttons/js/pinata.js`** and **no entry in the `BUTTON_LOADERS` map in
+`static/pointless/js/main.js`**, which is what the page lazy-loads buttons from. Buying it gave the
+player something that could never be mounted. Reported by the owner 2026-06-06, deactivated three
+separate times as data, and still re-addable from the admin form on 2026-09-12.
+
+**Correctly out of scope, and worth writing down as such.** Seamcheck scans a repository; the row
+lives in a database, and no scan of the source can see it. The tool did not flag this and **should
+not be expected to** — recording it here so the next person does not build a lens for a fact that is
+not in the corpus.
+
+**What IS in scope, and was missed:** the two assets. `img/buttons/pinata/preview.svg` and
+`sounds/pinata.mp4` have **no reference anywhere in the source tree** — no template, no CSS, no JS,
+no Python. They were reachable only by a `{item_id}` string interpolation against a DB value. Every
+other button's assets are reachable the same way, so a naive "unreferenced asset" sweep either flags
+all 63 or none. The discriminating fact is that 62 of those ids **also** appear as a literal key in
+`main.js`, and `pinata` does not.
+
+**The lens that would catch it.** When assets live in a directory whose names are consumed by
+runtime interpolation (`img/buttons/<id>/`, `sounds/<id>.mp4`), seamcheck already has to decide
+between "all assembled, all reachable" and "none referenced". A third answer is available and is
+the useful one: **enumerate the sibling set, find the key set that the interpolation is driven by
+(here a literal object map in one file), and report the difference.** 62 siblings with a key, 1
+without, is a far stronger signal than either "63 unreferenced" or "63 fine". The same shape covers
+icon directories, locale directories, per-template partial directories.
+
+**False-positive class:** a sibling set genuinely driven from the database or from user content,
+where "not in the literal map" is expected and not a defect. So this must report the *asymmetry*
+("1 of 63 does not appear in the driving map") rather than asserting the file is dead, and it needs
+the driving map to be a single unambiguous literal — if the ids come from more than one place, the
+lens should decline rather than guess.
+
+**Counts from this project:** 63 sibling asset directories, 62 driven keys, 1 asymmetric — and that
+1 was a real, months-old production data bug that a human found by playing the game.
+
+## F32 — `multi_writer_element` catches JS writers of one node; it does not catch CSS writers of one property
+
+**The evidence, unedited.** Live-queried against pointlessbutton's own
+`docs/maps/connectivity-map.json` (53,989 symbols, 175,762 edges) on 2026-09-12, the same day
+`PB-ARENA-STAGE-RADIUS` was fixed there:
+
+```
+$ python3 -c "
+import json
+d = json.load(open('docs/maps/connectivity-map.json'))
+mw = [s for s in d['symbols'] if s.get('kind')=='multi_writer_element']
+hits = [s for s in mw if 'push-area' in s.get('label','').lower() or 'activeButton' in s.get('label','')]
+print(len(hits))"
+0
+```
+
+Zero. The real bug that day was `.main-push-area`'s `border-radius` declared by **four** CSS
+files with disagreeing values (16px / `var(--mobile-border-radius)` / 12px / 10px), producing a
+visible corner mismatch confirmed on a live render. `multi_writer_element` (91 hits project-wide,
+genuinely the closest existing feature to this bug class — its own note text says "Pick one
+canonical owner and route the others through it," which is exactly the fix this bug needed) is
+scoped to JavaScript writes discovered via `querySelector`/`getElementById` call sites
+(`snippet` values in every sampled hit are `querySelector(...)`, `getElementById(...)`, or a
+`.className =` style assignment). It never compares a **CSS declaration** in one file against
+the same property on the same selector in another file.
+
+**Why it was missed, in terms of the model.** The detector's edge is "a JS statement writes to a
+property of a node reached by this selector." A `border-radius: 12px;` rule in a stylesheet is
+not a JS write and has no reaching call site — it is invisible to the detector's traversal
+entirely, not merely unflagged. The four rules that fought over the arena's corner were each,
+individually, a completely normal, connected, correctly-scoped CSS declaration; nothing about
+any single one of them is wrong. The defect only exists in the RELATION between the four.
+
+**The lens that would catch it** (this is F30, restated with the live confirmation above rather
+than as a hypothesis): for each CSS selector the graph already resolves, group `border-radius` /
+`padding` / `overflow` / `z-index` declarations across every file that targets it (ignoring rules
+that consume the same `var(--token)`), and flag where **two or more literal values disagree**.
+`multi_writer_element`'s existing "pick one canonical owner" framing is the right output shape —
+this is asking for the same treatment extended from JS-writes-a-node to CSS-declares-a-property.
+
+**False-positive class:** a deliberate responsive ladder (`padding: 8px` at 1200px narrowing to
+`padding: 4px` at 360px) is *also* "N files disagree on one property for one selector," and is
+completely normal. The discriminator that survived contact with this bug: a ladder's values are
+monotonic and live in ONE file organized by media query; a drift's values are scattered across
+files with no visible relationship, and — the strongest signal — the values disagree even at the
+SAME media-query bucket (the arena bug's 12px-vs-16px collision was both inside `@media
+(max-width: 1199px)`, in two different files, not a step of a ladder).
+
+**Counts from this project:** 1 selector, 4 conflicting declarations across 3 files, plus 59
+downstream files carrying a fifth, independently-drifted literal for the same visual property on
+a nested element — `multi_writer_element` currently reports 0 of any of this.
+
+## Correction / extension — F31, phoenix confirms the pattern generalizes past assets
+
+While building a project-local completeness audit in response to F31 (see
+`scripts/audit_button_completeness.py` in pointlessbutton, 2026-09-12), the same asymmetric-sibling
+technique immediately surfaced a **second**, independent instance of the identical shape — not an
+asset this time, but a template branch: `button_card_grid.html` and `store.html` each carried an
+`{% elif item.preview_button_id == 'phoenix' %}` branch (three occurrences total) rendering an
+entirely unstyled "PHOENIX"/"BLOCK BUSTER" preview. `phoenix` is not a key in
+`STORE_ID_TO_BUTTON_ID` (the dict that produces every legal value of `preview_button_id`) and never
+was in the version of the constant checked — the branch is provably unreachable, and its CSS
+classes (`phoenix-preview`, `phoenix-minimal`, `phoenix-super-title`, ...) have zero rules anywhere
+in the stylesheet tree. Removed in the same commit as the F31 fix — real, small, dead.
+
+This confirms F31's lens generalizes beyond image/sound assets: **any place a template or script
+branches on a string literal drawn from an enumerable, small key-set (a Python dict's values, a JS
+object's keys) is a candidate for the same asymmetric-sibling check** — enumerate the literal
+branch values on one side, the enumerable key-set on the other, and report values on the branch
+side with no matching key. Here the "sibling set" was template `elif` branches rather than files in
+a directory, and the "driving map" was `STORE_ID_TO_BUTTON_ID`'s value set rather than a
+`BUTTON_LOADERS` object's keys — the shape of the check is identical, only the two enumerable sets
+being diffed changed.
+
+**Counts:** 3 `elif` branches (2 templates, one with a mobile-duplicate section) reachable by
+nothing, confirmed via a plain string search across the dict that would have to produce the value
+for the branch to ever execute.
+
+
+## F33 — `redis_key` "written here, read nowhere" is wrong when the reader loops over a suffix list
+
+**The evidence, unedited.** `findings --status unused` flags `pointless/views/push_views.py:2291`:
+`pipe.zadd(interactions_key, ...)` where `interactions_key = f"user:{user_id}:interactions"`, note
+"Written here and read nowhere in this repo." It IS read: `pointless/services/tiering_service.py`
+defines `USER_KEY_REGISTRY['sorted_sets'] = [..., 'interactions']` and `read_all_user_keys(r, uid)`
+/ `write_all_user_keys(r, uid, data)` both do `for suffix in USER_KEY_REGISTRY['sorted_sets']: ...
+f"user:{uid}:{suffix}"` — the literal string `'interactions'` sits in a Python list, not next to a
+`zrange`/`zadd` call, so nothing in the source has the substring `"user:{uid}:interactions"` or
+`zrange(interactions_key` for a grep-shaped or call-site-shaped detector to find. A dedicated
+completeness test (`tests/unit/services/test_key_registry_complete.py`) already exists specifically
+because this registry is the single source of truth for cold-storage archive/restore, and a key
+missing from it is a silent data-loss bug on rehydrate — so this key is about as "read" as a key
+can be, just not through a literal adjacent to the write.
+
+**Why it was missed, in terms of the model.** Same shape as F26 (key assembled inside a Lua string)
+and F28 (legacy-fallback accessor): the read is real but the KEY NAME is one hop removed from the
+call site — here via a registry list consumed by a generic loop, there via Lua/legacy accessors.
+The common thread across F24–F28 and this one: **any place a key suffix lives in a data structure
+(list, dict, dispatch table) that a loop later interpolates into `user:{uid}:{suffix}` is invisible
+to a call-site scan**, regardless of which language feature does the indirection.
+
+**The lens that would catch it.** For a Django/Python project specifically: when a `zadd`/`hset`/
+`set` call builds a key as `f"user:{{uid}}:{const}"` where `const` is a literal string, search the
+whole repo for `const` appearing **as a list/dict element** (not just as a call-site argument) —
+`'{const}'` inside `[...]` or `{...}` literal syntax — and treat that structure's generic consumers
+(any function that iterates `for x in that_list`) as readers of every key the structure names. This
+is the same "enumerable driving set" shape as F31, applied to Redis keys instead of files.
+
+**False-positive class:** a suffix that appears in an unrelated list by coincidence (e.g. a UI
+label list that happens to contain the word "interactions"). The lens should require the list
+itself to be interpolated into an `f"...:{}"` pattern inside the SAME file, not just contain the
+matching string anywhere.
+
+**Counts from this project:** 1 key checked, 1 false "unused" — this is the entire push-arena-scope
+`redis_key` finding count from this sweep (1 of 1, so 100% false on this small sample; not a claim
+about the 91-project-wide `redis_key` finding count, which was not re-audited here).
+
+## F34 — two live readers of a MISSING element made the tool MORE confident it exists, backwards
+
+**The evidence, unedited.** `findings --status uncertain` on `level_progress_bridge.js:338`,
+kind `dead_region`, label `showLostStreakBuyBackButton`: *"The guard returns on lostStreakBtn,
+lostStreakText, which no template renders - but 1 other module(s) reach for the same element, so
+it is more likely rendered [elsewhere / dynamically]."* Independent check: `grep -rn
+'lostStreakBtn\|lostStreakText' pointless/templates/` (whole tree, not just arena) → **zero
+matches**, in any template. Both `level_progress_bridge.js` (`showLostStreakBuyBackButton()` /
+`hideLostStreakBuyBackButton()`) and `pointless/static/pointless/js/hourly_streak_manager.js`
+(`recoveryButton: document.getElementById('lostStreakBtn')`) read the id and both guard on it
+being null (`if (!buyBackBtn || !buyBackText) return`). The backend endpoint they poll
+(`/api/streak/save/opportunities/`, every 60s via `window.updateLostStreakButton`) is live and
+real — the whole "Wake Up Sleepy Streak" hourly-streak-buyback UI is coded, wired to a real API,
+and has a CSS class (`.streak-buy-back-btn`, independently flagged `unused` in the same sweep at
+`extracted-inline.css:187`) — but the button itself does not exist anywhere in the DOM. Two live,
+non-dead call sites reach for it and both silently no-op, forever.
+
+**Why it was missed, in terms of the model.** The heuristic behind "1 other module reaches for
+the same element, so it is more likely rendered" is sound in general (F23's territory: multiple
+independent readers usually correlate with the element being real) but it silently assumes at
+least one reader is unguarded, or that guardedness is independent across readers. Here both
+readers use the IDENTICAL guard shape (`if (!el) return`), which is exactly the "silent no-op"
+pattern this project's own tooling warns about elsewhere — so "N readers, all guarded, 0
+templates" is actually a STRONGER dead-feature signal than 1 reader, not a weaker one. The model
+counted readers without checking whether every one of them was defensively coded to survive the
+element's absence.
+
+**The lens that would catch it.** When ALL readers of a `getElementById`/`querySelector` target
+share a `if (!el` / `if (!el1 || !el2` early-return guard immediately after the lookup (this
+project's own dominant idiom, per CLAUDE.md's `[hidden]` and `stale-py` guard warnings), downgrade
+the "multiple readers implies real" heuristic rather than upgrade it — a guard is evidence the
+AUTHOR already knew the element might not exist, not evidence that it does.
+
+**False-positive class:** legitimate optional UI (a banner that only renders for some user
+segments) is *also* "all readers guarded, template doesn't always render it" — the discriminator
+is whether ANY code path in the whole template tree, across ALL conditionals, ever emits the id —
+not whether the specific page under test happens not to. Here the answer was a hard zero
+repo-wide, not "zero on this page."
+
+**Counts from this project:** 1 dead_region finding checked, confirmed genuinely dead by a route
+the tool's own hedge explicitly said made it LESS likely to be dead (2 readers) — the opposite of
+what the hedge concluded.
+
+## F35 — `.success-popup` in push_arena.html: a second, independent confirmation of F29's pattern
+
+**The evidence, unedited.** Not flagged at all by `findings` — this is a `connected` symbol, so it
+never surfaces as a finding, which is F29's exact blind spot re-confirmed with a concrete arena
+instance. `push_arena.html:2808`: `<div class="success-popup" id="successPopup">`. CSS
+(`pointless/static/pointless/buttons/css/purchase_button.css:352`): `.success-popup { display:
+none; } .success-popup.active { display: flex; ... }` — the reveal is gated on the `active` class.
+JS (`pointless/static/pointless/buttons/js/purchase_button.js`, 3 call sites, lines 18-20, 677-679,
+687-689): every single one does `document.querySelector('.success-popup')` then either
+`.style.display = 'none'` or `.classList.remove('show')` — note `'show'`, not `'active'`, so even
+that removal targets the wrong class name. **Zero occurrences anywhere in the JS tree of
+`.success-popup` + `classList.add` or `.active`.** CSS provides an inbound edge (rule exists, so
+the graph sees it referenced); JS provides an inbound edge (selector exists, so the graph sees it
+read); the tool correctly has no vocabulary for "and yet nothing ever REVEALS it," which is F29's
+exact wording, right down to "a purchase confirmation popup" being one of F29's two named
+examples — this may be the same instance already generalized in F29, re-derived independently in
+the arena scope rather than a new one.
+
+**Why it was missed, in terms of the model.** Identical to F29: reference ≠ reachability. Adding
+here for the record because it is now confirmed with file:line evidence rather than referenced
+secondhand from CLAUDE.md, and because the specific failure mode (JS only ever calls the HIDE path,
+never the SHOW path, and the one hide-adjacent class name it does touch — `'show'` — doesn't even
+match the CSS's real toggle class `'active'`) is a slightly different, possibly more general lens
+than F29's original phrasing: **for an element gated by exactly one boolean-ish class, if every
+JS reference to that class only ever REMOVES it (or removes a same-shaped but differently-spelled
+sibling name) and none ever ADDS it, the element is provably permanently hidden** — narrower than
+"reachable at runtime" in general, but mechanically checkable without a browser: for each
+`.class.modifier { display: ... }` CSS rule, grep the JS tree for `classList.add('modifier')` /
+`classList.remove('modifier')` and flag "remove-only."
+
+**False-positive class:** a modifier class removed on load and added later by a DIFFERENT file
+this grep didn't check (the "removed in file A, added in file B" split is normal for modal
+open/close pairs); the check must be repo-wide add/remove counting, not per-file.
+
+**Counts from this project:** 1 element checked in the arena scope, 1 confirmed remove-only /
+never-add — consistent with F29's existing count of 2 (this may or may not be one of those 2;
+not disambiguated here).
+
+## F36 — a class string built by concatenation + conditional suffix, injected via innerHTML, is invisible to `css_selector`
+
+**The evidence, unedited.** Two `css_selector` "unused" findings in the arena scope are false:
+`challenges.css:31 arena-challenge-card` and `challenges.css:45 idle`. Independent check —
+`pointless/static/pointless/push_arena/sidebar.js:624-627`:
+```js
+let cardClass = 'arena-challenge-card';
+if (allDone) cardClass += ' done';
+else if (hasClaimable) cardClass += ' claimable';
+else if (currentValue === 0) cardClass += ' idle';
+```
+`cardClass` is then interpolated into an HTML string later assigned via `innerHTML`. No literal
+`'arena-challenge-card'` or `'idle'` appears as a `.className =` or `classList.add(...)` call with
+a bare string — it is the BASE of a variable that is conditionally suffixed, then used inside a
+template-literal HTML blob. This is a different shape from F26 (Lua string) and F31/F33
+(enumerable list) — it is plain JS string concatenation feeding `innerHTML`, one of the most
+common JS authoring patterns for building card/list markup, and it defeats a literal-string scan
+of `classList.add`/`.className =` call sites entirely because the FULL class list never exists as
+one string literal in the source — only in a runtime-built variable.
+
+**The lens that would catch it.** Track a variable initialized to a string literal (`let x =
+'foo'`) that is later mutated only via `+=' bar'` / `+=` template-literal-with-string-literal, and
+treat every literal segment that can appear in the variable (the base plus each conditional
+branch's addend) as a `classList`-equivalent reference to that class name — the same "this name is
+assembled, so no single literal exists" reasoning the project's own CLAUDE.md already states for
+`'btn_' + id`-style dispatch, generalized to string-concatenation-into-innerHTML rather than
+property/key lookup.
+
+**False-positive class:** a genuinely dead class that happens to share a literal segment with a
+live one (e.g., `cardClass += ' locked'` where `.locked` is never styled) would still read as
+"referenced" under this lens even if it in fact is dead in a different sense (the JS builds it,
+but no CSS rule matches it) — this lens only closes the CSS-selector-unused gap, it does not by
+itself prove the class does anything, so it should output "referenced from JS, verify the CSS
+rule separately" rather than a hard "used."
+
+**Counts from this project:** 2 of the ~226 `css_selector unused` findings this sweep matched in
+the arena scope were checked against this exact pattern and both were false; the remaining ~224
+were NOT individually re-verified in this pass (do not treat the unchecked remainder as either
+confirmed or refuted — this project's own history is that such sweeps over-report badly, e.g. only
+~4 of 15 prior "dead" findings were genuinely dead).
+
+
+## F37 — the SOURCE graph said connected, the BUILD graph never included it (21 of 62 modules)
+
+**Evidence, unedited.** `pointless/static/pointless/js/main.js` registers 62 loaders of the shape
+`() => import('../buttons/js/<id>.js')`. Measured from `dist/.vite/manifest.json`:
+`manifest['js/main.js'].dynamicImports.length === 41`. The other **21** modules had **no manifest
+entry at all**, and the browser was fetching them as **raw, unminified source** from
+`/static/pointless/buttons/js/` — `aurora_borealis.js`, 45 KB unminified, on a page that had
+already downloaded the bundle. Shipping for five days. Zero errors, zero 404s, no visual defect;
+the only symptom was weight, which nothing measures per-module.
+
+**Cause:** the build runs `vite-plugin-javascript-obfuscator` with `stringArray: true,
+stringArrayThreshold: 0.3`, which moves ~a third of a file's string literals into a base64 lookup
+table and replaces them with a call. `main.js` is *nothing but* string literals, so ~a third of
+the `import()` specifiers stopped being static strings — and an `import()` with a computed
+specifier cannot be statically analysed, so Vite declines to bundle it and leaves the relative
+path for the browser to resolve. The seeded-random 30% is why it hit 21 and not all or none.
+
+**Why seamcheck missed it, in terms of the model:** every one of those 62 modules IS referenced,
+from a real entry, by a real `import()`. The source graph is perfectly connected and perfectly
+correct. What was broken lives one layer down — **the bundler's output did not contain what the
+source graph promised** — and seamcheck models only the source.
+
+**The lens that would catch it:** read the build manifest (`dist/.vite/manifest.json`,
+`webpack-stats.json`, `rollup` output, an esbuild metafile) and assert that **every module
+seamcheck finds reachable from an entry appears in the build output**. One set difference. It
+would have printed 21 names instantly. This is a different question from "is this code
+referenced" and, on a project with a bundler, arguably a more valuable one: it catches a whole
+class — obfuscator/minifier plugins eating dynamic-import specifiers, a `manualChunks` rule
+swallowing a module, an alias that resolves in the IDE and not in the build.
+
+**False-positive class it would produce:** deliberately externalised modules (`external`,
+`rollupOptions.external`, CDN globals), dev-only entries excluded from the production build, and
+modules intentionally loaded at runtime from a URL. All three are declarable, so the check needs
+an ignore list rather than a heuristic.
+
+**Counts from this project:** 41/62 before, 62/62 after excluding `main.js` from the obfuscator.
+
+## F38 — the inverse of F29: an attribute that is QUERIED but no longer PRODUCED
+
+**Evidence, unedited.** `buttons/js/button_manager.js::setInitialButton()` resolved which button to
+mount with `document.querySelector('[data-button-type="' + type + '"]')`. That attribute was only
+ever emitted by `components/button_card_grid.html`. A change moved that template off the page (the
+collection grid became a fetch-on-first-open). Result on a clean session: the query returned
+`null`, the fallback query returned `null`, and the arena **mounted no button at all** — a blank
+0×0 play area, nothing clickable, **and not one line of console output**. Every new player would
+have been unable to push. Found by a human driving the page; no static check flagged it.
+
+**Why it was missed, in terms of the model:** F29 is *connected but unreachable* — a name is
+referenced, so an edge exists, but nothing can reveal the element at runtime. **This is the
+mirror image: the consumer is alive and well-connected, and its PRODUCER is gone.** Nothing is
+unreferenced, so nothing looks dead. `data-button-type` still exists in the codebase — in a
+template that this page no longer renders. The graph has no notion of "which producers reach
+which page".
+
+**The lens:** model DOM attributes and classes as having **producers** (templates, and JS that
+writes them) and **consumers** (selectors in JS/CSS), *scoped per rendered page*. Flag a consumer
+on a page none of whose producers render. The per-page scoping is the hard and necessary part — a
+global "does `data-button-type` exist anywhere" check returns yes and learns nothing, which is
+exactly the answer a grep gave me while I was fixing the neighbouring call site.
+
+**False-positive class:** attributes injected at runtime (`innerHTML`, framework rendering,
+fetched fragments — this very change legitimately introduces one), and consumers that are
+*supposed* to find nothing and are correctly guarded. The second is distinguishable: a guarded
+consumer (`if (!el) return`) is defensive, an unguarded one (`el.dataset.x`) is a crash waiting.
+Ranking unguarded consumers above guarded ones would have put this bug at the top: the fallback
+path dereferenced the result of a query that could only return null.
+
+**Counts:** 1 occurrence, 100% user-facing severity (arena unusable), 0 static tools flagged it,
+5/5 clean browser contexts reproduced it.
+
+## F39 — multiple writers managing DIFFERENT SUBSETS of the same marks (3 instances in one day)
+
+**Evidence, unedited.** A collection card in this project carries three marks: `.active` and
+`.selected` on `.push-button-option`, and `selected` on its nested `.button-select-indicator`.
+Three writers touch them:
+
+| writer | manages |
+|---|---|
+| `button_manager.js::selectButton()` (click path) | card `.active`, card `.selected` |
+| `button_manager.js::bindCollectionCards()` (mount path) | card `.active`, card `.selected` |
+| `arena_inline_boot.js::selectButton()` (picker-click path) | card `.active`, indicator `selected` |
+
+**No writer managed all three**, and each missed a different one, so the symptom changed shape
+depending on which path ran: two cards glowing; one card left at `transform: scale(0.97)`
+(visibly pressed-in) while a different button was equipped; or the card glowing on one button
+while the tick sat on another. **Three separate fixes in one day, each of which looked complete.**
+Worse, the writer that handles the real click calls `e.stopPropagation()`, so the writer carrying
+the *most correct* sweep never ran on a click at all.
+
+**Why it was missed:** seamcheck flagged `multi_writer_element` for two elements in this scope and
+was RIGHT to. But multi-writer alone is not the defect — plenty of elements have several
+legitimate writers. The defect is **asymmetry**: writers of the same conceptual state managing
+*different subsets* of the classes that express it.
+
+**The lens:** for each (element selector, class) pair, enumerate every `classList.add/remove`
+site. Group by element. Flag a group where writer A manages `{a,b}` and writer B manages `{a,c}`
+— i.e. the union is larger than any single writer's set. That is mechanically checkable from the
+AST, needs no runtime, and is a much sharper signal than "this element has 2 writers". Bonus
+signal, free from the same data: a writer that *adds* a class nothing ever *removes*.
+
+**False-positive class:** deliberately layered state where one writer owns visibility and another
+owns emphasis (a record's value vs its new-record glow — this project has exactly that and it is
+correct). Those are distinguishable because the class sets are disjoint; the defect is
+*overlapping but unequal* sets.
+
+**Counts:** 3 instances, 3 different files, 1 day. 2 flagged as `multi_writer_element` (neither
+ranked as a defect), 1 not flagged at all.
+
+## F40 — rank dead code by RUNTIME COST, not by size. This is the prioritisation ask.
+
+**Evidence, unedited.** `push_arena/level_progress_bridge.js` contains
+`checkStreakSaveOpportunities()` → `showLostStreakBuyBackButton()`, which does
+`getElementById('lostStreakBtn')`. **`#lostStreakBtn` and `#lostStreakText` appear in zero
+templates.** `arena_inline_boot.js` drives it from `setInterval(..., 60000)`, so every player on
+the arena makes an authenticated `GET /api/streak/save/opportunities/` **every 60 seconds for the
+whole session** to populate an element that cannot exist. At this project's 50k-concurrent target
+that is **~833 requests/second** of pure waste on a rate-limited endpoint.
+
+**And it damages the live feature.** Both the dead path and the live one
+(`hourly_streak_manager.js`, whose own comment says the banner is *"now the only recovery UI"*)
+write the global `window.currentStreakOpportunity`. The dead path sets it to **`null`** every 60s
+when it finds nothing. The live "RECOVER STREAK" button reads exactly that global, and on null
+shows an error and an alert telling the player to refresh. **So a dead feature intermittently
+breaks a live one** — the F39 pattern again, on a `window` global instead of a DOM element.
+
+**Seamcheck found the region.** It reported `dead_region showLostStreakBuyBackButton` — and
+marked it **uncertain**, which is F34 (its confidence heuristic ran backwards: two modules
+reaching for a missing element *raised* its confidence that the element is rendered).
+
+**The ask is not detection, it is ORDER.** This was one candidate among **609** in the arena
+scope, ~590 of which are Font-Awesome-class and `data-*` noise the tool itself hedges. Nobody
+reads 609. What makes this one worth acting on is not its size — it is ~60 lines — but that it is
+**reachable from a timer and makes a network call**. So: escalate a dead region's severity when
+it is reachable from `setInterval`/`setTimeout`/an event loop, when it performs `fetch`/`XHR`, or
+when it lives on a page the project marks hot. Report "dead + costs a request every 60s per user"
+above "dead + 200 unused CSS selectors". A `--rank-by cost` flag, or just that signal in the
+default sort, would change this from a list nobody finishes into a list with an obvious top item.
+
+**False-positive class:** a dead region whose fetch is itself dead (never invoked) would be
+over-ranked. Cheap to avoid: only escalate when the region is reachable from a live trigger.
+
+**Counts from this project:** 609 findings in the arena scope · ~15 independently verified · 2
+confirmed false positives among those checked · 1 finding (this one) with a measurable per-user
+runtime cost · ~590 hedged noise. The confirmed-actionable rate on the checked sample is what a
+user needs to see on the summary line.
+
+## F41 — attribute findings in GENERATED files to their source, or the fix goes in the wrong file
+
+**Evidence, unedited.** This project's own type-floor gate (`scripts/audit_font_floor.py`, not
+seamcheck) failed today with 9 sub-13px declarations in
+`pointless/static/pointless/buttons/css/previews/{garden_chaos,retro_arcade,lego_builder}.preview.css`.
+Those files are **generated** (`node OTHER/perf/split_preview_css.js`) as a verbatim copy of rules
+that already live in the skin beside them. So every violation was reported **twice**, and the new
+copy sat at a path the baseline did not cover — turning a pre-existing, already-accepted set of
+values into a CI failure with no new defect behind it. The trap in the other direction is worse:
+someone "fixes" the size in the generated file and the next regeneration silently reverts it.
+
+**Why this is a seamcheck concern too:** it scans a source tree and will meet generated trees —
+compiled CSS, codegen'd clients, extracted fragments. A finding in generated output is never
+actionable *where it is reported*.
+
+**The lens:** detect generated files (a `GENERATED`/`DO NOT EDIT` marker in the first lines, a
+path convention, or a declared glob in config), and either exclude them or — better — attribute
+the finding to the source file and **deduplicate against it**, so the count stays honest. Our fix
+was to exclude the directory, with the same reasoning already applied to `/dist/`.
+
+**False-positive class:** none new; the risk is under-reporting if a generated tree is the ONLY
+place a rule exists (generated-from-data with no source file). Detectable: exclude only when a
+source attribution can be resolved.
+
+**Counts:** 9 declarations, ×2 counted, 0 real defects, 1 CI failure.
+
+---
+
+### What seamcheck was RIGHT about in this scan (recorded, per the rule that both statements matter)
+
+- `mobile-accordions.css` — `#mobile-band-topup-accordion` / `#mobile-band-collectors-accordion`
+  rules: **confirmed dead**, those ids exist in no template. Verified independently.
+- 8 unused CSS custom properties (`--mobile-accent-*`, `--mobile-text-*`, `--mobile-spacing-unit`,
+  `--lr-board-depth`): **confirmed dead**, `var()` count 0 for each. Three of them additionally
+  reinvent this project's mandated contrast tokens.
+- Two unread `data-base-*` attributes on `#achievementModalFooter`: **confirmed dead**.
+- `multi_writer_element #periods-total`: **confirmed** two writers (harmless today only because
+  both write the same literal — see F39).
+
+### Correctly OUT OF SCOPE / correctly hedged
+
+- The Font-Awesome `fas`/`fa-*` and `data-*` families it marks "uncertain — almost certainly
+  real": the hedge is right, and the volume is the problem (F40), not the verdict.
+- `user:*:interactions` Redis key, reported as written-never-read: **false positive**, and a fair
+  miss — the read is a generic loop over a key registry, one hop from any literal (this is F33).
+- `.arena-challenge-card` / `.idle`: **false positive** — the class name is assembled by string
+  concatenation with a conditional suffix and injected via `innerHTML` (this is F36).
+
+### A by-product worth naming: the scan found a LIVE bug, not just dead code
+
+Checking the dead accordion ids surfaced that `arena_band.html` renders
+`#mobile-band-movers-accordion`, and **that id is missing from the accordion CSS id list** — so
+the real "Top Movers" mobile drawer currently ships with no header/chevron/hover/open styling, and
+`test_arena_band.py` only asserts the four old drawer names. A dead-code scan that reports
+*orphaned selectors* alongside *elements with no matching selector* would have caught both halves
+at once. That inverse check — **markup that no selector matches** — may be the cheapest high-value
+addition on this list, and it is the same shape as F38.
+
+
+## F42 — seamcheck was RIGHT about a dead animation class, and it sat at index 2,536 of 3,438
+
+**Evidence, unedited** (`seamcheck findings`, 0.14.0, on this project):
+`id: css_selector:class:se-pod-climbing · kind: css_selector · status: unused ·
+file: pointless/static/pointless/buttons/css/space_elevator.css · line: 243`
+
+**It is correct.** `.se-pod-climbing { animation: sePodClimb 0.8s ease-in-out infinite; }` is defined, and
+the class is referenced by **zero** files outside its own stylesheet — scanned across
+`pointless/static` and `pointless/templates` (.js/.css/.html/.py, build output and minified copies
+excluded). A confirmed-RIGHT data point; triage vocabulary `genuinely-dead`.
+
+**Why it matters more than its status suggests.** This one dead class explains a user-visible
+difference. The owner reported hot_air_balloon as lagging and space_elevator as smooth, yet the two
+share the same moving-element design: the same `bottom:` custom-property layout path every frame,
+the same `will-change: bottom`, the same drop-shadow. The difference is animation. The balloon puts
+`habBalloonSway` on its BASE rule, so it runs forever and re-rasterizes the blurred SVG every frame
+even while parked. The pod's only animation lives on `.se-pod-climbing`, which nothing ever applies — so it
+never runs. The smooth comparison button was smooth for a reason seamcheck had already found, and
+nobody could see it among 3,438.
+
+**The ask — a sharpening of F40:** an unused selector whose own declarations include `animation`,
+`transition`, `will-change` or `filter` is dead MOTION or dead PAINT intent, not dead colour. Tag
+those (e.g. `css_selector` + `motion` / `paint`) and rank them above plain unused selectors. It is
+cheap — the tool already reads the rule to know the selector — and it turns "unused class #2,536"
+into "an animation that was meant to run and does not", which is precisely the finding that explains
+why two similar components feel different.
+
+**False-positive class it would amplify:** animation classes added through string-assembled names
+(`'se-pod-' + state`) would surface as dead motion — the F36 blind spot, now ranked higher and so more
+visible. That is the right trade: a wrongly-ranked dead animation gets looked at once; a correctly
+found one stops drowning.
+
+**Correctly OUT OF SCOPE, recorded so nobody chases it upstream:**
+- **The hot_air_balloon lag itself.** Every rule and function involved is used and reachable. The
+  defect is the runtime paint cost of a permanent `animation` on a `filter`ed element that is not its
+  own compositor layer. A static reference graph should not flag that, and did not.
+- **The journey-button economics** — ~1,075 pushes to reach the top at 5 CPS against a 100-push
+  hourly allowance for a new player, with progress reset on every reload. Game balance, not code
+  connectivity.
+
+**Counts:** 1 finding · confirmed right · 1 of 3,438 in the unused+unresolved set · list index 2,536.
