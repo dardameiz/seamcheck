@@ -386,6 +386,48 @@ COMMANDS: dict[str, Command] = {
             ("seamcheck diff --since main --cursor 50", "the next page"),
         ],
     ),
+    "scope": Command(
+        args=["--scope"],
+        summary="What page(s) a commit or push touches, and what's currently wrong there.",
+        detail=(
+            "Not `diff`'s question (\"what changed\") and not `check`'s (\"did this "
+            "introduce something new\") - this asks \"what does the graph say, right "
+            "now, about the area I am working in\", on purpose including a pre-existing "
+            "issue in that same area even if this change never touched the line it is "
+            "on. `commit` scopes to staged files; `push` to every file in commits not "
+            "yet on the upstream branch, which can span more than one page.\n\n"
+            "Exits 1 if any touched page has an unresolved or unused finding - a real "
+            "gate for a CI job or a script that wants one. `--install-hooks` writes git "
+            "hooks that call this and print a short summary, but always exit 0: that is "
+            "a deliberate, separate choice (advisory, never blocking), not this command's "
+            "own answer.\n\n"
+            "With `--serve`: instead of the JSON above, renders and serves ONE map per "
+            "touched page, each already focused on it - a separate link per page, not "
+            "one map with a picker at the top, since a push can touch several unrelated "
+            "areas at once. Composes with `--tunnel`/`--local-only`/`--open` exactly like "
+            "`map --serve` does."
+        ),
+        examples=[
+            ("seamcheck scope commit", "what's in the commit you're about to make"),
+            ("seamcheck scope push", "everything not yet pushed, which may span pages"),
+            ("seamcheck scope commit --serve", "the same thing, as a map you can open"),
+        ],
+    ),
+    "install-hooks": Command(
+        args=["--install-hooks"],
+        summary="Write git pre-commit/pre-push hooks that run `scope` and print a summary.",
+        detail=(
+            "Plain git hooks, not Claude-specific and not seamcheck-CLI-specific in what "
+            "triggers them - they fire whether a human typed `git commit`, an agent drove "
+            "one, or anything else shelled out to git. Advisory ONLY: they always exit 0, "
+            "whatever `scope` itself would have exited - the owner's own requirement was "
+            "\"no hard gate, only recommendations\". A hand-written hook already in place "
+            "is left alone, never overwritten."
+        ),
+        examples=[
+            ("seamcheck install-hooks", "writes .git/hooks/pre-commit and pre-push"),
+        ],
+    ),
 }
 
 
@@ -714,6 +756,30 @@ def _run_without_django(arguments, verbose: bool) -> int:
                            refresh=options["refresh"])
         print(json.dumps(out, indent=2))
         return envelope_exit_code(out)
+    if options["scope"]:
+        from seamcheck.exitcodes import EXIT_CLEAN, _scope_exit_code
+
+        if options["serve"]:
+            # The visual half: one pre-focused map per touched page, served until
+            # Ctrl-C - not the JSON envelope below, which is the agent/CI-facing answer.
+            from seamcheck.scopedserve import serve_scoped_maps
+
+            serve_scoped_maps(
+                root, options["scope"], tunnel=options["tunnel"],
+                local_only=options["local_only"], open_it=options["open_it"], write=print,
+            )
+            return EXIT_CLEAN
+        from seamcheck import queries
+
+        out = queries.scope(root, options["scope"], refresh=options["refresh"])
+        print(json.dumps(out, indent=2))
+        return _scope_exit_code(out)
+    if options["install_hooks"]:
+        from seamcheck.exitcodes import EXIT_CLEAN
+        from seamcheck.hooks import install_hooks
+
+        print(install_hooks(root))
+        return EXIT_CLEAN
     if options["show_config"]:
         return _show_config_plain(root)
     with quiet(not verbose):

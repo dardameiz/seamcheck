@@ -80,6 +80,13 @@ FLAGS: tuple[Flag, ...] = (
     Flag(("--json",), "json", "flag", help="Print the graph as JSON."),
     Flag(("--check",), "check", "flag", help="Diff against HEAD; exit 1 on findings."),
     Flag(("--since",), "since", metavar="REF", help="Diff against the snapshot for REF."),
+    Flag(
+        ("--scope",), "scope", choices=("commit", "push"),
+        help="Show only the page(s) touched by 'commit' (staged files) or 'push' "
+             "(commits not yet on the upstream branch). Exits 1 if any of them has an "
+             "unresolved or unused finding - a real gate if you want one; the git hooks "
+             "`--install-hooks` writes ignore this exit code on purpose.",
+    ),
     Flag(("--explain",), "explain", metavar="SYMBOL_ID", help="Explain one symbol."),
     Flag(("--triage",), "triage", metavar="SYMBOL_ID", help="Record a disposition."),
     Flag(("--status",), "status",
@@ -234,6 +241,12 @@ FLAGS: tuple[Flag, ...] = (
         ("--yes",), "yes", "flag",
         help="Confirms --full. Two separate flags, not one, so printing 18 million "
              "tokens to an agent's context takes a deliberate second keystroke.",
+    ),
+    Flag(
+        ("--install-hooks",), "install_hooks", "flag",
+        help="Write git pre-commit and pre-push hooks that run --scope commit / "
+             "--scope push and print a summary + map link. Advisory only: these hooks "
+             "always exit 0, whatever --scope itself would have exited.",
     ),
 )
 

@@ -95,6 +95,33 @@ class Command(BaseCommand):
             if code != EXIT_CLEAN:
                 raise SystemExit(code)
             return None
+        if options.get("scope"):
+            if options.get("serve"):
+                # The visual half: one pre-focused map per touched page, served until
+                # Ctrl-C - not the JSON envelope below, the agent/CI-facing answer.
+                from seamcheck.scopedserve import serve_scoped_maps
+
+                serve_scoped_maps(
+                    options["repo_root"], options["scope"], tunnel=options["tunnel"],
+                    local_only=options["local_only"], open_it=options["open_it"],
+                    write=self.stdout.write,
+                )
+                return None
+            from seamcheck import queries
+            from seamcheck.exitcodes import _scope_exit_code
+
+            out = queries.scope(options["repo_root"], options["scope"],
+                                refresh=options["refresh"])
+            self.stdout.write(json.dumps(out, indent=2))
+            code = _scope_exit_code(out)
+            if code != 0:
+                raise SystemExit(code)
+            return None
+        if options.get("install_hooks"):
+            from seamcheck.hooks import install_hooks
+
+            self.stdout.write(install_hooks(options["repo_root"]))
+            return None
         if options["show_config"]:
             return self._show_config(options["repo_root"])
         if options["triage"]:

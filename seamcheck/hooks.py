@@ -1,0 +1,135 @@
+"""Git hooks that surface `--scope`'s answer at the exact moment it matters.
+
+Plain `pre-commit` / `pre-push` shell scripts - not Claude-specific, not seamcheck-CLI-
+specific in their trigger - so they fire the same way whether a human typed `git commit`,
+an agent drove one through a shell tool, or any other program shelled out to git. They
+call back into THIS module (`python3 -m seamcheck.hooks <commit|push>`) rather than the
+main `seamcheck` CLI, because the main CLI's `--scope` is JSON-only (the agent/CI
+contract every other query in `queries.py` already keeps) and a human staring at a raw
+JSON dump after every `git commit` is not what "a quick snapshot to imagine what's
+happening" was asking for - this module owns the short, human-readable rendering instead.
+
+Advisory only, always. `--scope` itself has a real exit code (EXIT_FINDINGS when a
+touched page has one) for whoever wants a hard gate - a CI job can call it directly. These
+hooks never propagate that: the owner-stated requirement was "no hard gate, only
+recommendations", so both `run_precommit`/`run_prepush` always return 0, whatever they
+found or failed to find.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import os
+import stat
+import sys
+
+_PRE_COMMIT_SCRIPT = """#!/bin/sh
+# Installed by `seamcheck --install-hooks`. Advisory only - never blocks the commit.
+python3 -m seamcheck.hooks commit
+exit 0
+"""
+
+_PRE_PUSH_SCRIPT = """#!/bin/sh
+# Installed by `seamcheck --install-hooks`. Advisory only - never blocks the push.
+python3 -m seamcheck.hooks push
+exit 0
+"""
+
+
+def _summary(result: dict) -> str:
+    """One short block: what was touched, and what seamcheck currently says about it.
+
+    Never raises - a hook that crashes because a scan hit an edge case is worse than a
+    hook that silently has nothing to say, because the crash is what a person sees
+    instead of their own `git commit` output.
+    """
+    pages = result.get("pages") or {}
+    if not pages:
+        changed = result.get("changed_files") or []
+        if not changed:
+            return "seamcheck: nothing staged/unpushed to check."
+        return f"seamcheck: {len(changed)} file(s) changed, none map to a known page."
+
+    lines = ["seamcheck - what you're touching:"]
+    for page, info in sorted(pages.items()):
+        findings = info.get("findings") or []
+        features = info.get("features") or []
+        where = f" ({', '.join(features)})" if features else ""
+        if findings:
+            lines.append(f"  {page}{where}: {len(findings)} unresolved/unused finding(s)")
+            for finding in findings[:5]:
+                lines.append(f"    - {finding['kind']} {finding['label']} ({finding['file']})")
+            if len(findings) > 5:
+                lines.append(f"    ...and {len(findings) - 5} more")
+        else:
+            lines.append(f"  {page}{where}: clean")
+    return "\n".join(lines)
+
+
+def _run(repo_root: str, mode: str) -> str:
+    """The text this hook prints, for `mode` ("commit" or "push"). Never raises."""
+    try:
+        from seamcheck import api
+
+        result = api.scoped_findings(repo_root, mode)
+        return _summary(result)
+    except Exception as error:  # noqa: BLE001 - a hook must never crash a commit/push
+        return f"seamcheck: could not check this {mode} ({error})."
+
+
+def run_precommit(repo_root: str = ".") -> int:
+    print(_run(repo_root, "commit"))
+    return 0
+
+
+def run_prepush(repo_root: str = ".") -> int:
+    print(_run(repo_root, "push"))
+    return 0
+
+
+def install_hooks(repo_root: str = ".") -> str:
+    """Write pre-commit and pre-push into `.git/hooks/`, overwriting only what this
+    function itself wrote before (a marker line, checked before overwriting anything -
+    a hand-written hook already there is left alone and named in the returned message,
+    never silently replaced).
+    """
+    marker = "# Installed by `seamcheck --install-hooks`."
+    hooks_dir = os.path.join(repo_root, ".git", "hooks")
+    if not os.path.isdir(hooks_dir):
+        return (
+            f"{hooks_dir} does not exist - is {repo_root!r} a git repository (not a "
+            "worktree or submodule, whose hooks dir lives elsewhere)?"
+        )
+
+    written, skipped = [], []
+    for name, script in (("pre-commit", _PRE_COMMIT_SCRIPT), ("pre-push", _PRE_PUSH_SCRIPT)):
+        path = os.path.join(hooks_dir, name)
+        if os.path.exists(path):
+            existing = ""
+            with contextlib.suppress(OSError), open(path, encoding="utf-8") as handle:
+                existing = handle.read()
+            if marker not in existing:
+                skipped.append(name)
+                continue
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(script)
+        mode = os.stat(path).st_mode
+        os.chmod(path, mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+        written.append(name)
+
+    lines = []
+    if written:
+        lines.append(f"Installed: {', '.join(written)}.")
+    if skipped:
+        lines.append(
+            f"Left alone (already exists, not one of ours): {', '.join(skipped)}. "
+            "Remove it first if you want seamcheck's version."
+        )
+    return "\n".join(lines) if lines else "Nothing to do."
+
+
+if __name__ == "__main__":
+    _mode = sys.argv[1] if len(sys.argv) > 1 else "commit"
+    if _mode == "push":
+        raise SystemExit(run_prepush("."))
+    raise SystemExit(run_precommit("."))

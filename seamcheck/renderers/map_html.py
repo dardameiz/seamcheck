@@ -6611,16 +6611,18 @@ def _js(value) -> str:
 
 def render(connectivity_map: ConnectivityMap, console=None, files=None,
            repo_root: str = "", editor: str | None = None, series=None,
-           adapters=None, share_payload=None) -> str:
+           adapters=None, share_payload=None, initial_page: str | None = None) -> str:
     """The map as one self-contained HTML file."""
     return render_document(connectivity_map, console=console, files=files,
                            repo_root=repo_root, editor=editor, series=series,
-                           adapters=adapters, share_payload=share_payload).single_file()
+                           adapters=adapters, share_payload=share_payload,
+                           initial_page=initial_page).single_file()
 
 
 def render_document(connectivity_map: ConnectivityMap, console=None, files=None,
                     repo_root: str = "", editor: str | None = None, series=None,
-                    adapters=None, share_payload=None) -> MapDocument:
+                    adapters=None, share_payload=None,
+                    initial_page: str | None = None) -> MapDocument:
     mode = (
         f"diff vs {_esc(connectivity_map.baseline_sha[:12])}"
         if connectivity_map.baseline_sha
@@ -6818,5 +6820,22 @@ def render_document(connectivity_map: ConnectivityMap, console=None, files=None,
     # The rows themselves come after everything the script reads at once - inline as
     # inert text blocks, or as files beside the page - and the loader decodes them one
     # page at a time (see _chunk and MapDocument).
-    tail = "\n".join([f"<script>{_SCRIPT}</script>", "</body></html>"])
+    focus_script = ""
+    if initial_page:
+        # A SEPARATE script tag, appended after _SCRIPT rather than edited into it: every
+        # name it touches (PAGES, pickPage, viewer, switchTo) is a bare top-level
+        # const/let/function in a classic (non-module, non-IIFE) script, so it is already
+        # in scope here - no change to the 6800 lines above this needed, and no risk of
+        # disturbing OPENS_ON's own carefully-reasoned "overview" default for every map
+        # that does NOT ask for a page focus. Runs after switchTo(OPENS_ON) has already
+        # executed, so this is the one that wins: map view, one page pre-picked, as if the
+        # reader had opened the map and clicked it themselves.
+        focus_script = (
+            "<script>(function(){"
+            f"var target={json.dumps(initial_page)};"
+            "var idx=PAGES.findIndex(function(p){return p.page===target;});"
+            "if(idx>=0){viewer.value='map';switchTo('map');pickPage(idx);}"
+            "})();</script>"
+        )
+    tail = "\n".join([f"<script>{_SCRIPT}</script>", focus_script, "</body></html>"])
     return MapDocument(head, tail, chunks)

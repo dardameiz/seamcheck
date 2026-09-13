@@ -240,3 +240,25 @@ def diff(repo_root: str = ".", since: str = "HEAD~1", limit: int = 25,
          "vanished": [r for r in vanished if r["id"] in ids],
          "changed": [r for r in changed if r["id"] in ids]},
         repo=repo_root, truncated=cut, cost=cost)
+
+
+def scope(repo_root: str = ".", mode: str = "commit", refresh: bool = False) -> dict:
+    """What page(s) `mode` ("commit": staged files; "push": commits not yet on the
+    upstream branch) touch, and the CURRENT unresolved/unused findings in each - not a
+    diff against a baseline, a snapshot of the neighbourhood being worked in right now.
+    See `api.scoped_findings` for why that is a different, and often more useful,
+    question than `diff`/`check --since` answer.
+    """
+    from seamcheck import api
+    from seamcheck.changescope import NoUpstreamError
+
+    graph, cost = _scan(repo_root, refresh=refresh)
+    try:
+        result = api.scoped_findings(repo_root, mode, graph=graph)
+    except NoUpstreamError as error:
+        return envelope.failure(
+            "scope", "no_upstream", str(error),
+            hint="Set one with `git push -u <remote> <branch>`, or pass --scope commit.")
+    except ValueError as error:
+        return envelope.failure("scope", "bad_argument", str(error))
+    return envelope.answer("scope", result, repo=repo_root, cost=cost)

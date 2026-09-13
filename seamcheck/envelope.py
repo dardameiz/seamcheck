@@ -25,6 +25,7 @@ ERRORS = {
     "no_git": "This is not a git repository, or the ref could not be resolved.",
     "too_large": "The answer is bigger than the limit; ask for less or pass --full --yes.",
     "stale_snapshot": "The stored snapshot could not be read by this version of seamcheck.",
+    "no_upstream": "The current branch has no upstream branch configured to compare against.",
 }
 
 

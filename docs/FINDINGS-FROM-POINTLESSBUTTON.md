@@ -2045,3 +2045,89 @@ false-negative one.
 `test_a_pending_update_is_printed_on_stderr_not_stdout` (a hardcoded version-string assertion
 against package metadata, not touched by this work). `ruff check` clean on every changed/new
 file.
+
+---
+
+## New capability (2026-09-13): `--scope` + git hooks + a pre-focused map per touched page
+
+Not a finding from scanning pointlessbutton - a feature request from its owner, working from
+this doc's own use case: "before an LLM-driven commit/push, seamcheck should show what's
+actually being touched" - and built directly in this repo rather than written up for someone
+else to pick up, since it changes the tool's own surface, not what it detects.
+
+**The question this answers, in the owner's own framing:** "I worked on push_arena in this
+round - I want to see THAT. I worked on achievements a while back and changed what it does -
+I should be able to see that too, whenever I ask, not just right after the commit that did it."
+Two different asks, both served by the same underlying data seamcheck already computed
+internally for the map (which page/feature reaches which symbol) - never exposed as a filter
+a caller could ask for directly until now.
+
+**Built, in order of how they compose:**
+
+1. **`seamcheck/changescope.py`** - `changed_files(repo_root, scope)` ("commit": staged files;
+   "push": every file in commits not yet on the upstream branch, via `git diff
+   @{upstream}...HEAD`; raises rather than guessing a base branch name when there is no
+   upstream). `pages_touched()` / `features_touched()` map a changed-file list onto page/feature
+   labels - the SAME labels the map itself uses (`api.page_files()`, made public for this;
+   `symbol.sub`'s `[Feature Name]` suffix, already written by every scan).
+
+2. **`api.scoped_findings(repo_root, scope)`** - the CURRENT unresolved/unused findings for
+   every page a scope touches, scoped to the whole page (not just the literally-changed
+   files) - deliberately different from `check --since`/`diff`'s "what's NEW" question:
+   this one surfaces a pre-existing issue in the same neighbourhood too, which is exactly
+   what the owner's "achievements" example was asking for.
+
+3. **CLI**: `seamcheck scope commit` / `seamcheck scope push` - JSON envelope
+   (`queries.scope`), same shape as `symbols`/`findings`/`diff`. Exits 1 (`EXIT_FINDINGS`) if
+   any touched page has a finding - a real gate for whoever wants one; exits via the ordinary
+   envelope mapping otherwise (new `no_upstream` error code for the no-upstream case).
+
+4. **`seamcheck install-hooks`** - writes plain git `pre-commit`/`pre-push` hooks (tool-agnostic
+   trigger: fires for a human, an agent, anything that shells to git). Calls back into
+   `seamcheck/hooks.py` (not the JSON CLI path - a human does not want a raw envelope dumped
+   after every commit) for a short text summary. **Advisory only, hard-coded**: always exits 0,
+   whatever `scope` itself would have exited - the owner's explicit requirement was "no hard
+   gate, only recommendations". A hand-written hook already in place is left alone, never
+   silently overwritten.
+
+5. **The visual half - `api.scoped_map_document()` + `seamcheck scope <mode> --serve`.** A page
+   can now be rendered already focused: `map_html.render(..., initial_page=X)` appends one
+   small, separate `<script>` tag AFTER the existing (6800-line, untouched) map script - it
+   calls the SAME `pickPage()`/`switchTo()` the page's own "Page" dropdown already calls when a
+   reader clicks it, so opening pre-focused is indistinguishable from a reader having just
+   clicked there themselves. `seamcheck/scopedserve.py` renders one such document PER touched
+   page and serves each on its own port (`serve.py`'s existing `serve_addresses`/`public_tunnel`,
+   completely unchanged - safer than trying to generalise its token-routed single-document
+   model to many documents under time pressure) - a SEPARATE link per page, per the owner's own
+   requirement, not one map with a page-picker at the top.
+
+**Verified against the real reference project:** `seamcheck scope commit` against
+pointlessbutton's own working tree (14 files genuinely staged by a concurrent session at the
+time) correctly listed them and correctly reported `"pages": {}` - none of them are source
+files a page's import graph reaches (they were `dist/` build output), which is the right
+answer, not a false positive. `seamcheck scope push` against a branch with nothing unpushed
+correctly reported empty. `seamcheck help scope` / `seamcheck help install-hooks` render
+correctly through the existing help system with no changes to it.
+
+**A real test-isolation bug found and fixed while building this:** the first version of
+`scopedserve`'s own tests did not mock `wants_tunnel`/`public_tunnel` in cases that were not
+testing tunnel behaviour - and this development machine has `seamcheck config --tunnel always`
+set globally, so those tests were silently invoking a REAL `cloudflared` subprocess, costing
+~15s across 6 tests instead of milliseconds. Fixed by passing `local_only=True` in every test
+that does not care about tunnelling, rather than mocking global state - the correct simulation
+of "a caller who does not want a tunnel", not a workaround.
+
+**Not done:** the map-serving path spins up one `ThreadingHTTPServer` per touched page rather
+than sharing one port/tunnel - a `git push` touching many pages opens many cloudflared
+processes if `--tunnel` is set. Consolidating onto one server would need generalising
+`serve.py`'s single-document, single-token routing model, deliberately deferred rather than
+risked under this session's own time pressure. `--scope`'s CLI is not yet documented in
+`docs/commands.md`/`docs/ci.md` (the CI-gate use case in particular deserves a line there,
+parallel to `check`'s own).
+
+**Tests:** `test_changescope.py` (14), `test_scoped_findings.py` (3), `test_hooks.py` (10),
+`test_scope_dispatch.py` (12, both CLI doors), `test_scoped_map_document.py` (2),
+`test_scopedserve.py` (6), plus additions to `test_renderer_map.py` (3, the `initial_page`
+focus script) and `test_autoconfig.py`/`test_js_extractor.py` were untouched by this entry
+(those belong to F37, above). Full suite: 1657 passed, the one pre-existing unrelated
+failure. `ruff check` clean on the whole package.

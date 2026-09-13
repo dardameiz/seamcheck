@@ -1096,3 +1096,33 @@ class SideBySideSectionTests(SimpleTestCase):
         self.assertIn("#cv, #cv * { user-select:none;", out)
         self.assertIn('svg.classList.add("drag"); if (window.trace) trace(null);', out)
         self.assertIn("if (isolate || lit || moved || pinch) return;", out)
+
+
+class InitialPageFocusTests(SimpleTestCase):
+    """`--scope`'s reason for existing: open already on the page a commit/push touched,
+    instead of "overview" - the default every OTHER map render must keep getting."""
+
+    def test_no_initial_page_leaves_the_default_untouched(self):
+        out = map_html.render(_map())
+
+        self.assertIn('const OPENS_ON = "overview";', out)
+        self.assertNotIn("PAGES.findIndex", out)
+
+    def test_an_initial_page_appends_a_focus_script_naming_it(self):
+        out = map_html.render(_map(), initial_page="home")
+
+        # The default line is untouched - this is a SEPARATE, appended script, not an
+        # edit to OPENS_ON's own carefully-reasoned "overview" default.
+        self.assertIn('const OPENS_ON = "overview";', out)
+        self.assertIn('var target="home";', out)
+        self.assertIn("switchTo('map')", out)
+        self.assertIn("pickPage(idx)", out)
+        # Appears once, after the main script - not injected into the middle of it.
+        self.assertEqual(out.count("PAGES.findIndex"), 1)
+        self.assertLess(out.rindex("const OPENS_ON"), out.index("PAGES.findIndex"))
+
+    def test_a_page_name_that_does_not_exist_is_embedded_safely(self):
+        # No exception, and the JSON-escaped value cannot break out of the script.
+        out = map_html.render(_map(), initial_page='"; alert(1); //')
+
+        self.assertIn('var target="\\"; alert(1); ', out)

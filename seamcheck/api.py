@@ -540,6 +540,96 @@ def check(repo_root: str = ".", graph: Graph | None = None, since: str | None = 
     }
 
 
+def scoped_findings(repo_root: str = ".", scope: str = "commit", graph: Graph | None = None) -> dict:
+    """The CURRENT state of the page(s) `scope`'s changed files belong to.
+
+    A different question from `check`'s `since`: that asks "what did this diff introduce
+    that wasn't there before" (a pre-existing issue in an untouched line never shows up).
+    This asks "what does the graph say about the area I am working in right now", on
+    purpose including findings that predate the change - a person mid-edit on a feature
+    wants to see a pre-existing orphaned element in that same feature exactly as much as
+    a newly-introduced one; a diff-against-baseline view would hide it.
+
+    Scoped to the whole PAGE each changed file belongs to (via `page_files`), not just the
+    literally-changed files themselves: the value here is "show me my neighbourhood", and
+    a file two doors down in the same page that broke because of this change is squarely
+    inside that neighbourhood even though this scan never touched it directly.
+    """
+    from seamcheck.changescope import changed_files, features_touched, pages_touched
+
+    # `page_files` reads `_config()`, which reads THIS, not its own `repo_root` argument -
+    # `scan()` is the only other place that sets it, and a caller handing in an
+    # already-scanned `graph` (skipping `scan()` here) would otherwise ask `page_files`
+    # about whatever root the last `scan()` anywhere in this process happened to set.
+    _CONFIG_ROOT[0] = repo_root
+
+    if graph is None:
+        from seamcheck.scancache import cached_scan
+
+        graph, _how = cached_scan(repo_root)
+
+    changed = changed_files(repo_root, scope)
+    if not changed:
+        return {"scope": scope, "changed_files": [], "pages": {}}
+
+    pages_map = page_files(repo_root)
+    hits = pages_touched(changed, pages_map)
+
+    result_pages: dict[str, dict] = {}
+    for page, touched_in_page in hits.items():
+        page_all_files = pages_map[page]
+        symbols = [
+            symbol for symbol in graph.symbols
+            if symbol.file in page_all_files
+            and symbol.status in (Status.UNRESOLVED, Status.UNUSED)
+        ]
+        result_pages[page] = {
+            "touched_files": sorted(touched_in_page),
+            "features": sorted(features_touched(graph, touched_in_page)),
+            "findings": [
+                {
+                    "id": symbol.id, "kind": symbol.kind, "label": symbol.label,
+                    "status": symbol.status.value, "file": symbol.file, "line": symbol.line,
+                    "note": symbol.note,
+                }
+                for symbol in symbols
+            ],
+        }
+    return {"scope": scope, "changed_files": changed, "pages": result_pages}
+
+
+def scoped_map_document(repo_root: str, page: str, graph: Graph | None = None):
+    """One page's map, pre-focused on it - the visual half of `scoped_findings`.
+
+    Deliberately lighter than `map`'s own document: no commit history, no trend, no call
+    graph - those answer "how did this project get here", and this answers "what does the
+    page I am about to commit/push look like, right now". Cheap enough to render once per
+    touched page (a "push" spanning three pages costs three of these, not three full maps).
+    """
+    from seamcheck.mapdata import build_map
+    from seamcheck.pagenames import page_names
+    from seamcheck.renderers import map_html
+
+    _CONFIG_ROOT[0] = repo_root
+    if graph is None:
+        from seamcheck.scancache import cached_scan
+
+        graph, _how = cached_scan(repo_root)
+    try:
+        sha = current_git_sha(repo_root)
+    except Exception:  # noqa: BLE001 - a snapshot-less checkout still gets a map
+        sha = "unknown"
+
+    connectivity_map = build_map(
+        graph, page_files(repo_root), git_sha=sha,
+        names=page_names(repo_root, _config(), graph),
+    )
+    return map_html.render_document(
+        connectivity_map, repo_root=os.path.abspath(repo_root),
+        editor=_config().get("editor"), initial_page=page,
+    )
+
+
 # `seamcheck json` on the reference project is 72.6 MB - about 18 million tokens - and it
 # is the format the code names as the agent interface, so an agent that reads it to answer
 # one question has already lost before it reaches a symbol. `queries.findings`/`symbols`
@@ -822,14 +912,18 @@ def write_map(graph: Graph, repo_root: str = ".") -> str:
     return str(path)
 
 
-def _page_files(repo_root: str) -> dict[str, set[str]]:
-    """Which JS files each page entry reaches. Computed only for the map: the import
-    walk costs ~13s and the CI path has no use for page attribution.
+def page_files(repo_root: str) -> dict[str, set[str]]:
+    """Which JS files each page entry reaches. Costs ~13s (the import walk); computed on
+    demand rather than during every `scan`, which has no use for page attribution.
 
     Goes through `_js_roots`, which is the one function that knows how a project's entry
     points are resolved. Re-deriving them here meant a config that names `js_entry_files`
     explicitly - the documented way to skip discovery - still had `templates_root` read
     out of it, and `map` died on a KeyError while `scan` was fine.
+
+    Public: `changescope.py` reuses this exact mapping so "seamcheck thinks this commit
+    touched Push Arena" can never disagree with what a generated map actually shows for
+    the same repo state - one function, not two definitions of "page" to keep in sync.
     """
     from seamcheck.extractors.js_extractor import discover_js_files
 
@@ -997,7 +1091,7 @@ def _map_document(repo_root: str, ref: str, progress: Progress | None = None):
         baseline_sha=baseline_message_sha, baseline_message=message,
     ))
     progress.step("page attribution")
-    page_files = _page_files(repo_root)
+    page_files_map = page_files(repo_root)
     progress.step("commit history")
     commits = commit_series(repo_root)
     # One row per scan, appended. This is the only place a series can be built from - a
@@ -1028,7 +1122,7 @@ def _map_document(repo_root: str, ref: str, progress: Progress | None = None):
         symbol.file for symbol in graph.symbols if symbol.file
     )
     return map_html.render_document(
-        build_map(graph, page_files, git_sha=sha, services=_service_map(repo_root),
+        build_map(graph, page_files_map, git_sha=sha, services=_service_map(repo_root),
                   calls=calls, defined=defined,
                   baseline=baseline, baseline_sha=baseline_sha if baseline else None,
                   names=page_names(repo_root, _config(), graph),

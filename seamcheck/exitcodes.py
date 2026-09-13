@@ -44,6 +44,9 @@ _ENVELOPE_EXIT_CODES: dict[str, int] = {
     "no_git": EXIT_USAGE,
     "too_large": EXIT_USAGE,
     "stale_snapshot": EXIT_NO_BASELINE,
+    # "--scope push" with no upstream configured: the command cannot be answered as
+    # asked, same class as an unresolvable --since ref.
+    "no_upstream": EXIT_USAGE,
 }
 
 
@@ -63,6 +66,22 @@ def envelope_exit_code(out: dict) -> int:
         return EXIT_CLEAN
     code = (out.get("error") or {}).get("code")
     return _ENVELOPE_EXIT_CODES.get(code, EXIT_USAGE)
+
+
+def _scope_exit_code(out: dict) -> int:
+    """`envelope_exit_code`, plus the one thing "--scope" alone needs: `ok=True` on its
+    own only means "the question was answerable", not "nothing was found" - `symbols`/
+    `findings`/`diff` are unopinionated lookups where that distinction does not exist,
+    but "--scope" doubles as a gate for whoever wants one (a CI job, or an agent scripting
+    its own build step), so a real finding in a touched page must earn EXIT_FINDINGS
+    rather than the EXIT_CLEAN every other envelope-returning query would give it.
+    """
+    if not out.get("ok"):
+        return envelope_exit_code(out)
+    pages = (out.get("data") or {}).get("pages") or {}
+    if any(page.get("findings") for page in pages.values()):
+        return EXIT_FINDINGS
+    return EXIT_CLEAN
 
 
 def gate_code(outcome: dict, comparing: bool = False) -> int:
