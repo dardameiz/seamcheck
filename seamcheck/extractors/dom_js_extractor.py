@@ -19,8 +19,11 @@ _DATA_NAME_RE = re.compile(r"^data-[a-z][a-z0-9]*(?:-[a-z0-9]+)+$", re.IGNORECAS
 # the code read it as `dataset.canChange` or `getAttribute("data-can-change")` - 584 of them
 # on the project measured, every one sitting in `uncertain` with no explanation at all.
 _ATTRIBUTE_CALLEES = frozenset(
-    {"getAttribute", "setAttribute", "hasAttribute", "removeAttribute"}
+    {"getAttribute", "setAttribute", "hasAttribute", "removeAttribute", "toggleAttribute"}
 )
+# setAttribute/removeAttribute/toggleAttribute are producers: code that flips an
+# attribute asserts the element has it, exactly like `dataset.x = ...` already does below.
+_ATTRIBUTE_WRITE_CALLEES = frozenset({"setAttribute", "removeAttribute", "toggleAttribute"})
 _CAMEL_BOUNDARY = re.compile(r"(?<!^)(?=[A-Z])")
 
 _SELECTORS_CACHE: dict[tuple, tuple[dict | None, list]] = register_cache({})
@@ -29,6 +32,36 @@ _SELECTORS_CACHE: dict[tuple, tuple[dict | None, list]] = register_cache({})
 def _dataset_name(camel: str) -> str:
     """`buttonType` -> `button-type`, the HTML mapping the browser itself applies."""
     return _CAMEL_BOUNDARY.sub("-", camel).lower()
+
+
+def _const_string_bindings(ast_root: dict) -> dict[str, str]:
+    """`const NAME = 'literal'` bindings, name -> string value.
+
+    Code often factors a repeated attribute name into a constant once -
+    `const BUSY = 'data-ab-busy'` - and calls it by name everywhere after
+    (`setAttribute(BUSY, '1')`, `hasAttribute(BUSY)`). Without this, only the
+    declaration line (a bare string literal, already read as evidence) was ever seen;
+    every actual read or write through the constant's name was invisible, because those
+    call sites pass an Identifier, not a Literal.
+    """
+    bindings: dict[str, str] = {}
+    for node, _enclosing in _walk(ast_root):
+        if node.get("type") != "VariableDeclarator":
+            continue
+        name = (node.get("id") or {}).get("name")
+        init = node.get("init") or {}
+        if name and init.get("type") == "Literal" and isinstance(init.get("value"), str):
+            bindings[name] = init["value"]
+    return bindings
+
+
+def _resolved_string(node: dict, consts: dict[str, str]) -> str | None:
+    """The string this node names, directly as a literal or through a `const` binding."""
+    if node.get("type") == "Literal" and isinstance(node.get("value"), str):
+        return node["value"]
+    if node.get("type") == "Identifier":
+        return consts.get(node.get("name"))
+    return None
 
 # Assigning to one of these, or to anything under .style / .dataset, mutates the element.
 _WRITE_PROPERTIES = frozenset(
@@ -185,6 +218,7 @@ def _dom_selectors_in_uncached(path: str, ast_root: dict, line_offset: int = 0) 
     symbols: list[Symbol] = []
     writing = _writing_call_ids(ast_root)
     basename = os.path.basename(path)
+    consts = _const_string_bindings(ast_root)
 
     def _data_access(name: str, line, enclosing: str, snippet: str) -> None:
         # One per (name, line): `getAttribute('data-x')` is now read twice - once as an
@@ -251,14 +285,15 @@ def _dom_selectors_in_uncached(path: str, ast_root: dict, line_offset: int = 0) 
         callee = node.get("callee") or {}
         callee_name = (callee.get("property") or {}).get("name")
 
-        # getAttribute("data-can-change") and friends
+        # getAttribute("data-can-change") and friends - resolved through a `const`
+        # binding too, so `hasAttribute(BUSY)` counts the same as `hasAttribute
+        # ('data-ab-busy')` when `BUSY` is declared that way earlier in the file.
         if callee_name in _ATTRIBUTE_CALLEES:
             first = (node.get("arguments") or [{}])[0]
-            if first.get("type") == "Literal" and isinstance(first.get("value"), str):
-                raw_name = first["value"]
-                if raw_name.startswith("data-") and len(raw_name) > 5:
-                    _data_access(raw_name[5:], at, enclosing,
-                                 f"{callee_name}('{raw_name}')")
+            raw_name = _resolved_string(first, consts)
+            if raw_name and raw_name.startswith("data-") and len(raw_name) > 5:
+                _data_access(raw_name[5:], at, enclosing,
+                             f"{callee_name}('{raw_name}')")
 
         if callee_name not in _SELECTOR_CALLEES:
             continue
@@ -762,6 +797,7 @@ def _definitions_in(path: str, ast_root: dict, line_offset: int = 0) -> list[Sym
     """Elements this unit of JavaScript brings into existence."""
     symbols: list[Symbol] = []
     seen: set[str] = set()
+    consts = _const_string_bindings(ast_root)
 
     def _emit(sub, name, line, enclosing, snippet):
         symbol = _definition(sub, name, path, line, enclosing, snippet)
@@ -851,14 +887,24 @@ def _definitions_in(path: str, ast_root: dict, line_offset: int = 0) -> list[Sym
             # nothing: `data-incremented-today` is set in stats_manager.js line 1225 and
             # read in push_arena.js line 929, and both files were findings. Same
             # reasoning the tool already applies to `el.id = 'x'`: code that WRITES an
-            # attribute asserts the element has it.
-            elif ((callee.get("property") or {}).get("name") == "setAttribute"
-                    and arguments
-                    and arguments[0].get("type") == "Literal"
-                    and isinstance(arguments[0].get("value"), str)
-                    and _DATA_NAME_RE.match(arguments[0]["value"])):
-                name = arguments[0]["value"]
-                _emit("data", name[5:], line, enclosing, f"setAttribute('{name}', ...)")
+            # attribute asserts the element has it - and so does REMOVING or TOGGLING
+            # one: `removeAttribute('data-state')` is proof `data-state` is a real
+            # attribute on this element just as much as setting it is. Resolved through
+            # a `const` binding too (`const BUSY = 'data-ab-busy'; ...removeAttribute
+            # (BUSY)`) via `consts`, the same map the read side uses - a name factored
+            # into a constant and called by that name is not a literal at the call site,
+            # and without this only the declaration line was ever seen as evidence.
+            #
+            # `_DATA_NAME_RE`'s two-segments-minimum is right for a BARE string found
+            # anywhere in the source (avoids `data-` fragments from truncated template
+            # interpolation), but wrong here: this is already known to be the first
+            # argument of an attribute call, so single-word names (`data-active`,
+            # `data-state`) are genuine and use the same loose check the read side does.
+            elif (callee.get("property") or {}).get("name") in _ATTRIBUTE_WRITE_CALLEES and arguments:
+                name = _resolved_string(arguments[0], consts)
+                method = callee["property"]["name"]
+                if name and name.startswith("data-") and len(name) > 5:
+                    _emit("data", name[5:], line, enclosing, f"{method}('{name}', ...)")
 
         # Markup built as a string. This is how most of them arrive: 136 of 164 on the
         # project measured came from an id= or class= inside an innerHTML template literal.

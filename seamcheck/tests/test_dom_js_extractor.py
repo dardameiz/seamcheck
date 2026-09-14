@@ -146,6 +146,58 @@ class AttributeWritesAreDefinitionsTests(SimpleTestCase):
         rows = [s for s in found if s.label == "incremented-today"]
         self.assertEqual(len(rows), 1, [(s.sub, s.line) for s in rows])
 
+    def test_a_single_word_data_attribute_is_defined_too(self):
+        # F44 class 1: `_DATA_NAME_RE` requires two hyphenated segments (right for a bare
+        # string found anywhere in the source), but this branch already knows it is the
+        # first argument of a setAttribute call - `data-active`, one word, is a completely
+        # real attribute name, and using the same two-segment check here meant a write to
+        # it never defined anything: `button_manager.js:689 setAttribute('data-active',
+        # 'true')` stayed reported as an unresolved READ of an attribute nothing produces.
+        self.assertIn(("data", "active"), self._definitions("""
+            export function select(el) {
+              el.setAttribute('data-active', 'true');
+            }
+        """))
+
+    def test_remove_attribute_of_a_data_name_defines_it_too(self):
+        # `removeAttribute('data-state')` is just as much proof `data-state` is a real
+        # attribute on this element as setting it - evidence, not a claim, works either
+        # direction.
+        self.assertIn(("data", "state"), self._definitions("""
+            export function clear(el) {
+              el.removeAttribute('data-state');
+            }
+        """))
+
+    def test_toggle_attribute_of_a_data_name_defines_it_too(self):
+        self.assertIn(("data", "busy"), self._definitions("""
+            export function flip(el) {
+              el.toggleAttribute('data-busy');
+            }
+        """))
+
+    def test_a_name_held_in_a_const_is_resolved_at_the_write_site(self):
+        # `const BUSY = 'data-ab-busy'` then `setAttribute(BUSY, '1')` elsewhere - the
+        # call site passes an Identifier, not a Literal, so without resolving it through
+        # the constant only the declaration line was ever visible as evidence and every
+        # actual write through the name was invisible.
+        self.assertIn(("data", "ab-busy"), self._definitions("""
+            const BUSY = 'data-ab-busy';
+            export function mark(el) {
+              el.setAttribute(BUSY, '1');
+            }
+        """))
+
+    def test_a_name_held_in_a_const_is_resolved_at_the_read_site(self):
+        found = extract_dom_selectors([self._write("""
+            const BUSY = 'data-ab-busy';
+            export function check(el) {
+              return el.hasAttribute(BUSY);
+            }
+        """)], [])
+        rows = [(s.sub, s.label) for s in found if s.label == "ab-busy"]
+        self.assertIn(("data:read", "ab-busy"), rows)
+
 
 class NamedInAConstantTests(SimpleTestCase):
     """`var COUNTDOWN_ID = 'arena-next-season-countdown'` then `getElementById(ID)`.
