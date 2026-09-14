@@ -338,15 +338,20 @@ class UpdateNoticeTests(SimpleTestCase):
     it rides on - never on stdout, so a `--format json` pipeline stays clean either way."""
 
     def test_a_pending_update_is_printed_on_stderr_not_stdout(self):
+        # Deliberately implausible version numbers, not this repo's real current/next
+        # ones: `--version`'s OWN output legitimately prints the real installed version
+        # to stdout, and a mock using a real-looking number can coincidentally collide
+        # with it - this test then passes or fails depending on what happens to be
+        # installed, not on whether stderr/stdout are actually kept separate.
         out, err = io.StringIO(), io.StringIO()
         with mock.patch("seamcheck.updatecheck.notice",
-                         return_value="seamcheck: a newer version is available (0.13.0 → 0.14.0)"), \
+                         return_value="seamcheck: a newer version is available (99.98.0 → 99.99.0)"), \
              redirect_stdout(out), redirect_stderr(err):
             self.assertEqual(main(["--version"]), 0)
 
-        self.assertIn("0.13.0", err.getvalue())
-        self.assertIn("0.14.0", err.getvalue())
-        self.assertNotIn("0.14.0", out.getvalue())
+        self.assertIn("99.98.0", err.getvalue())
+        self.assertIn("99.99.0", err.getvalue())
+        self.assertNotIn("99.99.0", out.getvalue())
 
     def test_nothing_pending_prints_nothing_extra(self):
         err = io.StringIO()
