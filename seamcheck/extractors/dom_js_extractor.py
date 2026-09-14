@@ -86,15 +86,19 @@ _CSS_ESCAPE_RE = re.compile(r"\\(.)")
 _COMBINATOR_RE = re.compile(r"\s*[>+~]\s*|\s+")
 
 
-def _last_compound(raw: str) -> str:
-    """The compound a query or a write actually resolves to, in a multi-part selector.
+def _split_last_compound(raw: str) -> tuple[str, str]:
+    """(every ANCESTOR compound, the LAST compound) in a multi-part selector.
 
     `.nav-right .pbits-amount` names an ancestor SCOPE and the element itself - only the
     element matching `.pbits-amount` is ever returned by `querySelector`, and only it is
-    ever the node a following `.textContent = x` mutates. Treating every compound in the
-    chain as written reported `.nav-right` (the ancestor) as a writer of an unrelated
-    element too - 3 of F44's multi-writer findings, one of them `.text` matched under two
-    different, unrelated parents that happen to share only this last segment.
+    ever the node a following `.textContent = x` mutates. The ancestor is never the
+    element such a call touches - but it is still a REQUIREMENT: `querySelector` cannot
+    match anything unless `.nav-right` exists too, so a totally absent ancestor is a real
+    defect (`.goal-bar .progress` with zero `.goal-bar` producers anywhere, `push_arena
+    .js:1485` - dropping the ancestor's own token entirely, an earlier version of this
+    split, silently lost that true finding). Split so the caller can tokenize each half
+    with a different role: the last compound as whatever the call itself is (read or
+    write), the ancestor always as a read/existence check regardless.
 
     Not a CSS combinator parser: splits on the first top-level whitespace/combinator
     outside brackets, which is enough for the shapes seen (`.a .b`, `.a > .b`) without
@@ -110,7 +114,9 @@ def _last_compound(raw: str) -> str:
             depth = max(0, depth - 1)
         elif depth == 0 and ch in " \t\n>+~":
             boundary = i + 1
-    return text[boundary:].strip() or text
+    last = text[boundary:].strip() or text
+    ancestor = text[:boundary] if last != text else ""
+    return ancestor, last
 
 
 # `[data-tab="${x}"]` and `'[data-tab="' + x + '"]'` - the attribute name is static even
@@ -130,18 +136,8 @@ def _partial_attr_names(node: dict) -> list[str]:
     return sorted(set(_PARTIAL_ATTR_RE.findall(text)))
 
 
-def _selector_tokens(callee_name: str, raw: str, *, write: bool = False) -> list[tuple[str, str]]:
-    """(sub, label) pairs a selector string pins down.
-
-    `write=True` narrows a multi-compound selector to its LAST compound first - see
-    `_last_compound`. Reads keep the full segment-presence match: `match_dom_selectors`
-    already treats that as a stated v1 limitation for connectivity (is this class used
-    ANYWHERE), which is a different, looser question than "which element does this
-    write actually touch".
-    """
-    if callee_name == "getElementById":
-        return [("id", raw)] if raw else []
-    text = _last_compound(raw) if write else raw
+def _tokenize_compound(text: str) -> list[tuple[str, str]]:
+    """(sub, label) pairs a single compound (or unsplit selector) pins down."""
     tokens: list[tuple[str, str]] = []
     for element_id, class_name, data_name in _TOKEN_RE.findall(text):
         if element_id:
@@ -151,6 +147,33 @@ def _selector_tokens(callee_name: str, raw: str, *, write: bool = False) -> list
         elif data_name:
             tokens.append(("data", data_name))
     return tokens
+
+
+def _selector_tokens(callee_name: str, raw: str, *, write: bool = False) -> list[tuple[str, str, str]]:
+    """(sub, label, role) triples a selector string pins down.
+
+    `role` is `"target"` for the element the call itself reaches - write attribution
+    when `write=True`, an ordinary read otherwise - and `"ancestor"` for a compound that
+    only SCOPES a multi-part selector (`.nav-right` in `.nav-right .pbits-amount`): never
+    the element a write touches, but still required to exist for the query to match at
+    all, so it is always read-checked regardless of the call's own access. See
+    `_split_last_compound` for why dropping it outright (an earlier version of this
+    split) is wrong, not just narrower than needed.
+
+    Reads keep the full segment-presence match undivided (every token comes back
+    `"target"`): `match_dom_selectors` already treats that as a stated v1 limitation for
+    connectivity (is this class used ANYWHERE), a different and looser question than
+    "which element does this write actually touch".
+    """
+    if callee_name == "getElementById":
+        return [("id", raw, "target")] if raw else []
+    if not write:
+        return [(sub, label, "target") for sub, label in _tokenize_compound(raw)]
+    ancestor, target = _split_last_compound(raw)
+    return (
+        [(sub, label, "ancestor") for sub, label in _tokenize_compound(ancestor)]
+        + [(sub, label, "target") for sub, label in _tokenize_compound(target)]
+    )
 
 
 def _property_names(node) -> set[str]:
@@ -375,11 +398,15 @@ def _dom_selectors_in_uncached(path: str, ast_root: dict, line_offset: int = 0) 
             continue
 
         raw = first["value"]
-        for sub, label in _selector_tokens(callee_name, raw, write=access == "write"):
+        for sub, label, role in _selector_tokens(callee_name, raw, write=access == "write"):
+            # An ancestor compound in a multi-part selector is always read-checked
+            # (existence, not write attribution) regardless of the call's own access -
+            # see _split_last_compound for why dropping it outright loses real findings.
+            token_access = access if role == "target" else "read"
             symbols.append(
                 Symbol(
                     id=f"dom_selector:{sub}:{label}:{path}:{line}", kind="dom_selector",
-                    label=label, sub=f"{sub}:{access}", file=path, line=line,
+                    label=label, sub=f"{sub}:{token_access}", file=path, line=line,
                     status=Status.UNCERTAIN, snippet=f"{callee_name}('{raw}')",
                     chain=chain, note="",
                 )

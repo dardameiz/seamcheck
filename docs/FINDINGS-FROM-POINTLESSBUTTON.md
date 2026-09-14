@@ -2531,3 +2531,43 @@ This project's own `.git/hooks/pre-commit`/`pre-push` (installed by an earlier s
 fix existed) are now confirmed-dead files per T14's own evidence - they were never read by this project's git at all. Left as-is:
 implementing here is seamcheck's job, but writing into `.husky/` is pointlessbutton's own file, out of scope for this repo's
 session. Re-running `seamcheck install-hooks` here will now report the husky path and the lines to add by hand.
+
+### Re-measured after T9–T14 / F43–F44 were implemented (2026-09-14, seamcheck `2f0c90ea7`)
+
+- **`scope`-equivalent page findings.** `push-arena-main` 92 → **75**; `main` 18 → **15**. **0 new, 20 gone.** The ones gone are
+  exactly the F44 false positives:
+  - `5`, `ab-busy`, `completed` ×9, `goal-celebrated`, `state` ×2, `achievementsCard`, `nav-right` (push-arena-main);
+  - `active` ×2, `segment` (main).
+  - Still present (F44 did not claim them): `text`, `stat`, `price-amount`, `quarantine-modal` (multi-writer classes 3–5), and
+    the `base-achieved`/`base-total` note (class 6).
+- **Correction — one TRUE finding was lost with the class-4 fix.** `push_arena.js:1485` `document.querySelector('.goal-bar .progress')`
+  used to raise `dom_selector goal-bar` unresolved, and it was right: `.goal-bar` has 0 producers anywhere, so this whole read
+  can never match. After "writes attributed to the last compound only" it is gone.
+  - The ancestor in a READ is still a requirement: the element must exist for the query to match. Only for WRITES is the last
+    compound the element written.
+  - Ask: keep ancestor compounds as reads, including in multi-writer attribution.
+  - Count here: 1 lost true finding in the two pages.
+- **Scan cache (T10) holds:** a cached page query took 9.8 s from disk.
+- **The hooks (T14):** `.git/hooks/pre-commit` is still the old script. `seamcheck install-hooks` was not re-run here, because the fix
+  refuses `.husky/_` and asks for a line in `.husky/pre-commit`, which is an owner decision.
+- **Files changed in this project on 2026-09-14:** 102 unresolved/unused findings, and `git blame` puts **0** of them on that day's
+  commits. A scope view shows pre-existing findings for any page a commit touches, by design.
+  - A user reading the hook output took them for "new unresolved ones".
+  - Ask: mark each finding in the scope summary as `introduced` (its line changed in the scoped commits) or `pre-existing`.
+    `git blame -L` per finding line was enough to do it here.
+
+## Correction — the class-4 fix (F44) — IMPLEMENTED (2026-09-14)
+
+The lost `.goal-bar` finding above is real and now fixed. `_selector_tokens` narrowed a WRITE selector to only its last
+compound's tokens, dropping the ancestor's entirely - correct for WRITE ATTRIBUTION (`.nav-right` never receives the write in
+`.nav-right .pbits-amount`) but wrong for EXISTENCE: `querySelector` cannot match anything unless the ancestor exists too, so
+`.goal-bar .progress` with zero `.goal-bar` producers anywhere is exactly as dead as it was before the class-4 fix, and had
+gone silent.
+
+`_selector_tokens` now returns a role per token (new `_split_last_compound`, replacing `_last_compound`): the last compound is
+`"target"` (write attribution, when the call is a write), every ancestor compound is always `"ancestor"` - read-checked
+regardless of the call's own access, never write-attributed. `push_arena.js:1485`'s `goal-bar` finding is confirmed back after
+this fix (verified via a fresh `--refresh` scan), and `nav-right`/`pbits-amount` from the original class-4 fix are unaffected -
+`nav-right` now reads `class:read` rather than being silently absent, `pbits-amount` still `class:write` alone.
+
+Test: `test_a_write_selectors_ancestor_compound_is_still_checked_as_a_read` in `test_dom_js_extractor.py`.

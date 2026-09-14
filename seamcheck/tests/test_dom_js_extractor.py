@@ -242,6 +242,21 @@ class SelectorCompoundTests(SimpleTestCase):
         labels = [s.label for s in found if s.sub.endswith(":write")]
         self.assertEqual(labels, ["pbits-amount"])
 
+    def test_a_write_selectors_ancestor_compound_is_still_checked_as_a_read(self):
+        # The ancestor is never the WRITE target, but querySelector cannot match
+        # anything unless it exists too - dropping its token entirely (an earlier
+        # version of the last-compound fix) silently lost a true finding: `.goal-bar
+        # .progress` with zero `.goal-bar` producers anywhere (push_arena.js:1485).
+        found = extract_dom_selectors([self._write("""
+            function initProgress(el) {
+              const bar = document.querySelector('.goal-bar .progress');
+              bar.style.width = '50%';
+            }
+        """)], [])
+        rows = [(s.label, s.sub) for s in found]
+        self.assertIn(("progress", "class:write"), rows)
+        self.assertIn(("goal-bar", "class:read"), rows)
+
     def test_a_descendant_selector_read_still_sees_every_compound(self):
         # Reads keep the looser, existing segment-presence behaviour - connectivity
         # matching already treats that as a stated v1 limitation, a different and
