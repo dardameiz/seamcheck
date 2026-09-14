@@ -179,12 +179,16 @@ COMMANDS: dict[str, Command] = {
             "Three exit codes, deliberately: 0 clean, 1 new findings, and 2 for 'no "
             "baseline to compare against'. A gate with nothing to compare against has not "
             "passed, it has not run, and reporting that as 0 is how a broken gate stays "
-            "green for months."
+            "green for months.\n\n"
+            "`--format json` prints the VERDICT as JSON (passed, new_unresolved, "
+            "new_unused, counts, ...) - not the whole graph, which `seamcheck findings` "
+            "or `seamcheck symbols` answer instead."
         ),
         examples=[
             ("seamcheck check", "against the snapshot for HEAD"),
             ("seamcheck check --since $BASE_SHA", "against the commit the PR branched from"),
             ("seamcheck check --format markdown", "fail the build AND print a digest to comment with"),
+            ("seamcheck check --format json", "fail the build AND print the verdict as JSON"),
         ],
     ),
     "backfill": Command(
@@ -822,7 +826,22 @@ def _run_without_django(arguments, verbose: bool) -> int:
                 # is EXIT_USAGE, not the gate_code() ladder at all.
                 print(result["message"], file=sys.stderr)
                 return EXIT_USAGE
-            if options["format"] in ("sarif", "github"):
+            if options["format"] == "json":
+                # `--format json` used to fall through to the terminal digest below,
+                # silently ignoring the flag - or, composed through the Django door,
+                # reached api.report()'s WHOLE-GRAPH json renderer and hit its size gate
+                # (75 MB on a real project), exiting 3 with the verdict never computed.
+                # api.check()'s own return value already IS the digest as a plain,
+                # JSON-serializable dict - the same one MCP's seamcheck_check tool
+                # returns over the protocol - so this is the one right-sized answer to
+                # "the CI gate's verdict, as JSON", with no graph-size gate to hit.
+                text = json.dumps(result, indent=2)
+                if options["out"]:
+                    pathlib.Path(options["out"]).write_text(text, encoding="utf-8")
+                    print(f"seamcheck: wrote {options['out']}", file=sys.stderr)
+                else:
+                    print(text)
+            elif options["format"] in ("sarif", "github"):
                 # A CI gate wants the annotation format it asked for, not the terminal
                 # digest - this branch used to ignore --format entirely, so `seamcheck
                 # check --format sarif --out FILE` on a non-Django project (redash: 47

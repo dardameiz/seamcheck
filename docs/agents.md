@@ -55,6 +55,7 @@ decision, not the agent's.
 | `seamcheck_symbols` | find a symbol id by name, before spending a call on explain or triage |
 | `seamcheck_diff` | what appeared, vanished or changed status since a ref - "what did this commit break" |
 | `seamcheck_snapshot` | write the baseline `check`/`diff` compare against - previously only the CLI could |
+| `seamcheck_scope` | current findings on just the page(s) the staged/unpushed changes touch - "what am I about to commit into" |
 
 The server talks over stdin/stdout — no port, no daemon. Run it with the agent's working
 directory set to the project root. **For a Django project it has to run inside that

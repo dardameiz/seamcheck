@@ -485,7 +485,21 @@ class Command(BaseCommand):
         repo_root = options["repo_root"]
         bar = bar or self._progress(options, 0)
 
-        if fmt == "json":
+        if fmt == "json" and options["check"]:
+            # `--check --format json` wants the CI gate's VERDICT as JSON, not the whole
+            # graph - falling into the branch below used to serialize every symbol/edge
+            # (75 MB on a real project), hit ITS OWN size gate, and exit 3 with nothing
+            # printed and the verdict never computed at all. api.check()'s return value
+            # already IS that verdict, JSON-serializable as-is - the same dict MCP's
+            # seamcheck_check tool returns over the protocol - and it carries no
+            # graph-size gate to hit.
+            if graph is None:
+                graph = api.scan(repo_root, bar)
+            text = json.dumps(
+                api.check(repo_root, graph=graph, since=options["since"]), indent=2
+            )
+            bar.finish()
+        elif fmt == "json":
             from seamcheck.envelope import TooLarge
 
             if graph is None:
