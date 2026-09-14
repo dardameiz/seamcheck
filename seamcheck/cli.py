@@ -1297,11 +1297,15 @@ def _set_tunnel_plain(when: str) -> int:
     return 0
 
 
-def _setup_django_if_any() -> None:
+def setup_django_if_any() -> None:
     """Bootstrap Django when this is a Django project, and shrug when it is not.
 
     The same thing the main path does, factored out so a command handled before that path
-    still scans the project the same way it would.
+    still scans the project the same way it would. Public: `hooks.py`'s standalone
+    `python3 -m seamcheck.hooks` entry point calls this too - a git hook runs in a plain
+    subprocess with none of `_dispatch`'s own bootstrap, and without this a Django project
+    read from source instead of importing it, missing routes Django only builds at
+    runtime (the admin's).
     """
     found = find_project(pathlib.Path.cwd())
     if not found:
@@ -1391,7 +1395,7 @@ def _dispatch(argv: list[str] | None = None) -> int:
         # `check` in the same shell scanned by importing - so the one command whose whole
         # purpose is to be trustworthy reported 46,309 symbols where every other command
         # reported 47,834, and said `ModuleNotFoundError` on the way past.
-        _setup_django_if_any()
+        setup_django_if_any()
         return _share(argv[1:])
 
     known = parser.parse_args(argv)

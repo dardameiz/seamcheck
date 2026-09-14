@@ -70,7 +70,13 @@ def _run(repo_root: str, mode: str) -> str:
     """The text this hook prints, for `mode` ("commit" or "push"). Never raises."""
     try:
         from seamcheck import api
+        from seamcheck.cli import setup_django_if_any
 
+        # A git hook runs in a bare subprocess - none of the bootstrap `seamcheck scope`
+        # itself gets via `_dispatch`. Without this, a Django project is read from
+        # source instead of imported, and misses every route Django builds at runtime
+        # (the admin's) - a real, silent gap this had on its first real run.
+        setup_django_if_any()
         result = api.scoped_findings(repo_root, mode)
         return _summary(result)
     except Exception as error:  # noqa: BLE001 - a hook must never crash a commit/push
