@@ -296,19 +296,16 @@ COMMANDS: dict[str, Command] = {
     ),
     "serve": Command(
         args=["--format", "map", "--serve"],
-        summary="The same as `map`. The name to reach for when you mean the phone.",
+        summary="Alias for `map` - identical, not listed separately below.",
         detail=(
-            "Identical to `seamcheck map` - one implementation, two names - because "
-            "serving is what map does now. Kept because `serve` is the word that comes to "
-            "mind when the intent is 'get this onto my phone', and because a name that "
-            "has been in the help should not simply vanish.\n\n"
-            "`--tunnel` opens a temporary public HTTPS address through cloudflared, for a "
-            "device that is not on this wifi. Anyone with that link can read the report, "
-            "and it dies with the command."
+            "Exactly `seamcheck map`, kept working under this name for whoever already "
+            "types it, but folded out of the main listing: two names for one "
+            "implementation was the one genuine duplicate in this command set. Reach for "
+            "`seamcheck help map` for the real documentation - `--tunnel`, `--local-only`, "
+            "`--since` and the rest all apply here unchanged."
         ),
         examples=[
             ("seamcheck serve", "same as `seamcheck map`"),
-            ("seamcheck serve --tunnel", "plus a temporary public link"),
         ],
     ),
     "json": Command(
@@ -464,6 +461,11 @@ def find_project(start: pathlib.Path) -> tuple[str, pathlib.Path] | None:
 # "what do I run". They are listed, on one line, with `help <command>` for each.
 PRIMARY = ("map", "check", "backfill")
 
+# Recognised, and fully documented under `help <name>`, but not worth a second mention in
+# the same breath as everything else: `serve` is `map` under a different name, and listing
+# both here would describe two commands where there is only one implementation.
+_ALIASES = frozenset({"serve"})
+
 
 def version_line() -> str:
     """The installed version, plus a warning when that number can be stale.
@@ -495,7 +497,9 @@ def version_line() -> str:
 def _overview() -> str:
     width = max(len(name) for name in PRIMARY)
     listing = "\n".join(f"  {name:<{width}}  {COMMANDS[name].summary}" for name in PRIMARY)
-    rest = " \u00b7 ".join(name for name in COMMANDS if name not in PRIMARY)
+    rest = " \u00b7 ".join(
+        name for name in COMMANDS if name not in PRIMARY and name not in _ALIASES
+    )
     return (
         f"commands:\n{listing}\n\n"
         f"also:\n  {rest}\n"

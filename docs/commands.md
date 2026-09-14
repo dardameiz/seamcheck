@@ -13,8 +13,6 @@ seamcheck config     # what was detected, and how it was worked out
 seamcheck share      # a report about the scan containing none of your code
 seamcheck scan       # scan and print the totals, no UI, no server - also writes
                      # the snapshot check/diff compare against
-seamcheck serve      # the same command as map, under the name that reads better
-                     # when the phone is the point
 seamcheck json       # the whole graph, unfiltered, for jq or a script - 72 MB on
                      # a 500k-line project; the three below answer in a few KB
 seamcheck symbols    # find a symbol by name - the cheap way to get an id
@@ -28,6 +26,9 @@ seamcheck install-hooks   # write git pre-commit/pre-push hooks that run `scope`
 ```
 
 `seamcheck help <command>` explains any of them with examples.
+
+`seamcheck serve` still works - it is `map` under the name that reads better when the phone is
+the point - just not listed above: one implementation, so only one line describing it.
 
 **`symbols`, `findings` and `diff` are the ones built for an agent to call directly**, not
 just to be scripted around: unlike every other command here, each reads from one scan cache
