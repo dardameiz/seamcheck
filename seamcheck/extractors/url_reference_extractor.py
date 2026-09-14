@@ -211,17 +211,35 @@ def _js_nav_targets(ast: dict) -> list[tuple[str, int, str]]:
 
 
 def find_js_files(repo_root: str) -> list[str]:
-    """Every first-party JavaScript-family file, vendored trees excluded."""
+    """Every first-party JavaScript-family file, vendored trees excluded.
+
+    "First-party" is a git question, not a directory-name one: a project keeps one-off
+    scripts somewhere it names in `.gitignore` (`OTHER/`, `scratch/`, an archived folder),
+    and those are not part of the product any more than `node_modules` is - on the
+    reference project a one-off Playwright probe living in one (`OTHER/seo/cards_check
+    .mjs`) was read as a first-party writer of a DOM element it never touches in
+    production. `gitfiles.tracked_files` answers "does this repo's own git consider this
+    file in", honouring nested `.gitignore` files and negation the way a hand-rolled
+    parser cannot; `None` on a non-git repo means this filters nothing, unchanged from
+    before.
+    """
     import os
 
+    from seamcheck import gitfiles
     from seamcheck.adapters.discovery import SKIP_DIRS
 
+    tracked = gitfiles.tracked_files(repo_root)
     found: list[str] = []
     for current, directories, files in os.walk(repo_root):
         directories[:] = [d for d in directories if d not in SKIP_DIRS and not d.startswith(".")]
         for name in files:
             if name.endswith(_JS_EXTENSIONS) and not name.endswith((".min.js", ".d.ts")):
-                found.append(os.path.join(current, name))
+                path = os.path.join(current, name)
+                if tracked is not None:
+                    relative = os.path.relpath(path, repo_root).replace(os.sep, "/")
+                    if relative not in tracked:
+                        continue
+                found.append(path)
     return found
 
 

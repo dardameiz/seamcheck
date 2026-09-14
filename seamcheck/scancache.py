@@ -63,6 +63,7 @@ import pathlib
 import time
 from collections import OrderedDict
 
+from seamcheck import gitfiles
 from seamcheck.adapters.discovery import SKIP_DIRS
 from seamcheck.autoconfig import EXCLUDED_DIRS, declared_config
 from seamcheck.graph import Graph, graph_from_dict, graph_to_dict
@@ -273,6 +274,11 @@ def _scan_tree(repo_root: str) -> tuple[str, int]:
     # even though any one read is cheap. See `_resolved_configured_paths`'s own
     # docstring for the cost this must not reintroduce.
     configured = _resolved_configured_paths(repo_root)
+    # `None` on a non-git repo (or git unavailable) - see gitfiles.tracked_files's own
+    # docstring for why that means "skip no file", not "skip every file". Computed once
+    # per walk, same reasoning as `configured` just above: one `git ls-files` is cheap,
+    # a `git check-ignore` per file in a large tree would not be.
+    tracked = gitfiles.tracked_files(repo_root)
     latest_mtime_ns = 0
     for current, directories, files in os.walk(root):
         here = pathlib.Path(current)
@@ -283,10 +289,18 @@ def _scan_tree(repo_root: str) -> tuple[str, int]:
         )
         for name in sorted(files):
             path = here / name
-            if _is_tool_state(path.relative_to(root).parts, configured):
+            relative = path.relative_to(root)
+            if _is_tool_state(relative.parts, configured):
                 # Tool state, not scanner input - see TOOL_STATE_PATHS above for which
                 # command writes each one and why a read or a write to it must not look,
                 # to the cache, like an edit to the project it just scanned.
+                continue
+            if tracked is not None and relative.as_posix() not in tracked:
+                # Untracked AND gitignored - a one-off script, a build artefact, a local
+                # log file the project's own .gitignore already disowns (see gitfiles.py
+                # for the false positives this class produced when nothing filtered it:
+                # a host project's own startup logging wrote a fresh, gitignored file on
+                # every hook run, and this walk saw that as the newest input every time).
                 continue
             try:
                 info = path.stat()

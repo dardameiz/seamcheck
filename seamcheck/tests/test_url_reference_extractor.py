@@ -1,4 +1,5 @@
 import pathlib
+import subprocess
 import tempfile
 
 from django.test import SimpleTestCase
@@ -6,8 +7,19 @@ from django.test import SimpleTestCase
 from seamcheck.extractors.url_reference_extractor import (
     _python_route_references,
     extract_url_references,
+    find_js_files,
 )
 from seamcheck.graph import Status, Symbol
+
+
+def _git(repo, *args):
+    subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+
+
+def _init_repo(repo):
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "test@example.com")
+    _git(repo, "config", "user.name", "Test")
 
 
 def _url(path):
@@ -127,3 +139,34 @@ class ReferenceMatchingTests(SimpleTestCase):
         )
 
         self.assertEqual(len({s.line for s in symbols}), 2)
+
+
+class FindJsFilesTests(SimpleTestCase):
+    """F43: a gitignored one-off (`OTHER/`, by project convention) is not the product."""
+
+    def test_a_tracked_js_file_is_found(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _init_repo(tmp)
+            (pathlib.Path(tmp) / "app.js").write_text("x = 1")
+
+            self.assertIn(str(pathlib.Path(tmp) / "app.js"), find_js_files(tmp))
+
+    def test_a_gitignored_one_off_script_is_excluded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _init_repo(tmp)
+            (pathlib.Path(tmp) / ".gitignore").write_text("OTHER/\n")
+            other = pathlib.Path(tmp) / "OTHER"
+            other.mkdir()
+            (other / "cards_check.mjs").write_text("x = 1")
+
+            found = find_js_files(tmp)
+
+            self.assertFalse(any("OTHER" in path for path in found))
+
+    def test_outside_a_git_repo_nothing_is_filtered(self):
+        # No regression for a project this can't answer for - `tracked_files` returns
+        # None outside a git repo, and that must mean "filter nothing", not "find nothing".
+        with tempfile.TemporaryDirectory() as tmp:
+            (pathlib.Path(tmp) / "app.js").write_text("x = 1")
+
+            self.assertIn(str(pathlib.Path(tmp) / "app.js"), find_js_files(tmp))

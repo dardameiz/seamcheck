@@ -7,6 +7,7 @@ can be remembered.
 """
 import os
 import pathlib
+import subprocess
 import tempfile
 from unittest import mock
 
@@ -457,6 +458,38 @@ class ScanCacheTests(SimpleTestCase):
             self.assertEqual(scan.call_count, 1,
                               "an edit inside a vendored directory the scanner never reads "
                               "must not force a rescan")
+
+    def test_a_gitignored_file_never_busts_the_cache(self):
+        # T10: a host project's own startup logging wrote a fresh, gitignored file
+        # (django.log) on every single hook run, and the freshness walk saw that as the
+        # newest input every time - turning a ~12s cache hit into a ~60-70s cold scan on
+        # every commit/push. `.gitignore`'d and untracked, this must never move the key.
+        with tempfile.TemporaryDirectory() as root:
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True, capture_output=True)
+            (pathlib.Path(root) / "app.py").write_text("x = 1")
+            (pathlib.Path(root) / ".gitignore").write_text("django.log\n")
+            with mock.patch("seamcheck.api.scan", return_value=_graph()) as scan:
+                scancache.cached_scan(root)
+                (pathlib.Path(root) / "django.log").write_text("WARNING: noise\n")
+                scancache.cached_scan(root)
+
+            self.assertEqual(scan.call_count, 1,
+                              "writing a gitignored file must not force a rescan")
+
+    def test_an_untracked_but_not_ignored_file_still_busts_the_cache(self):
+        # The other half of the same fix: a brand-new file mid-edit, not yet `git add`ed,
+        # is real project input the moment it exists - gitfiles.tracked_files includes it
+        # via --others --exclude-standard, and this must keep working through the cache.
+        with tempfile.TemporaryDirectory() as root:
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True, capture_output=True)
+            (pathlib.Path(root) / "app.py").write_text("x = 1")
+            with mock.patch("seamcheck.api.scan", return_value=_graph()) as scan:
+                scancache.cached_scan(root)
+                (pathlib.Path(root) / "new_view.py").write_text("y = 2")
+                scancache.cached_scan(root)
+
+            self.assertEqual(scan.call_count, 2,
+                              "a new, non-ignored file must still force a rescan")
 
     def test_the_entry_is_stamped_from_a_clock_read_before_the_scan_runs(self):
         # A real scan takes on the order of a minute. If the entry's timestamp were read
