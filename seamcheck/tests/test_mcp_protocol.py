@@ -284,7 +284,7 @@ class LegacyTriageDataTests(SimpleTestCase):
         legacy_why = "reasoned about it before the enum existed"
 
         with tempfile.TemporaryDirectory() as tmp:
-            triage_path = Path(tmp) / "seamcheck" / "triage.json"
+            triage_path = Path(tmp) / ".seamcheck" / "triage.json"
             triage_path.parent.mkdir(parents=True)
             triage_path.write_text(json.dumps({
                 "entries": [{

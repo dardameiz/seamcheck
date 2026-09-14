@@ -445,7 +445,7 @@ def _marks(graph: Graph, repo_root: str, *, persist: bool = False) -> list[Triag
     computes that answer without writing anything - a read must not write, which is what
     `seamcheck_check`/`seamcheck_report`'s MCP `readOnlyHint: True` annotation actually
     promises. This used to write unconditionally, so those two "read-only" tools could
-    silently dirty a git-tracked `seamcheck/triage.json` the moment a stale mark was found -
+    silently dirty a git-tracked `.seamcheck/triage.json` the moment a stale mark was found -
     exactly the trust break `readOnlyHint` exists to rule out for a client that skips
     confirmation on a read-only tool.
 

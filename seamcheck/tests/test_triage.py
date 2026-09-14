@@ -77,7 +77,7 @@ class TriagePersistenceTests(SimpleTestCase):
             save_triage([entry], tmp)
             self.assertEqual(load_triage(tmp)[0].expired, "2026-09-01")
 
-            path = pathlib.Path(tmp) / "seamcheck" / "triage.json"
+            path = pathlib.Path(tmp) / ".seamcheck" / "triage.json"
             data = json.loads(path.read_text())
             for item in data["entries"]:
                 item.pop("expired", None)

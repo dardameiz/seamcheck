@@ -3,7 +3,8 @@
 Plain `pre-commit` / `pre-push` shell scripts - not Claude-specific, not seamcheck-CLI-
 specific in their trigger - so they fire the same way whether a human typed `git commit`,
 an agent drove one through a shell tool, or any other program shelled out to git. They
-call back into THIS module (`python3 -m seamcheck.hooks <commit|push>`) rather than the
+call back into THIS module (`<sys.executable> <path/to/hooks.py> <commit|push>` - see
+`_hook_script`, not a bare `python3 -m seamcheck.hooks`) rather than the
 main `seamcheck` CLI, because the main CLI's `--scope` is JSON-only (the agent/CI
 contract every other query in `queries.py` already keeps) and a human staring at a raw
 JSON dump after every `git commit` is not what "a quick snapshot to imagine what's
@@ -23,17 +24,29 @@ import os
 import stat
 import sys
 
-_PRE_COMMIT_SCRIPT = """#!/bin/sh
-# Installed by `seamcheck --install-hooks`. Advisory only - never blocks the commit.
-python3 -m seamcheck.hooks commit
-exit 0
-"""
 
-_PRE_PUSH_SCRIPT = """#!/bin/sh
-# Installed by `seamcheck --install-hooks`. Advisory only - never blocks the push.
-python3 -m seamcheck.hooks push
-exit 0
-"""
+def _hook_script(mode: str) -> str:
+    """The literal shell script `install_hooks()` writes into `.git/hooks/<name>`.
+
+    Runs `sys.executable` (the interpreter that ran `install-hooks`, so it is
+    guaranteed to have seamcheck importable) directly against this file's own absolute
+    path - never a bare `python3 -m seamcheck.hooks`, which has two independent failure
+    modes: `python3` can resolve to a completely different interpreter that never had
+    seamcheck installed, and `-m` prepends the CURRENT WORKING DIRECTORY to `sys.path`
+    - so a hook that fires from inside a repo that happens to have a directory literally
+    named `seamcheck` (this tool's own reference project keeps a gitignored clone at
+    exactly that path) imports THAT directory as a namespace package instead of the real
+    one, and every call inside the hook silently does nothing.
+    """
+    verb = "commit" if mode == "commit" else "push"
+    python = sys.executable
+    script_path = os.path.abspath(__file__)
+    return (
+        "#!/bin/sh\n"
+        f"# Installed by `seamcheck --install-hooks`. Advisory only - never blocks the {verb}.\n"
+        f'"{python}" "{script_path}" {mode}\n'
+        "exit 0\n"
+    )
 
 
 def _summary(result: dict) -> str:
@@ -108,7 +121,7 @@ def install_hooks(repo_root: str = ".") -> str:
         )
 
     written, skipped = [], []
-    for name, script in (("pre-commit", _PRE_COMMIT_SCRIPT), ("pre-push", _PRE_PUSH_SCRIPT)):
+    for name, mode in (("pre-commit", "commit"), ("pre-push", "push")):
         path = os.path.join(hooks_dir, name)
         if os.path.exists(path):
             existing = ""
@@ -118,7 +131,7 @@ def install_hooks(repo_root: str = ".") -> str:
                 skipped.append(name)
                 continue
         with open(path, "w", encoding="utf-8") as handle:
-            handle.write(script)
+            handle.write(_hook_script(mode))
         mode = os.stat(path).st_mode
         os.chmod(path, mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
         written.append(name)

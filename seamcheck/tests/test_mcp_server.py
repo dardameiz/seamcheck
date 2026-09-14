@@ -61,7 +61,7 @@ class McpToolFunctionTests(SimpleTestCase):
             result = seamcheck_triage(GET_THING, "approved", repo_root=tmp, reason="fine")
 
             self.assertTrue(result["ok"], result["message"])
-            self.assertTrue((Path(tmp) / "seamcheck" / "triage.json").is_file())
+            self.assertTrue((Path(tmp) / ".seamcheck" / "triage.json").is_file())
 
     def test_scope_returns_a_well_formed_envelope(self):
         # This repo's own working tree, whatever it happens to hold staged right now -
@@ -155,7 +155,7 @@ class UndoTests(SimpleTestCase):
 
             self.assertTrue(result["ok"], result["message"])
             self.assertIn("raised again", result["message"])
-            data = json.loads((Path(tmp) / "seamcheck" / "triage.json").read_text())
+            data = json.loads((Path(tmp) / ".seamcheck" / "triage.json").read_text())
             self.assertEqual(data["entries"], [])
 
     def test_undo_on_a_symbol_never_marked_is_refused_without_a_scan(self):

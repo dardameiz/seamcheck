@@ -10,7 +10,15 @@ from enum import Enum
 
 from seamcheck.graph import Graph, Status, Symbol
 
-_TRIAGE_FILE = pathlib.Path("seamcheck") / "triage.json"
+_TRIAGE_FILE = pathlib.Path(".seamcheck") / "triage.json"
+# Where this lived before 2026-09-14. A bare `seamcheck/triage.json` collides with any
+# project directory literally named `seamcheck` (this tool's own reference project keeps
+# a gitignored clone at exactly that path) - imported as a namespace package, it shadows
+# the real one, and every write silently landed in the WRONG repository's working tree.
+# Read-only: `load_triage` falls back here so existing marks are not stranded, and the
+# next `save_triage` (every caller loads before it saves - see api.py) naturally migrates
+# them to the new path without an explicit migration step.
+_LEGACY_TRIAGE_FILE = pathlib.Path("seamcheck") / "triage.json"
 
 # Statuses a human can act on. APPROVED is the only one that silences a finding; a
 # CONFIRMED finding is a real bug someone has acknowledged, and must keep blocking.
@@ -102,7 +110,10 @@ _ENTRY_FIELDS = frozenset(f.name for f in dataclasses.fields(TriageEntry))
 def load_triage(repo_root: str) -> list[TriageEntry]:
     path = pathlib.Path(repo_root) / _TRIAGE_FILE
     if not path.is_file():
-        return []
+        legacy = pathlib.Path(repo_root) / _LEGACY_TRIAGE_FILE
+        if not legacy.is_file():
+            return []
+        path = legacy
     data = json.loads(path.read_text(encoding="utf-8"))
     return [
         # Unknown keys dropped rather than raising: a file written by a newer seamcheck
