@@ -2395,3 +2395,119 @@ on `main`.
 - `comboValue`: its note, "writers of a missing element", is exactly right.
 
 **Counts:** 110 findings · 84 right · 26 wrong (F44) · 0 introduced by the commits under test.
+
+## T9-T13, F43, F44 — IMPLEMENTED (2026-09-14): hooks/cache/gitignore fixes, four of six false-positive classes
+
+Six commits, each tested against this repo's own suite and (where the finding named a real
+pointlessbutton file/line) verified against a fresh `--refresh` scan of this project directly,
+not synthetic fixtures.
+
+**T9 — hooks broken outside the venv + triage path collision.** `install_hooks()` wrote
+`python3 -m seamcheck.hooks <mode>` into `.git/hooks/pre-commit`/`pre-push`; a bare `python3`
+can resolve to an interpreter with no seamcheck installed, and `-m` prepends the hook's CWD to
+`sys.path`, so a repo with a directory literally named `seamcheck` (this project's own
+gitignored reference clone) shadowed the real package. Hooks now embed `sys.executable` and run
+the module by its own absolute path. `triage.json` had the identical collision under the same
+name; it now defaults to `.seamcheck/triage.json`, with `load_triage()` falling back to the old
+path so existing marks migrate on the next save rather than being stranded.
+
+**T10 — hooks invalidated their own scan cache; ast.parse warnings pointed at the wrong file.**
+`hooks._run()` imported and scanned without `quiet()`, so the host's own startup logging wrote a
+fresh file (`django.log`) on every hook run; the scan cache's freshness walk saw that as the
+newest input and forced a cold scan every commit/push (measured ~60-70s instead of a ~12s cache
+hit). Wrapped in `quiet()` now. `scoped_findings()` also checked `changed_files()` AFTER
+`cached_scan()`; reordered so "nothing staged" skips the scan entirely. Eight `ast.parse()` calls
+across the extractors now pass `filename=`.
+
+**T13 — `check --format json` exited 3 with nothing printed on a real-sized graph.** It fell into
+`api.report()`'s whole-graph JSON renderer, which hit its own size gate (75 MB on
+pointlessbutton) before the CI verdict was ever computed. Now prints `api.check()`'s own digest
+(passed/new_unresolved/counts/...) as JSON on both CLI doors - verified directly against this
+project: previously reproduced the exact failure (exit 3, nothing printed); now exits through
+the normal `gate_code()` ladder with the verdict printed (exit 1, 1992 unresolved + 1388 unused,
+`passed: false`).
+
+**F43 — gitignored one-off scripts fed both the scan and the cache's freshness walk.** New
+`seamcheck.gitfiles.tracked_files()` asks `git ls-files --cached --others --exclude-standard`
+directly rather than re-parsing `.gitignore` by hand, and both `find_js_files` (the JS fallback
+walk) and `scancache._scan_tree` (the freshness walk) now honour it, falling back to unfiltered
+(never to "find nothing") outside a git repo. Verified directly: `find_js_files('.')` on
+pointlessbutton now returns 0 files under `OTHER/` (previously the source of F43's own evidence,
+including `OTHER/seo/cards_check.mjs` naming itself a writer of `achievementsCard`) - gone as a
+side effect, no separate fix needed for F44 class 5.
+
+**F44 — four of six false-positive classes fixed, one deferred, one not reproducible:**
+- **Class 1 (setAttribute/removeAttribute/toggleAttribute, and a `const` name, as producers) —
+  fixed.** `_definitions_in`'s setAttribute-for-data branch reused `_DATA_NAME_RE` (built for a
+  BARE string found anywhere in source, "two segments minimum") - reused here it silently
+  excluded every single-word data attribute (`data-active`, `data-state`, `data-completed`), so
+  each one's own setAttribute call stayed reported as an unresolved READ. Now uses the same loose
+  check the read side already did. `removeAttribute`/`toggleAttribute` never contributed a
+  definition at all; both now do. Neither direction resolved a `const NAME = 'literal'` binding
+  (`setAttribute(BUSY, ...)` where `BUSY` is a variable) - new `_const_string_bindings`/
+  `_resolved_string` do, on both the read and definition sides. Verified: `button_manager.js:
+  689/943` (`setAttribute('data-active', 'true')`, F44's own example) - both `dom_selector:data:
+  active` unresolved findings gone after a fresh scan; `arena_band.js` (the `const BUSY` example)
+  now scans to 0 findings.
+- **Class 2 (CSS escapes) — fixed.** `_TOKEN_RE`'s class/id token was plain `[\w-]+`, truncating
+  at a CSS escape (Tailwind's `.p-0\.5`) - now escape-aware and unescaped with the same pattern
+  `css_extractor.py`'s `_SELECTOR_TOKEN_RE`/`_CSS_ESCAPE_RE` already use on the CSS side.
+- **Class 3 (multi-writer keyed on name, not name+value) — deferred, not implemented.** Fixing
+  this without breaking the general `dom_attr`↔`dom_selector` connectivity matcher (which keys
+  `[data-x="y"]` selectors on the attribute NAME alone by design, to match a template's
+  attribute-EXISTENCE claim) needs the VALUE threaded through `detect_multi_writers` specifically
+  - `Symbol` has no value field, and widening `.label` to `name=value` for ALL data-attribute
+  selectors would break every existing name-only connectivity match. Real, but a larger, separate
+  change than this pass's other fixes; left as an open item.
+- **Class 4 (last compound in a scoped/descendant query) — fixed, for the compound-selector
+  case.** A descendant selector (`.nav-right .pbits-amount`) had every compound counted as
+  written; new `_last_compound` narrows a WRITE selector to its last compound before tokenizing.
+  Reads keep the existing full segment-presence match (a stated v1 limitation for connectivity,
+  a different and looser question). Verified: purchase_button.js's `multi_writer_element:
+  nav-right` finding (F44's own example) gone after a fresh scan. F44's THIRD class-4 example
+  (`.text`) is confirmed NOT fixed by this, and is a different problem: two files each call
+  `.querySelector('.text')` off a different PARENT ELEMENT VARIABLE, not a combinator string -
+  a data-flow question ("are these two parents the same component") this tool has never
+  attempted to answer.
+- **Class 5 (test/gitignored files counted as writers) — resolved as a side effect of F43,**
+  see above; no separate code change needed.
+- **Class 6 (dataset camelCase→kebab-case in note text) — examined, could not reproduce.**
+  `push_arena.html`'s `data-base-achieved`/`data-base-total` (F44's own example) have no JS
+  reader anywhere in the project (grepped the whole tree) - `_dataset_name()`'s camelCase→kebab
+  mapping already looks correct on inspection, and the current `dom_attr|unused` note text does
+  not mention a "template gap". Left as-is rather than guessing at a fix with nothing to verify
+  it against.
+
+Re-measure whenever pointlessbutton scans this again - all four fixed classes were verified
+against real findings in this project directly, not synthetic fixtures, but the corpus-wide
+count (26 wrong of 110, F44's own headline number) is pointlessbutton's to re-take.
+
+## T14 — `install-hooks` writes `.git/hooks/`, but git reads hooks from `core.hooksPath` when one is set (husky), so the hooks never run
+
+**Evidence (pointlessbutton, 2026-09-14):**
+
+```
+$ git config --get core.hooksPath
+.husky/_
+$ git rev-parse --git-path hooks
+.husky/_
+```
+
+- `seamcheck install-hooks` wrote `.git/hooks/pre-commit` and `.git/hooks/pre-push` (both carry the marker line), and they exist.
+- Git never looks there, because husky v9 sets `core.hooksPath=.husky/_`.
+- Commit `ee7318d3c` (214 files, same day) printed husky's lint-staged output and **no seamcheck summary**.
+- The T10 timings were taken by running the hook files by hand (`sh .git/hooks/pre-commit`), not by git.
+- The project's CLAUDE.md now documents the hooks as installed and running. In practice nothing runs.
+
+**Why it was missed:** `install_hooks()` builds the path as `os.path.join(repo_root, ".git", "hooks")` and never asks git where hooks
+live. It also returns "Installed: pre-commit, pre-push." as if they were live.
+
+**Fix:**
+- Resolve the directory with `git rev-parse --git-path hooks`. That respects `core.hooksPath`, worktrees and submodules, which the
+  current code already warns about.
+- When the resolved path is husky's `.husky/_` (regenerated by husky), do not write into it. Tell the user to add
+  `python3 -m seamcheck.hooks commit` to `.husky/pre-commit`, or offer to append it.
+- Print which directory git will actually execute.
+
+**False-positive cost:** none. Husky or lefthook or a custom `core.hooksPath` is common in JS and mixed repos, which is exactly this
+project's shape. T9 and T10 still apply once the hook really runs: bare `python3`, and a 60–70 s cold scan per commit.

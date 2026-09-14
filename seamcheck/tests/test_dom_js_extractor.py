@@ -199,6 +199,73 @@ class AttributeWritesAreDefinitionsTests(SimpleTestCase):
         self.assertIn(("data:read", "ab-busy"), rows)
 
 
+class SelectorCompoundTests(SimpleTestCase):
+    """F44 classes 2 and 4: what a compound/combinator selector string resolves to."""
+
+    def _write(self, text: str) -> str:
+        import tempfile
+        import textwrap
+
+        path = Path(tempfile.mkdtemp()) / "app.js"
+        path.write_text(textwrap.dedent(text), encoding="utf-8")
+        return str(path)
+
+    def test_an_escaped_dot_in_a_class_name_is_unescaped(self):
+        # Tailwind spells `p-0.5` as `.p-0\.5` in a selector - CSS's own escape for a
+        # character that would otherwise end the class token early. The naive
+        # `[\w-]+` this replaced stopped at the backslash and reported the write as
+        # `p-0`, which the CSS side (already unescaped, via the same pattern
+        # css_extractor.py uses) never defines.
+        #
+        # Two backslashes in this Python source: one JS-level escape (so the JS string
+        # literal's COOKED value keeps a real `\.`, exactly as a developer typing
+        # `.p-0\.5` in actual JS source would produce - a single `\.` here would be
+        # dropped by JS's own string-cooking before this extractor ever sees it).
+        found = extract_dom_selectors([self._write(r"""
+            function toggle(el) {
+              document.querySelector('.rounded-full.p-0\\.5').classList.add('active');
+            }
+        """)], [])
+        self.assertIn(("class:write", "p-0.5"), [(s.sub, s.label) for s in found])
+        self.assertNotIn("p-0", [s.label for s in found])
+
+    def test_a_descendant_selector_write_targets_only_the_last_compound(self):
+        # `.nav-right .pbits-amount` names an ancestor SCOPE and the element itself -
+        # only the element matching `.pbits-amount` is ever returned by querySelector,
+        # and only it is ever the node a following assignment mutates. Attributing the
+        # write to `.nav-right` too reported an ancestor scope as written.
+        found = extract_dom_selectors([self._write("""
+            function updatePrice(el) {
+              document.querySelector('.nav-right .pbits-amount').textContent = '5';
+            }
+        """)], [])
+        labels = [s.label for s in found if s.sub.endswith(":write")]
+        self.assertEqual(labels, ["pbits-amount"])
+
+    def test_a_descendant_selector_read_still_sees_every_compound(self):
+        # Reads keep the looser, existing segment-presence behaviour - connectivity
+        # matching already treats that as a stated v1 limitation, a different and
+        # looser question than "which element does this write actually touch".
+        found = extract_dom_selectors([self._write("""
+            function checkPrice(el) {
+              return document.querySelector('.nav-right .pbits-amount').textContent;
+            }
+        """)], [])
+        labels = sorted(s.label for s in found if s.sub.endswith(":read"))
+        self.assertEqual(labels, ["nav-right", "pbits-amount"])
+
+    def test_a_single_compound_with_two_classes_is_unaffected(self):
+        # No combinator here at all - both classes belong to the SAME element, and
+        # narrowing to "the last compound" must not narrow this any further.
+        found = extract_dom_selectors([self._write("""
+            function toggle(el) {
+              document.querySelector('.rounded-full.active-state').classList.add('x');
+            }
+        """)], [])
+        labels = sorted(s.label for s in found if s.sub.endswith(":write"))
+        self.assertEqual(labels, ["active-state", "rounded-full"])
+
+
 class NamedInAConstantTests(SimpleTestCase):
     """`var COUNTDOWN_ID = 'arena-next-season-countdown'` then `getElementById(ID)`.
 

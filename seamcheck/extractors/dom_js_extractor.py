@@ -72,7 +72,45 @@ _WRITE_METHODS = frozenset(
 )
 _WRITE_NAMESPACES = frozenset({"style", "dataset", "classList"})
 
-_TOKEN_RE = re.compile(r"#([\w-]+)|\.([\w-]+)|\[data-([\w-]+)")
+# Escape-aware: `(?:\\.|[\w-])+` accepts a backslash-escaped character (CSS's own way of
+# putting a `.`, `:`, `/`, `[` or `]` INSIDE a token, which is how Tailwind spells a
+# fractional or variant class - `p-0.5` as `.p-0\.5`) wherever a bare token character
+# would go, the same pattern `css_extractor.py`'s `_SELECTOR_TOKEN_RE` already uses. The
+# naive `[\w-]+` this replaced stopped at the backslash, so `.rounded-full.p-0\.5`
+# reported a write to `p-0` - a class the CSS side, which does unescape, never defines.
+_TOKEN_RE = re.compile(r"#((?:\\.|[\w-])+)|\.((?:\\.|[\w-])+)|\[data-([\w-]+)")
+_CSS_ESCAPE_RE = re.compile(r"\\(.)")
+
+# The last compound in a descendant/combinator chain - split on whitespace or a
+# combinator OUTSIDE `[...]` (an attribute value may itself contain a space).
+_COMBINATOR_RE = re.compile(r"\s*[>+~]\s*|\s+")
+
+
+def _last_compound(raw: str) -> str:
+    """The compound a query or a write actually resolves to, in a multi-part selector.
+
+    `.nav-right .pbits-amount` names an ancestor SCOPE and the element itself - only the
+    element matching `.pbits-amount` is ever returned by `querySelector`, and only it is
+    ever the node a following `.textContent = x` mutates. Treating every compound in the
+    chain as written reported `.nav-right` (the ancestor) as a writer of an unrelated
+    element too - 3 of F44's multi-writer findings, one of them `.text` matched under two
+    different, unrelated parents that happen to share only this last segment.
+
+    Not a CSS combinator parser: splits on the first top-level whitespace/combinator
+    outside brackets, which is enough for the shapes seen (`.a .b`, `.a > .b`) without
+    reimplementing selector grammar.
+    """
+    text = raw.strip()
+    depth = 0
+    boundary = 0
+    for i, ch in enumerate(text):
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth = max(0, depth - 1)
+        elif depth == 0 and ch in " \t\n>+~":
+            boundary = i + 1
+    return text[boundary:].strip() or text
 
 
 # `[data-tab="${x}"]` and `'[data-tab="' + x + '"]'` - the attribute name is static even
@@ -92,16 +130,24 @@ def _partial_attr_names(node: dict) -> list[str]:
     return sorted(set(_PARTIAL_ATTR_RE.findall(text)))
 
 
-def _selector_tokens(callee_name: str, raw: str) -> list[tuple[str, str]]:
-    """(sub, label) pairs a selector string pins down."""
+def _selector_tokens(callee_name: str, raw: str, *, write: bool = False) -> list[tuple[str, str]]:
+    """(sub, label) pairs a selector string pins down.
+
+    `write=True` narrows a multi-compound selector to its LAST compound first - see
+    `_last_compound`. Reads keep the full segment-presence match: `match_dom_selectors`
+    already treats that as a stated v1 limitation for connectivity (is this class used
+    ANYWHERE), which is a different, looser question than "which element does this
+    write actually touch".
+    """
     if callee_name == "getElementById":
         return [("id", raw)] if raw else []
+    text = _last_compound(raw) if write else raw
     tokens: list[tuple[str, str]] = []
-    for element_id, class_name, data_name in _TOKEN_RE.findall(raw):
+    for element_id, class_name, data_name in _TOKEN_RE.findall(text):
         if element_id:
-            tokens.append(("id", element_id))
+            tokens.append(("id", _CSS_ESCAPE_RE.sub(r"\1", element_id)))
         elif class_name:
-            tokens.append(("class", class_name))
+            tokens.append(("class", _CSS_ESCAPE_RE.sub(r"\1", class_name)))
         elif data_name:
             tokens.append(("data", data_name))
     return tokens
@@ -329,7 +375,7 @@ def _dom_selectors_in_uncached(path: str, ast_root: dict, line_offset: int = 0) 
             continue
 
         raw = first["value"]
-        for sub, label in _selector_tokens(callee_name, raw):
+        for sub, label in _selector_tokens(callee_name, raw, write=access == "write"):
             symbols.append(
                 Symbol(
                     id=f"dom_selector:{sub}:{label}:{path}:{line}", kind="dom_selector",
