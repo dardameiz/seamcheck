@@ -2131,3 +2131,267 @@ parallel to `check`'s own).
 focus script) and `test_autoconfig.py`/`test_js_extractor.py` were untouched by this entry
 (those belong to F37, above). Full suite: 1657 passed, the one pre-existing unrelated
 failure. `ruff check` clean on the whole package.
+
+---
+
+## Run 2026-09-14 — hooks, `scope push` and `check --since` on two unreleased commits, every finding checked by hand
+
+pointlessbutton `development` was two commits ahead of `preprod`: `c42e05a36` (docs) and `4c6e128cc` (a
+feature, ~600 lines of code plus plans and `.po` files). seamcheck: editable install at `e3c857380`.
+Ran, in order: both installed git hooks, `seamcheck scope push`, `seamcheck backfill 1 --backfill-ref
+adfa6f0a5` (the preprod tip had no snapshot), `seamcheck check --since adfa6f0a5`, `seamcheck diff --since
+adfa6f0a5`. Then every one of the 110 findings `scope push` reported was checked against the source with
+an exact producer search (templates, `pointless/static`, views, services; build output and `.min.js`
+excluded). Result: **84 right, 26 wrong**, and **0 of the 32 "new since baseline" findings came from the
+two commits**.
+
+Triage marks were NOT written — see T9 for why.
+
+## T9 — the hooks run a bare `python3`, and a host directory named `seamcheck/` shadows the package
+
+**Evidence.** `.git/hooks/pre-commit` is `python3 -m seamcheck.hooks commit`. With the project venv not
+on `PATH` (a GUI git client, a terminal that did not `source venv/bin/activate`), `python3` is
+`/opt/homebrew/bin/python3`, and:
+
+```
+$ env -i PATH=/opt/homebrew/bin:/usr/bin:/bin python3 -c "import seamcheck.hooks"
+ModuleNotFoundError: No module named 'seamcheck.hooks'
+```
+
+This repo root holds a gitignored `seamcheck/` directory (a stale clone of the tool, `.gitignore:147
+/seamcheck/`). From the repo root it imports as a namespace package (`seamcheck.__file__` is `None`), so
+even an interpreter that had seamcheck installed would pick the wrong thing up. The hook prints a
+traceback and exits 0, so it silently does nothing for every commit made outside the venv.
+
+**The same collision, second symptom.** `triage._TRIAGE_FILE = seamcheck/triage.json`. In this repo that
+path is inside the nested clone: `git -C seamcheck status` → `?? triage.json` (3,608 B, 2026-09-07). The
+marks are tracked by neither repository, although `triage.py` calls triage.json "a checked-in file".
+Writing new marks today would have put them into another repository's working tree.
+
+**Fix.** Write `sys.executable` (the interpreter that ran `install-hooks`) into the hook, and run it with
+`-P` (3.11+, do not prepend the cwd) or from outside the repo root. Give triage a configurable path, or a
+dotted directory (`.seamcheck/triage.json`) that cannot collide with a folder named after the tool.
+False-positive cost: none.
+
+## T10 — the hooks skip `quiet()`, so the host's startup log invalidates the scan cache on every commit
+
+**Evidence** (53,091-symbol graph, same tree, back to back):
+
+| run | wall | scan cache |
+|---|---|---|
+| pre-commit hook, **nothing staged** | 62.8 s (user 59.8) | miss |
+| pre-push hook, 2 unpushed commits | 72.2 s (user 71.0) | miss |
+| `seamcheck scope push`, right after | ~12 s | hit (`cost.cached: true`, `scan_seconds: 0.0`) |
+
+**Why.** `hooks._run()` calls `setup_django_if_any()` and `api.scoped_findings()` without
+`quiet.quiet()`. The host's `AppConfig.ready()` logs WARNING lines (`[AUTH_CACHE] ModelBackend.get_user
+monkey-patched…`) to stdout AND to its file handler, `django.log` in the repo root. Those lines are
+stamped `15:02:39` and `15:03:41` in `django.log`, the two hook starts, with nothing at `15:04:53` or
+`15:06:29`, the two CLI runs, which are quieted. `_scan_tree()` walks every file, including the untracked
+and gitignored `django.log`, so `latest_input_mtime_ns` is newer than the cache entry and every hook run
+scans cold.
+
+Three smaller things in the same path:
+- `scoped_findings()` calls `cached_scan()` before `changed_files()`, so "nothing staged" still pays the
+  full scan.
+- Hook output carries the host noise the CLI hides: 2× `RuntimeWarning: Accessing the database during app
+  initialization`, 3 WARNING log lines, and `<unknown>:67: SyntaxWarning: invalid escape sequence '\{'`
+  twice. That warning is unattributed because several extractors call `ast.parse()` without `filename=`
+  (`filetree.py:34`, `pagenames.py:60`, `callgraph.py:125`, `env_extractor.py:153`,
+  `url_reference_extractor.py:128`, …). The file is a gitignored one-off, `OTHER/cps_verify.py:67`.
+- The page line lists every touched feature inline: `push-arena-main (achievementCountMobile, …)`, 35 ids
+  in one parenthesis.
+
+**Fix.** Wrap `_run` in `quiet()`. Resolve `changed_files` before scanning and return early when empty.
+Leave untracked and gitignored files out of the freshness walk (see F43). Pass `filename=` to `ast.parse`.
+
+## T11 — snapshots spell some ids with `./` and the live scan does not, so `--since` compares twins
+
+This is T1's class ("0.8.0 fixed `./x.js` vs `x.js`") surviving in the **id**, not the `file` field.
+
+**Evidence.**
+- `:./` inside ids: snapshot `adfa6f0a5` (from `backfill`, `api.scan(".")`) **2,725**. Snapshots written
+  by `write_map`: **2,733** (09-12 18:58), **2,654** (09-12 11:37), **1,160** (08-31). The cached HEAD
+  graph, where `cached_scan` resolves the root to an absolute path: **0**.
+- One symbol, twice, in the snapshot (both have the plain `file` field):
+  `dom_attr:id:quarantine-modal:./pointless/static/pointless/utils/quarantine_manager.js:101` and
+  `dom_attr:id:quarantine-modal:pointless/static/pointless/utils/quarantine_manager.js:101`. Edges on
+  that line: 16 in the snapshot, 6 live.
+- Symbols per file, snapshot vs live: `store.js` 875/456, `stripe_payment.js` 312/160,
+  `quarantine_manager.js` 114/58, `button_manager.js` 149/76. Totals: 51,999 symbols and **169,130**
+  edges vs 53,091 and **126,054**.
+- **The twins connect to each other.** `getElementById('particles-js')` (`push_arena.js:1728`) has zero
+  producers in any template or script. In the snapshot its `./` twin and its plain twin are joined by an
+  edge with status `connected` and note "Reached from the markup itself - a label, an ARIA
+  relationship…". Every snapshot therefore says `connected`; the live scan says `unresolved`. Same for
+  `purchasePopup` ×4, `lostStreakBtn` ×2 and `quarantine-modal`.
+
+**Impact on this push.** `seamcheck diff --since adfa6f0a5`: appeared **7,066**, vanished **5,974**,
+changed **100**. Classified by hand:
+- 4,962 of the appeared are line moves (T12).
+- 1,988 are in gitignored directories (F43).
+- **1,012 vanished from 10 files the commits never touched**: `store.js` 432, `stripe_payment.js` 151,
+  `store_page.js` 115, `push_store.js` 86, `button_manager.js` 73, `supporter_badge_buy.js` 64,
+  `quarantine_manager.js` 55, `store_user_data.js` 12, `auth_page.js` 11, `cookie_consent.js` 10. These
+  are the `./` twins.
+- **60** `dom_selector connected → unresolved`, all in untouched files. 22 of them are among the 110 live
+  findings below, which is how a stale "connected" baseline turns into a "new" finding.
+
+`seamcheck check --since adfa6f0a5` exited 1 with **32 new**:
+- 7 are gitignored one-offs (F43).
+- The other 25 are elements that existed before both commits (push_arena.html ids, `push_arena.js:146`),
+  none of them on a line either commit added.
+
+I did not trace why each of the 25 reads as new. Line moves and twin-connected baselines are the two
+mechanisms measured in this diff.
+
+**Fix.** Normalise the path once, before any id is built (the `file` field already is). Bump the snapshot
+schema, or rewrite `./` ids on load. Never let an edge join two symbols whose ids differ only in path
+spelling.
+
+## T12 — ids embed the line number, so any insertion re-ids everything below it
+
+**Evidence.** Of the 7,066 appeared symbols in the diff above, **4,962** have an identical
+`(kind, label, file, status)` among the vanished. They only changed line: two lines went into
+`push_arena.html` (a `json_script` island and one `<script src>`), and two into `gdpr_service.py`.
+`check` absorbs most of this (32, not thousands); `diff` does not.
+
+**Ask.** Match across snapshots on `(kind, label, file, sub, owner/snippet)` and use the line only as a
+tie-breaker. Or anchor ids to content rather than position.
+
+## T13 — `check --format json` exits 3 and prints nothing
+
+**Evidence.** `seamcheck check --since adfa6f0a5 --format json` → exit **3**, stderr: "The whole graph is
+75.0 MB (~18,739,500 tokens). Refusing to print it." `help check` documents 0/1/2 only. For `check`,
+`--format json` means "the whole graph", not "the verdict". An agent asking the gate for machine-readable
+output gets neither the verdict nor a documented exit code. The markdown digest carried the useful
+content (32 new, 16 resolved, 3 outlived marks).
+
+**Ask.** Make `check --format json` emit the digest as JSON, or document exit 3 in `help check` and point
+to `sarif`.
+
+## F43 — the working-tree scan reads gitignored directories; `backfill`'s worktree cannot
+
+So the two sides of `--since` scan different projects, and gitignored one-offs also leak into live
+findings.
+
+**Evidence.**
+- **1,988** symbols appeared only because the working tree has gitignored directories: `OTHER/seo` 646,
+  `OTHER/_archive` 263, `OTHER/navbar-mob` 263, `docs/maps` 262, `OTHER/management_commands_archived`
+  218, `OTHER/divisions-redesign` 56. None of them can exist in a fresh `git worktree`.
+- **7 of `check`'s 32 new** are these: `pps-technique-chip` `OTHER/seo/arena_tech.mjs:60`; `pps-tapmap`,
+  `pps-tapmap-wrap` and `pps-tapmap-caption` in `OTHER/seo/cps_final.mjs`; `bcr-strip`
+  `OTHER/seo/row_after_equip.mjs:12`; `clicks-tiles`/`box` in `OTHER/seo/strip_check.mjs`;
+  `/api/admin/regression/set-user-stats/` `OTHER/_archive/oneoff_scripts/bt10-harness.js:40`.
+- **In live findings:** `multi_writer_element achievementsCard` names its writers as `cards_check.mjs,
+  push_arena.js`. `cards_check.mjs` is `OTHER/seo/cards_check.mjs`, a one-off Playwright probe
+  (`.gitignore:100 OTHER/`). The project's own convention is that `OTHER/` holds one-off scripts.
+- `django.log` (T10) is the same gap seen from the cache side.
+
+**Lens.** Build both the scan input and the `_scan_tree` freshness walk from `git ls-files --cached
+--others --exclude-standard`, so .gitignore is honoured by default. Opt-in config for a project that
+really keeps read code in an ignored directory.
+
+**False-positive class it would create:** generated code that is gitignored but imported (a local build
+dir). Rare here; opt-in covers it.
+
+## F44 — 26 of 110 live findings wrong, in six classes (checked one by one)
+
+Scope: the four pages `scope push` resolved (`main` 18, `push-arena-main` 92, `harness` 0,
+`journey_progress` 0).
+
+| # | class | findings | live, working code flagged? | example (unedited) |
+|---|---|---|---|---|
+| 1 | a data-attribute **write**, or a string constant, reported as an unresolved **read** (`sub=data:read`, note "Reads a data attribute") | 16 | 3 yes, 13 dead or write-only anyway | `button_manager.js:689` `setAttribute('data-active', 'true')` → `dom_selector active`, snippet `setAttribute('data-active')` |
+| 2 | CSS escape not unescaped | 1 | yes | `push_arena.js:609` `querySelector('.rounded-full.p-0\\.5')` → `dom_selector 5`, `sub=class:write` |
+| 3 | multi-writer keyed on the attribute **name**, not name+value | 1 | yes | `speed_tap.js:1428` `[data-stat="ultimate_best_pps"]` → "Writers: speed_tap.js, stats_manager.js, … push_arena.html" (9 files, each a different `data-stat` value) |
+| 4 | multi-writer from a scoped or descendant query | 3 | yes | `purchase_button.js:406` `.nav-right .pbits-amount` → reported as a writer of `.nav-right` |
+| 5 | multi-writer counting a non-product file as a writer | 2 | yes | `quarantine-modal` → "Writers: 02_playwright_e2e_anti_cheat.spec.ts, quarantine_manager.js" (`docs/audits/_legacy/2026-04-regression-suite/…`) |
+| 6 | the note contradicts the evidence | 3 | no (status right) | `push_arena.js:142` `dataset.baseAchieved = …` → "No template renders it" |
+
+**Class 1 in detail.**
+- Live and working, flagged anyway:
+  - `arena_band.js:199`/`:200` `setAttribute`/`removeAttribute('data-state')`, consumed by
+    `arena-band.css:156-157` `.ab-buy-status[data-state="ok"]`.
+  - `arena_band.js:31` `const BUSY = 'data-ab-busy'`. The literal itself is reported. The attribute is set
+    at `:205` `setAttribute(BUSY, '1')`, read at `:67` `hasAttribute(BUSY)` and cleared at `:281`, all
+    through the identifier.
+- Mislabelled (the code is dead or write-only regardless):
+  - `data-active` ×2 and `data-segment` (`unlimited.js:247`): written, read nowhere, so they should be an
+    `unused` attribute.
+  - `data-completed` ×9: 7 writes (`push_arena.js:903/990/1501`, `stats_manager.js:1422/1424/4301/4307`)
+    and 2 reads (`push_arena.js:924` `getAttribute`, `stats_manager.js:4291` `hasAttribute`) whose writers
+    are those same files. The `.goals-card` they all target has 0 producers.
+  - `data-goal-celebrated` (`push_arena.js:989`): only ever removed.
+- **Lens:** treat `setAttribute`/`removeAttribute`/`toggleAttribute`/`dataset.x =` as producers, and join
+  `getAttribute`/`hasAttribute`/`dataset.x` reads to them. Resolve a `const` string passed as the first
+  argument.
+
+**Class 2.** Tailwind's `p-0.5` is written `p-0\.5` in a selector. Unescape `\.` `\:` `\/` `\[` `\]` before
+splitting compounds. Only 1 finding here, but every fractional or variant Tailwind class used in a
+selector will hit it.
+
+**Class 4, all three:**
+- `text`: `button_manager.js:249` `buttonInfo.querySelector('.text:not(.price):not(.owned)')` and
+  `purchase_button.js` query `.text` under different parents.
+- `nav-right`: the written element is the last compound, `.pbits-amount`, which is already its own finding.
+- `price-amount`: `purchase_button.js:183` `popup.querySelector` where `popup` is `#purchasePopup`, which
+  nothing produces, so that branch is dead. `push_store.js:449` `this.popup` is a different popup. The
+  `comboValue`-style note ("writers of a missing element … every one of these branches is dead") would
+  have been exactly right here.
+- **Lens:** the written element is the last compound; queries on different roots are different elements
+  unless the roots resolve to the same node.
+
+**Class 5, the other one:** `achievementsCard` ← `OTHER/seo/cards_check.mjs` (F43). **Lens:** leave
+test/spec/fixture patterns and ignored files out of writer sets.
+
+**Class 6.** `push_arena.html:759, 2230, 2240, 2705` render `data-base-achieved` and `data-base-total`.
+Nothing reads them, so `unused` is right, but the note sends the reader looking for a template gap that
+does not exist. **Lens:** map `dataset` camelCase to kebab-case when joining to template attributes.
+
+## F45 — seamcheck was RIGHT on 84 of the same 110 (confirmed; `genuinely-dead` in spirit, not marked — T9)
+
+**What the page scope bought:** 110 items on the pages a push touched, instead of the repo-wide backlog
+(`check` lists 1,755 unreached template elements and 1,135 unreferenced selectors). Every one of these 84
+held up.
+
+**Reads with zero producers (verified by exact id/class/attribute regex):** 60 on `push-arena-main` and 7
+on `main`.
+- **`stats_manager.js`, 30:** `.detonator-highlight`, `.energy-field`, `.timer-display`,
+  `.quantum-button`, `.goal-bar .progress`, `.leaderboard-entry`, `#top-person`, `#top-country`,
+  `.pps-wrapper`, `.speed-gauge-fill[data-gauge]`, `.speed-particles`, `[data-formula-multiplier-value]`,
+  `[data-formula-team-wrap]`, `#dailyProgressBar` (+`dataset.max`), `#celebrationGlow`, `.button-grid`,
+  `#push-button`, `.special-button`, `[data-progress-bar]`, `[data-streak-progress-bar]`,
+  `[data-level-progress-bar-1/2]`, `[data-mobile-level-progress-bar-1/2]`, `[data-modal-level-number]`.
+  The template renders only the `data-mobile-daily-progress-bar` / `data-mobile-streak-progress-bar`
+  twins.
+- **Elsewhere in the arena:** `push_arena.js` `#particles-js`, `#lazyModeButton(Flash)`, `.button-option`;
+  `purchase_button.js` `#purchasePopup` ×4 plus `dataset.requirement`/`tooltip`; `prominent_counters.js`
+  `#solidComboCounter`/`#solidPpsCounter`; `guides.js` `#levelsInfoButton`/`#statsInfoButton`;
+  `league_switcher.js` `#mobile-league-current`; `reset_countdown.js` `#resetCountdown`,
+  `.daily-reset-notification`, `.blue-notification`; `sidebar.js` `.sidebar-overlay`;
+  `arena_page_scripts.js` `.consistency-streak`/`-time-remaining`; `hourly_streak_manager.js`
+  `#lostStreakBtn` ×2; `push_store.js` `.pbits-value`; `background.js` `.background`.
+- **On `main`:** `button_manager.js` `.custom-background`; `brick_smash.js` `.blockbuster-preview` (the
+  dead half of an `A || B`); `.ice-hockey-sound-toggle`, `.tennis-sound-toggle`, `.sketch-sound-toggle`,
+  `.ski-sound-toggle` ×2. `BaseButton.createSoundToggle` makes `.button-sound-toggle` and stops the
+  click's propagation, so those four guards are dead, not a live push-through.
+
+**Also right:**
+- `--tapmap-fill`: read through `getComputedStyle`, defined in no stylesheet, so the replay's "fill" mode
+  can never switch on.
+- `--ribbon-phase`, `data-fish-size`, `data-fish-speed`: written, read nowhere.
+- The two `fetch_target` `preview.svg` findings: the files are missing, and the `initPreview()` that
+  references them is never called.
+- `dead_region createSpeedParticles`.
+
+**Multi-writer, confirmed real (10):**
+- `blockedReason`, `blockedTimeRemaining`, `blockedNote`, `blockedNoteContainer` and `modal-content`: an
+  inline fallback in `push_arena.html` duplicates `showBlockedModal` from `push_arena.js`.
+- `stat-label`: `stats_manager.js:2135` plus an inline script at `push_arena.html:1373/1379`.
+- `mobile-current-streak`: `hourly_streak_manager.js:79` plus `arena_inline_boot.js:678`.
+- `profile-avatar`: `push_arena.js:3307` plus `arena_modals_boot.js:129`, on the same page.
+- `pbits-amount`: 11 writer files, although the project names `pbits_dom.js` as the canonical one.
+- `comboValue`: its note, "writers of a missing element", is exactly right.
+
+**Counts:** 110 findings · 84 right · 26 wrong (F44) · 0 introduced by the commits under test.
