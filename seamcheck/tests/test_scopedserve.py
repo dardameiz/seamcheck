@@ -63,6 +63,35 @@ class ServingTests(SimpleTestCase):
         self.assertTrue(any("http://127.0.0.1:12345/tok" in line for line in lines))
         server.serve_forever.assert_called_once()
 
+    def test_the_served_map_is_given_sources_so_view_code_can_fetch_a_real_file(self):
+        # Regression: serve_addresses used to be called with no `sources=` at all, so
+        # the served map's "view code" panel could never fetch a file's real contents
+        # (serve.py's /source endpoint refuses any path not in that allow-list) and
+        # silently fell back to a bare snippet - even though the map genuinely was
+        # being served. scoped_map_document() populates api.LAST_MAP_FILES as a side
+        # effect of rendering, exactly as the full map's _map_document does.
+        from seamcheck import api
+
+        lines = []
+        server = _fake_server()
+
+        def _fake_document(*_args, **_kwargs):
+            api.LAST_MAP_FILES.clear()
+            api.LAST_MAP_FILES.update({"push_arena.js", "push_arena.html"})
+            return mock.Mock(single_file=lambda: "<html></html>")
+
+        with (
+            mock.patch("seamcheck.api.scoped_findings",
+                      return_value=self._scoped({"push-arena-main": {"findings": []}})),
+            mock.patch("seamcheck.api.scoped_map_document", side_effect=_fake_document),
+            mock.patch("seamcheck.serve.serve_addresses",
+                      return_value=(server, {"local": "http://127.0.0.1:1/tok"})) as serve_addresses,
+        ):
+            serve_scoped_maps(".", "commit", local_only=True, write=lines.append)
+
+        _args, kwargs = serve_addresses.call_args
+        self.assertEqual(kwargs.get("sources"), {"push_arena.js", "push_arena.html"})
+
     def test_two_touched_pages_get_two_separate_servers(self):
         lines = []
         server_a, server_b = _fake_server(), _fake_server()

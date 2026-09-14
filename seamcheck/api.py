@@ -628,6 +628,20 @@ def scoped_map_document(repo_root: str, page: str, graph: Graph | None = None):
         graph, page_files(repo_root), git_sha=sha,
         names=page_names(repo_root, _config(), graph),
     )
+    # Same bookkeeping `_map_document` does for the full map, and for the same reason:
+    # `serve_addresses(..., sources=set(LAST_MAP_FILES))` is how the served document's
+    # "view code" panel is allowed to fetch a file's real contents at all - without it,
+    # `/source?path=...` refuses every request (an empty allow-list), and the map falls
+    # back to the bare snippet with a note that reads as though it were NOT being served,
+    # even though it is. Whole-graph, not narrowed to this one page's files: a page's
+    # cards can point at a template, a CSS file or a Python view that `page_files()`
+    # itself does not track (it is JS-entry attribution only, see its own docstring) -
+    # this errs toward "servable" rather than reproducing that narrower set and missing
+    # some of them. scopedserve.py renders and serves one page at a time, so the global
+    # being overwritten by the next page's render is the same timing the full map
+    # already relies on, not a new hazard.
+    LAST_MAP_FILES.clear()
+    LAST_MAP_FILES.update(symbol.file for symbol in graph.symbols if symbol.file)
     return map_html.render_document(
         connectivity_map, repo_root=os.path.abspath(repo_root),
         editor=_config().get("editor"), initial_page=page,

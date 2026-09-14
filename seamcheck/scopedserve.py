@@ -52,7 +52,14 @@ def serve_scoped_maps(
     servers = []
     for page in pages:
         html = api.scoped_map_document(repo_root, page).single_file()
-        server, addresses = serve_addresses(html, host=host, repo_root=abs_root)
+        # sources=set(api.LAST_MAP_FILES): scoped_map_document() just populated it for
+        # THIS page's render, exactly as _map_document does for the full map - without
+        # it, the served map's "view code" panel could not fetch any file's real
+        # contents (the source endpoint's own allow-list defaults empty) and silently
+        # fell back to a bare snippet, even though the map genuinely was being served.
+        server, addresses = serve_addresses(
+            html, host=host, repo_root=abs_root, sources=set(api.LAST_MAP_FILES),
+        )
         servers.append(server)
         write(f"\n{page}")
         write(f"  this machine  {addresses['local']}")

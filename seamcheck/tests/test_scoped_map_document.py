@@ -53,3 +53,20 @@ class ScopedMapDocumentTests(SimpleTestCase):
                 document = scoped_map_document(str(root), "entry_a", graph=graph)
 
             self.assertTrue(document.single_file())
+
+    def test_it_populates_last_map_files_so_a_served_map_can_serve_source(self):
+        # Without this, the served map's "view code" panel has nothing in its
+        # allow-list to fetch (serve.py's /source endpoint refuses any path not in
+        # `sources`) and silently falls back to a bare snippet - even though the map
+        # genuinely is being served. See scopedserve.py's own sources=set(...) use.
+        from seamcheck import api
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            self._project(root)
+            graph = Graph(symbols=[_symbol("s1", "module_a.js")], edges=[])
+
+            with override_settings(SEAMCHECK_CONFIG={"js_entry_files": ["entry_a.js"]}):
+                scoped_map_document(str(root), "entry_a", graph=graph)
+
+            self.assertIn("module_a.js", api.LAST_MAP_FILES)
