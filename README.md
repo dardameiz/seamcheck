@@ -38,6 +38,7 @@ seamcheck findings --file app/views.py     # what is wrong here
 seamcheck symbols --search submit_push     # name -> id
 seamcheck diff --since origin/main         # what this branch changed
 seamcheck check --since origin/main        # the gate: 0 clean, 1 findings, 2 no baseline
+seamcheck scope commit                     # what the staged files' page(s) look like right now
 ```
 
 `findings`, `symbols` and `diff` take `--limit`/`--cursor` to page, print one JSON envelope
@@ -55,7 +56,8 @@ There is an MCP server with the same functions behind it: `seamcheck_unverified`
 first - the queue of findings nobody has judged yet, worst first), `seamcheck_check`,
 `seamcheck_explain`, `seamcheck_triage`, `seamcheck_why_wrong`, `seamcheck_report`,
 `seamcheck_share`, `seamcheck_services`, `seamcheck_findings`, `seamcheck_symbols`,
-`seamcheck_diff`, `seamcheck_snapshot`.
+`seamcheck_diff`, `seamcheck_snapshot`, `seamcheck_scope` (what a commit/push touches,
+and what's unresolved/unused there right now).
 
 [The pipeline recipe](docs/ci.md) · [Using it from an agent](docs/agents.md)
 
