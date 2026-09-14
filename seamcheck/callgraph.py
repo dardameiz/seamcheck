@@ -122,7 +122,7 @@ def _walk_project(root: str) -> tuple[dict[str, list[str]], dict[str, str]]:
             path = os.path.join(here, name)
             try:
                 with open(path, encoding="utf-8", errors="replace") as handle:
-                    tree = ast.parse(handle.read())
+                    tree = ast.parse(handle.read(), filename=path)
             except (OSError, SyntaxError, ValueError):
                 continue
             rel = os.path.relpath(path, root)

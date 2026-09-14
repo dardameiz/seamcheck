@@ -31,7 +31,9 @@ class FileRecord:
 
 def _python_declarations(path: str) -> list[tuple[str, int, int]]:
     try:
-        tree = ast.parse(pathlib.Path(path).read_text(encoding="utf-8", errors="replace"))
+        tree = ast.parse(
+            pathlib.Path(path).read_text(encoding="utf-8", errors="replace"), filename=path
+        )
     except (OSError, SyntaxError):
         return []
     declarations = []

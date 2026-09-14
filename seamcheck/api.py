@@ -563,14 +563,19 @@ def scoped_findings(repo_root: str = ".", scope: str = "commit", graph: Graph | 
     # about whatever root the last `scan()` anywhere in this process happened to set.
     _CONFIG_ROOT[0] = repo_root
 
+    # `changed_files` is a `git diff --name-only` away - milliseconds - and answers "is
+    # there anything to say" before paying for a scan that can be tens of seconds even on
+    # a cache hit's own git-status check. Checked BEFORE `cached_scan`, not after: a hook
+    # firing on a clean "nothing staged" commit used to scan the whole project anyway and
+    # throw the answer away when this came back empty.
+    changed = changed_files(repo_root, scope)
+    if not changed:
+        return {"scope": scope, "changed_files": [], "pages": {}}
+
     if graph is None:
         from seamcheck.scancache import cached_scan
 
         graph, _how = cached_scan(repo_root)
-
-    changed = changed_files(repo_root, scope)
-    if not changed:
-        return {"scope": scope, "changed_files": [], "pages": {}}
 
     pages_map = page_files(repo_root)
     hits = pages_touched(changed, pages_map)

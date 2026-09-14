@@ -307,7 +307,7 @@ def _scan_python(root: str) -> tuple[dict, list]:
 
     for path, text in _candidates(_files(root, _PY_EXTENSIONS)):
         try:
-            tree = ast.parse(text)
+            tree = ast.parse(text, filename=path)
         except (SyntaxError, ValueError):
             continue
         relative = _relativise(path, root)

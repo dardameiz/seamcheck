@@ -84,13 +84,22 @@ def _run(repo_root: str, mode: str) -> str:
     try:
         from seamcheck import api
         from seamcheck.cli import setup_django_if_any
+        from seamcheck.quiet import quiet
 
         # A git hook runs in a bare subprocess - none of the bootstrap `seamcheck scope`
         # itself gets via `_dispatch`. Without this, a Django project is read from
         # source instead of imported, and misses every route Django builds at runtime
         # (the admin's) - a real, silent gap this had on its first real run.
-        setup_django_if_any()
-        result = api.scoped_findings(repo_root, mode)
+        #
+        # quiet() matters here for more than a tidy terminal: the host's AppConfig.ready()
+        # logs WARNING lines to its own file handler (e.g. `django.log` in the repo root),
+        # and an unquieted import writes one on every single hook run. That file is new/
+        # touched each time, so the freshness walk the scan cache checks sees it as the
+        # newest input and treats every hook invocation as a cache miss - a silent ~60s
+        # cost turning what should be a ~12s cache hit into a cold scan, every commit.
+        with quiet():
+            setup_django_if_any()
+            result = api.scoped_findings(repo_root, mode)
         return _summary(result)
     except Exception as error:  # noqa: BLE001 - a hook must never crash a commit/push
         return f"seamcheck: could not check this {mode} ({error})."

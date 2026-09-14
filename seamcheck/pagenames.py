@@ -57,7 +57,9 @@ def _templates_rendered_by(path: str, function: str, cache: dict[str, ast.Module
     """
     if path not in cache:
         try:
-            cache[path] = ast.parse(pathlib.Path(path).read_text(encoding="utf-8", errors="replace"))
+            cache[path] = ast.parse(
+                pathlib.Path(path).read_text(encoding="utf-8", errors="replace"), filename=path
+            )
         except (OSError, SyntaxError):
             cache[path] = None
     tree = cache[path]

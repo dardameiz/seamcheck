@@ -122,10 +122,10 @@ def _optional_call_lines(tree: ast.AST) -> set[int]:
     return optional
 
 
-def _python_route_references(source: str):
+def _python_route_references(source: str, filename: str = "<unknown>"):
     """(call name, route handle, line) for every reverse/reverse_lazy/redirect literal."""
     try:
-        tree = ast.parse(source)
+        tree = ast.parse(source, filename=filename)
     except SyntaxError:
         return
     optional = _optional_call_lines(tree)
@@ -301,7 +301,7 @@ def extract_url_references(
             )
 
     for file_path, text in _read(python_files):
-        for call, handle, line in _python_route_references(text):
+        for call, handle, line in _python_route_references(text, file_path):
             if handle.startswith("/"):
                 resolved = index.resolve(handle)
                 if resolved is None:

@@ -150,7 +150,7 @@ def _reads(root: str) -> dict[str, tuple[str, int]]:
         if "environ" not in text and "getenv" not in text:
             continue
         try:
-            tree = ast.parse(text)
+            tree = ast.parse(text, filename=path)
         except (SyntaxError, ValueError):
             continue
         relative = os.path.relpath(path, root).replace(os.sep, "/")

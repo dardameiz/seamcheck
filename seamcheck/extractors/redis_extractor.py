@@ -1379,7 +1379,7 @@ def _scan_python(root: str) -> list[_Hit]:
             path = os.path.join(here, name)
             try:
                 with open(path, encoding="utf-8", errors="replace") as handle:
-                    tree = ast.parse(handle.read())
+                    tree = ast.parse(handle.read(), filename=path)
             except (OSError, SyntaxError, ValueError):
                 continue
             rel = os.path.relpath(path, root)
@@ -1835,7 +1835,7 @@ def _keys_named_in_tests(root: str) -> dict[str, tuple[str, int]]:
                 continue
             try:
                 with open(path, encoding="utf-8", errors="replace") as handle:
-                    tree = ast.parse(handle.read())
+                    tree = ast.parse(handle.read(), filename=path)
             except (OSError, SyntaxError, ValueError):
                 continue
             for node in ast.walk(tree):
