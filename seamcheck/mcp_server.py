@@ -163,6 +163,18 @@ class SnapshotData(TypedDict):
     symbols: int
 
 
+class ScopePage(TypedDict):
+    touched_files: list[str]
+    features: list[str]
+    findings: list[Finding]
+
+
+class ScopeData(TypedDict):
+    scope: str
+    changed_files: list[str]
+    pages: dict[str, ScopePage]
+
+
 class FindingsEnvelope(Envelope):
     data: FindingsData | None
 
@@ -177,6 +189,10 @@ class DiffEnvelope(Envelope):
 
 class SnapshotEnvelope(Envelope):
     data: SnapshotData | None
+
+
+class ScopeEnvelope(Envelope):
+    data: ScopeData | None
 
 
 class ChangeRow(TypedDict):
@@ -463,6 +479,22 @@ def seamcheck_diff(repo_root: str = ".", since: str = "HEAD~1", limit: int = 25,
     from seamcheck import queries
 
     return _tool_result(queries.diff(repo_root, since, limit, cursor, refresh=refresh))
+
+
+@mcp.tool(annotations=_READS)
+def seamcheck_scope(repo_root: str = ".", scope: str = "commit", refresh: bool = False) -> ScopeEnvelope:
+    """What page(s) a commit/push touches, and what's unresolved/unused there RIGHT NOW.
+
+    Not seamcheck_diff's question ("what changed since a ref") - this surfaces a
+    pre-existing issue in the same page too, even one this change never touched, which is
+    the point: "am I about to commit into a page that already has something wrong in it".
+    `scope`: "commit" (files staged right now) or "push" (every file in commits not yet on
+    the upstream branch - can span more than one page). Call this before `git commit`/
+    `git push` instead of `seamcheck_findings` with a guessed `file=` filter.
+    """
+    from seamcheck import queries
+
+    return _tool_result(queries.scope(repo_root, scope, refresh=refresh))
 
 
 @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False})

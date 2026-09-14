@@ -334,6 +334,11 @@ class ProtocolSmokeTests(SimpleTestCase):
     def test_check(self):
         self._call("seamcheck_check", repo_root=".")
 
+    def test_scope(self):
+        # This repo's own working tree - whatever it happens to hold staged is fine, the
+        # point is that ScopeData/ScopePage's TypedDict shape survives the real wire path.
+        self._call("seamcheck_scope", repo_root=".", scope="commit")
+
     def test_symbols(self):
         # A schema-only assertion passes even if the tool returns the wrong rows entirely
         # (convert_result only checks shape) - this checks the actual fixture content:

@@ -583,17 +583,16 @@ def scoped_findings(repo_root: str = ".", scope: str = "commit", graph: Graph | 
             if symbol.file in page_all_files
             and symbol.status in (Status.UNRESOLVED, Status.UNUSED)
         ]
+        from seamcheck.queries import _row
+
         result_pages[page] = {
             "touched_files": sorted(touched_in_page),
             "features": sorted(features_touched(graph, touched_in_page)),
-            "findings": [
-                {
-                    "id": symbol.id, "kind": symbol.kind, "label": symbol.label,
-                    "status": symbol.status.value, "file": symbol.file, "line": symbol.line,
-                    "note": symbol.note,
-                }
-                for symbol in symbols
-            ],
+            # The SAME row shape symbols/findings/diff already return (id, kind, label,
+            # status, file, line, owner, note) - not a fifth near-duplicate of it, and
+            # what lets the MCP seamcheck_scope tool reuse the same Finding TypedDict
+            # those three already declare.
+            "findings": [_row(symbol) for symbol in symbols],
         }
     return {"scope": scope, "changed_files": changed, "pages": result_pages}
 

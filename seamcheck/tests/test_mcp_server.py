@@ -7,7 +7,13 @@ from unittest import mock
 from django.test import SimpleTestCase, override_settings
 
 from seamcheck.envelope import TooLarge
-from seamcheck.mcp_server import seamcheck_check, seamcheck_explain, seamcheck_report, seamcheck_triage
+from seamcheck.mcp_server import (
+    seamcheck_check,
+    seamcheck_explain,
+    seamcheck_report,
+    seamcheck_scope,
+    seamcheck_triage,
+)
 
 FIXTURES_DIR = str(Path(__file__).parent / "fixtures")
 _CONFIG = {
@@ -57,6 +63,27 @@ class McpToolFunctionTests(SimpleTestCase):
             self.assertTrue(result["ok"], result["message"])
             self.assertTrue((Path(tmp) / "seamcheck" / "triage.json").is_file())
 
+    def test_scope_returns_a_well_formed_envelope(self):
+        # This repo's own working tree, whatever it happens to hold staged right now -
+        # deliberately not asserting ON that content (ambient, not controlled), only that
+        # the envelope plumbing (queries.scope -> api.scoped_findings -> the pydantic
+        # model above) is genuinely callable end to end, same as seamcheck_check's own
+        # "returns a json-serializable dict" test just above.
+        result = seamcheck_scope(repo_root=".", scope="commit")
+
+        self.assertTrue(result["ok"], result.get("message"))
+        self.assertEqual(result["data"]["scope"], "commit")
+        self.assertIsInstance(result["data"]["changed_files"], list)
+        self.assertIsInstance(result["data"]["pages"], dict)
+
+    def test_scope_rejects_an_unknown_mode(self):
+        # A failing envelope comes back as a CallToolResult (not a plain dict), so
+        # isError is actually set - see _tool_result's own docstring on why.
+        result = seamcheck_scope(repo_root=".", scope="sideways")
+
+        self.assertFalse(result.structuredContent["ok"])
+        self.assertEqual(result.structuredContent["error"]["code"], "bad_argument")
+
     def test_every_tool_is_registered_on_the_server(self):
         from seamcheck.mcp_server import mcp
 
@@ -71,7 +98,8 @@ class McpToolFunctionTests(SimpleTestCase):
             registered,
             {"seamcheck_check", "seamcheck_explain", "seamcheck_triage", "seamcheck_report",
              "seamcheck_services", "seamcheck_unverified", "seamcheck_share", "seamcheck_why_wrong",
-             "seamcheck_findings", "seamcheck_symbols", "seamcheck_diff", "seamcheck_snapshot"},
+             "seamcheck_findings", "seamcheck_symbols", "seamcheck_diff", "seamcheck_snapshot",
+             "seamcheck_scope"},
         )
 
 
