@@ -100,6 +100,22 @@ def _globs_from_workspaces(root: pathlib.Path) -> list[str]:
     return [g for g in dict.fromkeys(globs) if not g.startswith("!")]
 
 
+def _workspace_folders(root: pathlib.Path, pattern: str) -> list[pathlib.Path]:
+    """The folders one workspace glob names, sorted.
+
+    `.` names the project root itself - saleor-dashboard's whole pnpm workspace is
+    `packages: ["."]`. Path.glob cannot take a pattern with no parts: Python 3.12 raises
+    IndexError for it and 3.13 ValueError, so it is answered here rather than globbed. An
+    absolute or malformed glob names nothing.
+    """
+    if not pathlib.PurePath(pattern).parts:
+        return [root]
+    try:
+        return sorted(root.glob(pattern.rstrip("/")))
+    except (ValueError, NotImplementedError):
+        return []
+
+
 # Scripts whose command starts a long-running process. A package with one of these is
 # something you deploy; a package with only `build` and `lint` is something you import.
 _SERVER_HINTS = (
@@ -229,7 +245,7 @@ def detect_services(repo_root: str) -> list[Service]:
     # 1. Workspace globs are the strongest signal: the repository itself says these
     #    directories are separate packages.
     for pattern in globs:
-        for match in sorted(root.glob(pattern)):
+        for match in _workspace_folders(root, pattern):
             if not match.is_dir() or not (match / "package.json").is_file():
                 continue
             rel = _relative(str(match))

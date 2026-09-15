@@ -269,7 +269,7 @@ class Resolver:
         if self._packages is not None:
             return self._packages
         self._packages = {}
-        from seamcheck.services import _globs_from_workspaces
+        from seamcheck.services import _globs_from_workspaces, _workspace_folders
 
         root = pathlib.Path(self.project_root)
         try:
@@ -277,11 +277,7 @@ class Resolver:
         except OSError:
             return self._packages
         for pattern in patterns:
-            try:
-                folders = sorted(root.glob(pattern.rstrip("/")))
-            except (ValueError, NotImplementedError):  # an absolute or malformed glob
-                continue
-            for folder in folders:
+            for folder in _workspace_folders(root, pattern):
                 manifest = folder / "package.json"
                 if not manifest.is_file():
                     continue

@@ -131,6 +131,19 @@ class WorkspacePackageTests(unittest.TestCase):
         self.assertEqual(_resolve(root, "app/page.tsx", "@scope/ui/Button").file,
                          os.path.join(root, "packages/ui/src/Button.ts"))
 
+    def test_a_workspace_that_lists_the_project_root_itself_is_that_package(self):
+        # saleor-dashboard's pnpm-workspace.yaml is `packages: ["."]`. Path.glob(".") has no
+        # parts to match and raises IndexError, which nothing caught, so every map of that
+        # project crashed at the first bare import.
+        root = _repo({
+            "pnpm-workspace.yaml": 'packages:\n  - "."\n',
+            "package.json": '{"name": "dashboard", "main": "src/index.ts"}',
+            "src/index.ts": "",
+            "src/b.ts": "",
+        })
+        self.assertTrue(_resolve(root, "src/b.ts", "react").third_party)
+        self.assertEqual(_resolve(root, "src/b.ts", "dashboard").file, os.path.join(root, "src/index.ts"))
+
 
 class ThirdPartyTests(unittest.TestCase):
     def test_a_package_with_no_first_party_match_is_third_party(self):
