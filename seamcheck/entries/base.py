@@ -22,6 +22,8 @@ class Entry:
     group: str = ""           # entries sharing a group are sections of one page
     evidence: str = ""        # why this is an entry: "a page file, routed by the filesystem"
     note: str = ""            # what a reader should know: "by convention, not declared"
+    label: str = ""           # what a reader calls it where the key would show: "/pricing/[locale]";
+                              # "" when the key already is that name, as a legacy stem is
 
 
 @runtime_checkable

@@ -977,7 +977,7 @@ def _names_from_entries(entries) -> dict:
 
     return {entry.key: PageName(title=entry.title, where=entry.where, entry=entry.key,
                                 group=entry.group, evidence=entry.evidence,
-                                note=entry.note, kind=entry.kind)
+                                note=entry.note, kind=entry.kind, label=entry.label)
             for entry in entries}
 
 

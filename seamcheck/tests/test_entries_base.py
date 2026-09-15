@@ -13,7 +13,7 @@ class EntryTests(unittest.TestCase):
         self.assertEqual(entry.key, "next:/pricing/[locale]")
         self.assertEqual(entry.kind, "page")
         self.assertEqual(entry.roots, ("app/pricing/[locale]/page.tsx",))
-        self.assertEqual((entry.group, entry.evidence, entry.note), ("", "", ""))
+        self.assertEqual((entry.group, entry.evidence, entry.note, entry.label), ("", "", "", ""))
 
     def test_an_entry_cannot_be_changed_after_it_is_made(self):
         entry = Entry(key="k", kind="page", roots=(), title="T", where="W")

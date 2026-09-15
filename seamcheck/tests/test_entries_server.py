@@ -23,9 +23,9 @@ class ServerEntrySourceTests(unittest.TestCase):
         graph = _routes(("/api/checkout", "view:app/api/checkout/route.ts", "app/api/checkout/route.ts", "route"))
         [entry] = ServerEntrySource().entries("/repo", {}, graph)
         self.assertEqual(
-            (entry.key, entry.kind, entry.roots, entry.title, entry.where),
+            (entry.key, entry.kind, entry.roots, entry.title, entry.where, entry.label),
             ("server:app/api/checkout/route.ts", "server", ("app/api/checkout/route.ts",),
-             "/api/checkout", "/api/checkout - app/api/checkout/route.ts"))
+             "/api/checkout", "/api/checkout - app/api/checkout/route.ts", "app/api/checkout/route.ts"))
 
     def test_two_route_handlers_with_the_same_view_label_get_different_titles(self):
         # The Next.js adapter labels every handler's view "route"; titled by that, the

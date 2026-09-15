@@ -4,6 +4,7 @@ import unittest
 from unittest import mock
 
 from seamcheck import api
+from seamcheck.entries.base import Entry
 from seamcheck.graph import Edge, Graph, Status, Symbol
 
 
@@ -63,3 +64,10 @@ class PageFilesTests(unittest.TestCase):
             pages = api.page_files(root)
         self.assertEqual(set(pages), {"next:/"})
         self.assertTrue(all(isinstance(files, set) for files in pages.values()))
+
+
+class NamesFromEntriesTests(unittest.TestCase):
+    def test_an_entrys_label_reaches_the_name_the_map_draws(self):
+        entry = Entry(key="next:/", kind="page", roots=("app/page.tsx",), title="Home",
+                      where="/ - app/page.tsx", label="/")
+        self.assertEqual(api._names_from_entries([entry])["next:/"].label, "/")

@@ -3780,7 +3780,7 @@ function draw() {
   // to repeat the page's name first, and at 1100px that was all that fit.
   const tail = (p.where || "").split(" - ").slice(1).join(" - ").trim();
   const here = p.layer || p.g === undefined ? (p.where ? `${p.title} · ${p.where}` : p.title)
-             : p.union ? (tail || p.title) : p.page;
+             : p.union ? (tail || p.title) : (p.label || p.page);
   // Count what is DRAWN, not what the file holds: now that a filter narrows a file
   // selection instead of replacing it, the two differ, and a breadcrumb reading "674 of
   // 674" over a canvas showing nine is the same lie the filter bug was.
@@ -6430,6 +6430,10 @@ def _payload(connectivity_map: ConnectivityMap) -> tuple[str, list[Chunk], dict[
             meta["union"] = True
         if reached_by_page.get(name):
             meta["rf"] = reached_by_page[name]
+        # The readout names a page by its key when a picker already shows its title. A key
+        # like "next:/pricing" is not a name; the page node carries the one to show instead.
+        if not layer and not union and nodes and nodes[0].kind == "page" and nodes[0].label != name:
+            meta["label"] = nodes[0].label
         meta_pages.append(meta)
         rows_chunk = {
             "nodes": rows,

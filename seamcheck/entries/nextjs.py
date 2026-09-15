@@ -43,6 +43,7 @@ class NextJSSource:
                     key=f"next:{app}:{url}" if qualify and app else f"next:{url}",
                     kind="page", roots=(page, *wrappers), title=_title(url),
                     where=f"{url} - {page}", evidence="a page file, routed by the filesystem",
+                    label=f"{app}:{url}" if qualify and app else url,
                 ))
         return found
 

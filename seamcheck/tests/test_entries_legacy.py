@@ -58,7 +58,8 @@ class TodaysPagesTests(unittest.TestCase):
     def test_a_root_nothing_names_keeps_todays_title_and_empty_address(self):
         root = _repo({"src/main.js": ""})
         found = LegacySource().entries(root, {"js_entry_files": ["src/main.js"]}, graph=None)
-        self.assertEqual([(e.key, e.title, e.where) for e in found], [("main", "main", "")])
+        # No label: a legacy key is already the name a reader knows the page by.
+        self.assertEqual([(e.key, e.title, e.where, e.label) for e in found], [("main", "main", "", "")])
 
 
 class DetectTests(unittest.TestCase):

@@ -43,5 +43,6 @@ class FallbackSource:
                 key=f"entry_file:{relative}", kind="entry_file", roots=(relative,),
                 title=os.path.basename(relative), where="no framework says this is a page",
                 evidence="a first-party script no other first-party file imports",
+                label=relative,
             ))
         return found

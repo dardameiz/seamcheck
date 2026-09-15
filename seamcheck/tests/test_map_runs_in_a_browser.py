@@ -1158,6 +1158,64 @@ class PageThenSection(SimpleTestCase):
             self.assertTrue(shot["clear"], "the readout sits under a corner's controls")
 
 
+class ReadoutNamesAnEntryByItsLabel(SimpleTestCase):
+    """A Next.js page's key is "next:/orders", an identifier; the readout names it "/orders".
+    A legacy page has no label, and its key - a filename stem - stays what the readout says."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        try:
+            from playwright.sync_api import sync_playwright  # noqa: F401
+        except ImportError:  # pragma: no cover - depends on the optional extra
+            raise unittest.SkipTest("playwright is not installed (the observe extra)") from None
+
+    def _url(self) -> str:
+        from seamcheck.mapdata import build_map
+        from seamcheck.pagenames import PageName
+        from seamcheck.renderers.map_html import render_document
+
+        graph = _fixture_graph()
+        every = {s.file for s in graph.symbols}
+        pages = {"next:/orders": every, "home-main": every}
+        names = {"next:/orders": PageName("Orders", "/orders - app/orders/page.tsx", "next:/orders",
+                                          label="/orders"),
+                 "home-main": PageName("Home", "/", "home-main")}
+        connectivity = build_map(graph, pages, git_sha="0" * 12, names=names)
+        document = render_document(connectivity, console=_console_for(graph))
+        path = pathlib.Path(tempfile.mkdtemp()) / "map.html"
+        path.write_text(document.single_file(), encoding="utf-8")
+        return path.as_uri()
+
+    def test_a_labelled_entry_is_named_by_its_label_and_a_legacy_page_by_its_key(self):
+        from playwright.sync_api import sync_playwright
+
+        errors: list[str] = []
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch()
+            except Exception as error:  # pragma: no cover - no browser downloaded
+                raise unittest.SkipTest(f"no chromium: {error}") from None
+            page = browser.new_page()
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.goto(page_url := self._url(), wait_until="load")
+            page.wait_for_timeout(250)
+            _open_lens(page, "map")
+            page.wait_for_timeout(200)
+            read = "() => ({current: PAGES[current].page, crumb: document.getElementById('crumb').textContent})"
+            home = page.evaluate(read)
+            page.select_option("#pg", index=1)
+            page.wait_for_timeout(200)
+            orders = page.evaluate(read)
+            browser.close()
+
+        self.assertEqual(errors, [], page_url)
+        self.assertEqual(home["current"], "home-main")
+        self.assertTrue(home["crumb"].startswith("home-main — "), home["crumb"])
+        self.assertEqual(orders["current"], "next:/orders")
+        self.assertTrue(orders["crumb"].startswith("/orders — "), orders["crumb"])
+
+
 class OpensOnAPageThatDraws(SimpleTestCase):
     """Every entry stays in the picker, even one with nothing to draw - but the map opens
     on the first page that draws something.

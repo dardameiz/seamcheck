@@ -35,6 +35,7 @@ class PageName:
     evidence: str = ""  # why this is an entry at all: "a page file, routed by the filesystem"
     note: str = ""      # what a reader should know: "by convention, not declared"
     kind: str = "page"  # "page" | "server" | "entry_file" - decides picker order
+    label: str = ""     # what the page card and readout say when the key is not a name: "/pricing"
 
 
 def _titleise(stem: str) -> str:

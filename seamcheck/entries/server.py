@@ -57,5 +57,6 @@ class ServerEntrySource:
                 key=f"server:{file}", kind="server", roots=(file,), title=title,
                 where=f"{shown} - {file}" if shown else file,
                 evidence="serves a route" if ordered else "holds a request handler no route reaches",
+                label=file,
             ))
         return found

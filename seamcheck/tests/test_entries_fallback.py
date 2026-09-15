@@ -18,9 +18,9 @@ def _repo(files: dict[str, str]) -> str:
 class FallbackSourceTests(unittest.TestCase):
     def test_a_script_nothing_imports_is_an_entry_file_named_by_its_filename(self):
         found = FallbackSource().entries(_repo({"src/main.js": "console.log(1);"}), {}, graph=None)
-        self.assertEqual([(e.key, e.kind, e.roots, e.title, e.where) for e in found],
+        self.assertEqual([(e.key, e.kind, e.roots, e.title, e.where, e.label) for e in found],
                          [("entry_file:src/main.js", "entry_file", ("src/main.js",), "main.js",
-                           "no framework says this is a page")])
+                           "no framework says this is a page", "src/main.js")])
 
     def test_a_script_another_script_imports_is_not_an_entry(self):
         found = FallbackSource().entries(_repo({"main.js": "import './lib'", "lib.js": ""}), {}, graph=None)

@@ -41,7 +41,8 @@ Two pickers. **Page** lists the pages a reader knows — a Django or Vite page
 (`Push Arena · /push_arena/`), a Next.js page (`Pricing · /pricing/[locale]`), each found the
 way that framework declares it. Below the pages come **server entries**: every file that
 handles a request, titled by the routes it serves (`/api/checkout`), whichever backend
-wrote it. **Section** lists what a page loads: every script tag is its own section, named
+wrote it, and drawn from those routes and their handlers — a handler that queries nothing
+still shows the route that reaches it. **Section** lists what a page loads: every script tag is its own section, named
 after the script — `push-arena-main`, `cookie_consent` — and **Whole page** at the top is
 all of them together. A page that loads one script has no Section picker at all.
 

@@ -28,8 +28,8 @@ def _keys(root):
 class AppRouterTests(unittest.TestCase):
     def test_the_root_page_is_home(self):
         [entry] = NextJSSource().entries(_repo({**CONFIG, "app/page.tsx": PAGE}), {}, graph=None)
-        self.assertEqual((entry.key, entry.kind, entry.title, entry.where),
-                         ("next:/", "page", "Home", "/ - app/page.tsx"))
+        self.assertEqual((entry.key, entry.kind, entry.title, entry.where, entry.label),
+                         ("next:/", "page", "Home", "/ - app/page.tsx", "/"))
 
     def test_a_page_is_rooted_with_every_layout_above_it_nearest_first(self):
         root = _repo({**CONFIG, "app/layout.tsx": LAYOUT, "app/pricing/layout.tsx": LAYOUT,
@@ -73,6 +73,12 @@ class MonorepoTests(unittest.TestCase):
         root = _repo({"apps/web/next.config.js": "", "apps/web/app/page.tsx": PAGE,
                       "apps/docs/next.config.js": "", "apps/docs/app/page.tsx": PAGE})
         self.assertEqual(sorted(_keys(root)), ["next:apps/docs:/", "next:apps/web:/"])
+
+    def test_a_qualified_page_is_labelled_with_its_app_and_its_address(self):
+        root = _repo({"apps/web/next.config.js": "", "apps/web/app/page.tsx": PAGE,
+                      "apps/docs/next.config.js": "", "apps/docs/app/page.tsx": PAGE})
+        labels = sorted(entry.label for entry in NextJSSource().entries(root, {}, graph=None))
+        self.assertEqual(labels, ["apps/docs:/", "apps/web:/"])
 
 
 class DetectTests(unittest.TestCase):

@@ -34,3 +34,18 @@ class ReachedCountTests(unittest.TestCase):
                                                          pages=[_page("home", reached=0)]))
         [page] = [p for p in json.loads(meta)["pages"] if p["page"] == "home"]
         self.assertNotIn("rf", page)
+
+
+class LabelTests(unittest.TestCase):
+    def test_a_page_whose_node_reads_differently_from_its_key_carries_that_label(self):
+        page = _page("next:/pricing")
+        page.nodes[0].label = "/pricing"
+        meta, _chunks, _files = _payload(ConnectivityMap(git_sha="abc", generated_at="t", pages=[page]))
+        [row] = [p for p in json.loads(meta)["pages"] if p["page"] == "next:/pricing"]
+        self.assertEqual(row["label"], "/pricing")
+
+    def test_a_page_that_reads_as_its_key_carries_no_label(self):
+        meta, _chunks, _files = _payload(ConnectivityMap(git_sha="abc", generated_at="t",
+                                                         pages=[_page("home")]))
+        [row] = [p for p in json.loads(meta)["pages"] if p["page"] == "home"]
+        self.assertNotIn("label", row)

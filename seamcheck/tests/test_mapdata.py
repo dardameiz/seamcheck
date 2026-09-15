@@ -279,6 +279,43 @@ class EntryOrderAndEvidenceTests(SimpleTestCase):
         self.assertEqual((root.kind, root.note),
                          ("page", "a page file, routed by the filesystem · by convention, not declared"))
 
+    def test_the_page_node_reads_as_the_entrys_label_and_keeps_its_key_as_its_id(self):
+        names = {"next:/pricing": PageName(title="Pricing", where="/pricing - app/pricing/page.tsx",
+                                           entry="next:/pricing", label="/pricing")}
+        built = build_map(_graph(), {"next:/pricing": {"a.js"}}, git_sha="abc", now="t", names=names)
+        root = _entries(built)[0].nodes[0]
+
+        self.assertEqual((root.id, root.label), ("page:next:/pricing", "/pricing"))
+
+    def test_an_entry_without_a_label_reads_as_its_key(self):
+        names = {"home": PageName(title="Home", where="/", entry="home")}
+        built = build_map(_graph(), {"home": {"a.js"}}, git_sha="abc", now="t", names=names)
+
+        self.assertEqual(_entries(built)[0].nodes[0].label, "home")
+
+
+class ServerEntrySeedTests(SimpleTestCase):
+    """A server entry is its routes and handlers. They start its chain even when the handler
+    touches nothing - no store, no env var - that would seed a page."""
+
+    def test_a_server_entry_draws_its_own_route_and_handler(self):
+        names = {"server:views.py": PageName(title="/api/x/", where="/api/x/ - views.py",
+                                             entry="server:views.py", kind="server")}
+        built = build_map(_graph(), {"server:views.py": {"views.py"}}, git_sha="abc", now="t",
+                          names=names)
+        [entry] = _entries(built)
+        own = {"url:api/x/", "view:app.views.x"}
+
+        self.assertTrue(own <= {n.id for n in entry.nodes}, [n.id for n in entry.nodes])
+        self.assertFalse(own & _bucket_ids(built, UNDRAWN_PAGE))
+
+    def test_a_page_holding_the_same_file_still_seeds_only_from_touches(self):
+        names = {"home": PageName(title="Home", where="/", entry="home")}
+        built = build_map(_graph(), {"home": {"views.py"}}, git_sha="abc", now="t", names=names)
+        [entry] = _entries(built)
+
+        self.assertEqual([n.kind for n in entry.nodes], ["page"])
+
 
 class BucketWordingTests(SimpleTestCase):
     def _where(self, key, graph, **kwargs):

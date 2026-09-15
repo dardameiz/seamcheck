@@ -233,7 +233,15 @@ def _module_node_id(path: str) -> str:
     return f"module:{path}"
 
 
-def build_page_map(page: str, files: set[str], graph: Graph, adjacency: dict[str, list], services=None) -> PageMap:
+# A server entry IS its routes and handlers, and neither is a touch: nothing selects or
+# calls them. Seeded by touches alone, a handler that queried no store and read no env var
+# drew only itself, and its routes went to the bucket for what a page's files hold - on a
+# FastAPI project with no page at all.
+_SERVER_SEED_KINDS = _SEED_KINDS | {"url", "view"}
+
+
+def build_page_map(page: str, files: set[str], graph: Graph, adjacency: dict[str, list], services=None,
+                   seed_kinds: frozenset[str] = _SEED_KINDS) -> PageMap:
     by_id = {symbol.id: symbol for symbol in graph.symbols}
     nodes: dict[str, MapNode] = {_page_node_id(page): MapNode(_page_node_id(page), page, "page", "connected")}
     edges: list[MapEdge] = []
@@ -248,7 +256,7 @@ def build_page_map(page: str, files: set[str], graph: Graph, adjacency: dict[str
     seeds_by_module: dict[str, list[Symbol]] = {}
     for symbol in graph.symbols:
         if (
-            symbol.kind in _SEED_KINDS
+            symbol.kind in seed_kinds
             and symbol.file in files
             and not symbol.sub.startswith(_SEED_EXCLUDED_SUBS)
         ):
@@ -455,8 +463,9 @@ def build_map(
             per_file[symbol.file] = per_file.get(symbol.file, 0) + 1
     page_maps = []
     for page, files in sorted(pages.items()):
-        page_map = build_page_map(page, files, graph, adjacency, services=services)
         name = (names or {}).get(page)
+        seeds = _SERVER_SEED_KINDS if name and name.kind == "server" else _SEED_KINDS
+        page_map = build_page_map(page, files, graph, adjacency, services=services, seed_kinds=seeds)
         page_map.title = name.title if name else page
         page_map.where = name.where if name else ""
         page_map.group = name.group if name else ""
@@ -466,6 +475,10 @@ def build_map(
             # nodes[0] is the page itself (build_page_map makes it first). `note` travels
             # in the detail chunk, so the sheet says why this is an entry.
             page_map.nodes[0].note = " · ".join(part for part in (name.evidence, name.note) if part)
+            # "next:/pricing" is an identifier, and the card showed it verbatim. The id keeps
+            # the key; what a reader sees is the entry's label.
+            if name.label:
+                page_map.nodes[0].label = name.label
         page_maps.append(page_map)
     # No page is dropped for having nothing to draw: dropping them is how every Next.js
     # page vanished. Pages, then server entries; inside each, by the name a reader
