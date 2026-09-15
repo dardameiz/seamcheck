@@ -152,4 +152,5 @@ Reproduce any of it yourself:
 python tools/corpus.py clone && python tools/coverage.py   # coverage, per backend
 python tools/precision.py                                  # precision, against hand labels
 python tools/recall.py                                     # planted bugs, does it find them
+python tools/corpus.py entries                             # pages and entries, full scan per repo
 ```

@@ -1284,8 +1284,23 @@ def _show_config_plain(root: str) -> int:
             value = f"[{len(value)} items] {value[:3]} ..."
         print(f"  {key:<{width}}  {value}")
         print(f"  {'':<{width}}  \u2514\u2500 {why.get(key, 'default')}")
+    _print_entry_sources(root, config)
     _print_tunnel_setting()
     return 0
+
+
+def _print_entry_sources(root: str, config: dict) -> None:
+    """Which entry sources the map starts from, and how sure each one is."""
+    from seamcheck.entries import describe
+
+    print("\n  what the map starts from:")
+    try:
+        lines = describe(root, config)
+    except ValueError as error:  # entry_sources names a source that does not exist
+        print(f"    {error}")
+        return
+    for line in lines:
+        print(f"    {line}")
 
 
 def _print_tunnel_setting() -> None:

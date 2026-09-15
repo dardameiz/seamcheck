@@ -16,7 +16,7 @@ from seamcheck.entries.server import ServerEntrySource
 _SOURCES: tuple[EntrySource, ...] = (NextJSSource(), ServerEntrySource(), LegacySource())
 _CONFIDENT = 0.5
 
-__all__ = ["Entry", "EntrySource", "all_entries", "available", "select_all"]
+__all__ = ["Entry", "EntrySource", "all_entries", "available", "describe", "select_all"]
 
 
 def available() -> list[str]:
@@ -43,6 +43,18 @@ def select_all(repo_root: str, config: dict) -> list[tuple[EntrySource, float]]:
     ranked = _ranked(repo_root, config)
     confident = [pair for pair in ranked if pair[1] >= _CONFIDENT]
     return confident or ranked[:1]
+
+
+def describe(repo_root: str, config: dict) -> list[str]:
+    """One line per source for `seamcheck config`: its confidence, and whether it runs."""
+    config = config or {}
+    running = {source.name for source, _ in select_all(repo_root, config)}
+    forced = " (forced by entry_sources)" if config.get("entry_sources") else ""
+    return [
+        f"{source.name:<8} {confidence:4.2f}  "
+        f"{'runs' + forced if source.name in running else 'does not run'}"
+        for source, confidence in _ranked(repo_root, config)
+    ]
 
 
 def all_entries(repo_root: str, config: dict, graph) -> list[Entry]:

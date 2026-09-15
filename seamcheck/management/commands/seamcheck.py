@@ -363,7 +363,21 @@ class Command(BaseCommand):
             f"\n  {declared} from SEAMCHECK_CONFIG, {len(config) - declared} detected from "
             "the project.\n  Anything you set in SEAMCHECK_CONFIG wins over detection."
         )
+        self._show_entry_sources(repo_root, config)
         self._show_tunnel_setting()
+
+    def _show_entry_sources(self, repo_root, config):
+        """Which entry sources the map starts from, and how sure each one is."""
+        from seamcheck.entries import describe
+
+        self.stdout.write("\n  what the map starts from:")
+        try:
+            lines = describe(repo_root, config)
+        except ValueError as error:  # entry_sources names a source that does not exist
+            self.stdout.write(f"    {error}")
+            return
+        for line in lines:
+            self.stdout.write(f"    {line}")
 
     def _show_tunnel_setting(self):
         """The one setting that is not about this project.

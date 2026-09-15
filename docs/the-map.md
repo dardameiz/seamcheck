@@ -37,18 +37,28 @@ declares a key — so it can only ever show you that two halves of your own code
 
 ## A page, then its sections
 
-Two pickers. **Page** lists the HTML pages a reader knows — `Push Arena · /push_arena/`,
-`Leaderboard · /leaderboard/`. **Section** lists what that page loads: every script tag is
-its own section, named after the script — `push-arena-main`, `cookie_consent` — and
-**Whole page** at the top is all of them together. A page that loads one script has no
-Section picker at all.
+Two pickers. **Page** lists the pages a reader knows — a Django or Vite page
+(`Push Arena · /push_arena/`), a Next.js page (`Pricing · /pricing/[locale]`), each found the
+way that framework declares it. Below the pages come **server entries**: every file that
+handles a request, titled by the routes it serves (`/api/checkout`), whichever backend
+wrote it. **Section** lists what a page loads: every script tag is its own section, named
+after the script — `push-arena-main`, `cookie_consent` — and **Whole page** at the top is
+all of them together. A page that loads one script has no Section picker at all.
+
+A page stays in the list even when nothing on it starts a chain to draw; its canvas says
+how many symbols its files hold instead, because a page that silently vanished looked
+exactly like one that did not exist. Click the page itself to see why it is an entry — "a
+page file, routed by the filesystem", "a declared JavaScript entry point".
 
 A section is *the code that actually runs from that script tag*, followed through every
-import to the selectors it queries, the URLs it fetches, the keys those handlers touch. The
+import — a tsconfig alias like `@/components/x` and a workspace package included — to the
+selectors it queries, the URLs it fetches, the keys those handlers touch. The
 `achievements` widget on a page with forty modules is a section of its own, so you can
-check it without the other thirty-nine drawn over it — and a symbol that no page's scripts
-ever reach lands in the **Not reached from any page** buckets at the end of the Page list,
-which is itself a finding worth reading.
+check it without the other thirty-nine drawn over it. After the entries, **On a page,
+nothing to draw** holds what a page's files contain that starts no chain — a class applied,
+a rule in an imported stylesheet — and a symbol in a file no entry reaches lands in the
+**Not reached from any page** buckets at the end of the Page list, which is itself a
+finding worth reading.
 
 Whole page is built when the map is written, as one page like any other, so opening it
 costs one chunk and not seventy. Its nodes are the union of the sections' nodes, each drawn

@@ -85,3 +85,19 @@ class AllEntriesTests(unittest.TestCase):
 class RegistryContentsTests(unittest.TestCase):
     def test_the_registry_holds_the_phase_one_sources(self):
         self.assertEqual(entries.available(), ["nextjs", "server", "legacy"])
+
+
+class DescribeTests(unittest.TestCase):
+    """What `seamcheck config` prints about entry sources: each one's confidence, and whether
+    it runs - the design doc's "seamcheck config shows which sources ran and why"."""
+
+    def test_each_source_says_its_confidence_and_whether_it_runs(self):
+        with mock.patch.object(entries, "_SOURCES", (_Stub("a", 0.9), _Stub("b", 0.1))):
+            lines = entries.describe("/repo", {})
+        self.assertEqual(lines, ["a        0.90  runs", "b        0.10  does not run"])
+
+    def test_a_forced_choice_says_it_was_forced(self):
+        with mock.patch.object(entries, "_SOURCES", (_Stub("a", 0.9), _Stub("b", 0.1))):
+            lines = entries.describe("/repo", {"entry_sources": ["b"]})
+        self.assertEqual(lines, ["a        0.90  does not run",
+                                 "b        0.10  runs (forced by entry_sources)"])

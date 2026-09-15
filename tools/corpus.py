@@ -51,6 +51,10 @@ Usage:
     python tools/corpus.py clone          # clone or update every repo in the list
     python tools/corpus.py scan           # scan them all, print the table
     python tools/corpus.py scan --only dispatch
+    python tools/corpus.py entries        # full scan + page entries on the phase-1 set
+    python tools/corpus.py entries --code ../base --out before.json   # the same, on other code
+    python tools/corpus.py entries --path ../some-project             # a project outside the corpus
+    python tools/corpus.py entries-compare before.json after.json
 """
 
 from __future__ import annotations
@@ -356,6 +360,64 @@ _VENDORED = {"node_modules", ".git", "dist", "build", "coverage", ".next", "vend
              "site-packages", "__pycache__", ".venv", "venv"}
 
 
+# Phase 1 of docs/plans/2026-09-15-entry-sources-design.md, measured where `scan` cannot
+# look. The repositories that design doc measured, minus the ones whose full scan is too
+# slow or too large for a before-and-after run on one machine (sentry, n8n, saleor, ghost,
+# misago, netbox, weblate, pretix). Folder names under CORPUS, not REPOS entries: three of
+# the Next.js ones are cloned there without being in REPOS.
+ENTRY_REPOS = (
+    "cal.com", "dub", "commerce", "documenso", "nextjs-subscription-payments", "platforms",
+    "healthchecks", "djangoproject.com", "wger", "django-debug-toolbar", "paperless-ngx", "bookwyrm",
+    "full-stack-fastapi-template", "fastapi-realworld", "dispatch", "open-webui",
+    "node-express-boilerplate", "node-express-realworld-example-app", "parse-server", "nodebb",
+)
+
+
+def entries_row(target: pathlib.Path) -> dict:
+    """One repository: a full scan, its entries, what they reach, and the buckets.
+
+    Works on code from before seamcheck/entries/ existed too - there the pages are
+    `page_files()`'s keys - so one command measures both sides of the change.
+    """
+    import seamcheck
+    from seamcheck import api
+    from seamcheck.mapdata import build_map
+    from seamcheck.progress import null
+
+    row: dict = {"name": target.name, "code": os.path.dirname(os.path.dirname(seamcheck.__file__))}
+    started = time.time()
+    try:
+        graph = api.scan(str(target), null())
+        if hasattr(api, "page_entries"):
+            found = api.page_entries(str(target), graph)
+            pages = api._page_files_for(str(target), graph, found)
+            names = api._names_from_entries(found)
+            row["kinds"] = dict(collections.Counter(entry.kind for entry in found))
+            row["pages"] = sorted(entry.key for entry in found if entry.kind == "page")
+        else:
+            from seamcheck.pagenames import page_names
+
+            pages = api.page_files(str(target))
+            names = page_names(str(target), api._config(), graph)
+            row["kinds"] = {"page": len(pages)}
+            row["pages"] = sorted(pages)
+        built = build_map(graph, pages, git_sha="corpus", names=names)
+        reached = set().union(*pages.values()) if pages else set()
+        row["symbols"] = len(graph.symbols)
+        row["on_page"] = sum(1 for symbol in graph.symbols if symbol.file in reached)
+        # Every page that is not a bucket. Literal prefixes, not mapdata.BUCKET_PREFIXES: code
+        # from before the change has no such name, and only "unreached:" buckets.
+        row["drawn"] = sum(1 for page in built.pages
+                           if not page.page.startswith(("unreached:", "undrawn:")))
+        row["buckets"] = {page.page: len(page.nodes) for page in built.pages
+                          if page.page.startswith(("unreached:", "undrawn:"))}
+        row["gate"] = "ok"
+    except Exception as error:  # noqa: BLE001 - a crash IS the result
+        row["gate"] = f"CRASH: {type(error).__name__}: {str(error)[:90]}"
+    row["seconds"] = round(time.time() - started, 1)
+    return row
+
+
 def _count_lines(root: pathlib.Path, patterns: tuple[str, ...]) -> int:
     total = 0
     for pattern in patterns:
@@ -519,16 +581,98 @@ def scan(only: str | None = None) -> None:
     print("  Gate 3 - are the findings plausible - is a human reading a sample.")
 
 
+def entries(names, code: pathlib.Path, out: pathlib.Path, path: pathlib.Path | None = None) -> None:
+    """`entries_row` for each repository, each in its own process on the seamcheck at `code`.
+
+    A process per repository because a full scan of cal.com or dub holds a lot of parse
+    cache, and one that dies costs its own row rather than the run. PYTHONPATH decides
+    which seamcheck the child imports, so `--code` pointing at a snapshot of main measures
+    main; each row records the directory it actually imported from.
+    """
+    targets = [path] if path else [CORPUS / name for name in names]
+    rows = []
+    for target in targets:
+        if not target.is_dir():
+            rows.append({"name": target.name, "gate": "not cloned"})
+            print(f"  {target.name:<36} not cloned")
+            continue
+        print(f"  {target.name:<36} scanning ...", end="", flush=True)
+        done = subprocess.run(
+            [sys.executable, str(pathlib.Path(__file__).resolve()), "entries-one", str(target)],
+            env={**os.environ, "PYTHONPATH": str(code)}, capture_output=True, text=True, check=False,
+        )
+        lines = done.stdout.strip().splitlines()
+        try:
+            row = json.loads(lines[-1])
+        except (IndexError, ValueError):
+            tail = (done.stderr or "").strip().splitlines()[-1:] or [f"exit {done.returncode}"]
+            row = {"name": target.name, "gate": f"CRASH: {tail[0][:90]}"}
+        rows.append(row)
+        kinds = " ".join(f"{kind} {count}" for kind, count in sorted(row.get("kinds", {}).items()))
+        print(f"\r  {target.name:<36} {row['gate'][:40]:<12} {kinds:<32} "
+              f"on page {row.get('on_page', 0):>7,} / {row.get('symbols', 0):>7,}  "
+              f"{row.get('seconds', '')}s")
+    out.write_text(json.dumps(rows, indent=2), encoding="utf-8")
+    print(f"\n  wrote {out}")
+
+
+def entries_compare(before_file: pathlib.Path, after_file: pathlib.Path) -> None:
+    """What moved between two `entries` runs, per repository."""
+    before = {row["name"]: row for row in json.loads(before_file.read_text(encoding="utf-8"))}
+    after = {row["name"]: row for row in json.loads(after_file.read_text(encoding="utf-8"))}
+    totals = [0, 0, 0, 0]  # on page before, symbols before, on page after, symbols after
+    for name, now in after.items():
+        was = before.get(name, {})
+        if now.get("gate") != "ok" or was.get("gate") != "ok":
+            print(f"  {name:<36} before: {was.get('gate', 'absent')}   after: {now.get('gate')}")
+            continue
+        gone = sorted(set(was["pages"]) - set(now["pages"]))
+        new = sorted(set(now["pages"]) - set(was["pages"]))
+        pages = "pages identical" if not gone and not new else f"pages -{len(gone)} +{len(new)}"
+        kinds = " ".join(f"{kind} {count}" for kind, count in sorted(now["kinds"].items()))
+        print(f"  {name:<36} {pages:<18} entries: {kinds}")
+        print(f"      drawn {was['drawn']} -> {now['drawn']}   "
+              f"on page {was['on_page']:,}/{was['symbols']:,} -> {now['on_page']:,}/{now['symbols']:,}")
+        keys = sorted(set(was["buckets"]) | set(now["buckets"]))
+        print("      buckets " + ", ".join(
+            f"{key} {was['buckets'].get(key, 0):,} -> {now['buckets'].get(key, 0):,}" for key in keys))
+        if gone:
+            print(f"      pages gone: {', '.join(gone[:6])}{' ...' if len(gone) > 6 else ''}")
+        if new:
+            print(f"      pages new:  {', '.join(new[:6])}{' ...' if len(new) > 6 else ''}")
+        totals = [totals[0] + was["on_page"], totals[1] + was["symbols"],
+                  totals[2] + now["on_page"], totals[3] + now["symbols"]]
+    if totals[1] and totals[3]:
+        print(f"\n  symbols on a page, all repositories: {100 * totals[0] / totals[1]:.1f}% -> "
+              f"{100 * totals[2] / totals[3]:.1f}%")
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["clone", "scan", "list"])
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("command",
+                        choices=["clone", "scan", "list", "entries", "entries-one", "entries-compare"])
+    parser.add_argument("targets", nargs="*",
+                        help="entries-one: a repository directory; entries-compare: BEFORE.json AFTER.json")
     parser.add_argument("--only", help="just this repo")
+    parser.add_argument("--path", help="entries: measure this directory instead of the corpus set")
+    parser.add_argument("--code", default=str(ROOT), help="entries: the seamcheck checkout to measure with")
+    parser.add_argument("--out", help="entries: where to write the rows (default: <corpus>/entries.json)")
     args = parser.parse_args()
     if args.command == "list":
         for repo in REPOS:
             print(f"  {repo['name']:<32} {repo['adapter']:<10} {repo['why']}")
     elif args.command == "clone":
         clone(args.only)
+    elif args.command == "entries":
+        names = [args.only] if args.only else list(ENTRY_REPOS)
+        out = pathlib.Path(args.out) if args.out else CORPUS / "entries.json"
+        entries(names, pathlib.Path(args.code).resolve(), out,
+                pathlib.Path(args.path).resolve() if args.path else None)
+    elif args.command == "entries-one":
+        print(json.dumps(entries_row(pathlib.Path(args.targets[0]).resolve())))
+    elif args.command == "entries-compare":
+        entries_compare(pathlib.Path(args.targets[0]), pathlib.Path(args.targets[1]))
     else:
         scan(args.only)
 
