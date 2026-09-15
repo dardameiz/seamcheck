@@ -17,6 +17,61 @@ Coverage and precision have **different denominators** and neither is meaningful
 backend that answered `uncertain` everywhere would score 100% precision and be useless.
 `uncertain` is not counted as a claim in precision, because it is not a claim.
 
+## 0.15.1 - 2026-09-15
+
+**Next.js App Router coverage, found by dogfooding against a real Next.js 16/React
+19/Supabase project** (`docs/seamcheck-findings-from-leanos.md` - the Node/React
+counterpart to the Django dogfooding that drove 0.14/0.15). Seven fixes, two of them
+chained: closing one gap (a CSS `attr()` read) exposed two more underneath it that had
+been silently masked by the leniency the first one relied on.
+
+- **Fixed** - `href={`/x/${param}`}` - the idiomatic way to link to a parameterised
+  Next.js route from JSX - never resolved: the extractor correctly truncates it to a
+  literal prefix, but the resolver's symmetric slash-strip meant a prefix ending right
+  where a required dynamic segment begins could never match. `UrlIndex.resolve_prefix()`
+  now credits a prefix against a parameterised route's own literal lead-in, guarded to a
+  complete segment boundary so a partial word (`/kaiz`) is never matched.
+- **Fixed** - `window.location.assign/replace()` and `location.href = "..."` were not
+  read as navigation at all - only `router.push`-shaped calls were - so a deliberate
+  full-page navigation (an admin shell bypassing the client router, a hard reload after
+  sign-out) looked unreferenced no matter how literal its target was.
+- **Fixed** - `css_source_root` autoconfig only ever looked in `public`/`static`/`assets`-
+  shaped directories. A Next.js App Router's own `app/globals.css` - imported straight
+  into the root layout, never linked with `<link>`, never under a `public/`-style
+  directory - was invisible as a stylesheet, not merely unread: none of its selectors,
+  tokens or attribute rules existed as symbols at all. Now also checks `app/`,
+  `components/`, `pages/`.
+- **Fixed** - `content: attr(data-x)` in a CSS rule is a read of that attribute; the CSS
+  extractor never looked for it, so an attribute set purely for a stylesheet to render
+  through generated content looked completely unread.
+- **Fixed** - a CSS custom property set at runtime via `element.style.setProperty()`
+  wasn't linked to its `var()` reads anywhere else in the project - only to reads its own
+  (nonexistent) definition site could see - so a real, working per-instance override
+  looked like a dead definition.
+- **Fixed** - a class name built by plain JS string concatenation or a ternary
+  (`"a" + (cond ? " b" : "")`) wasn't recognised as a static literal, unlike the
+  equivalent template-literal ternary.
+- **Fixed** - `styles_are_local` asked whether any *standalone* `.css` file existed
+  rather than whether the project has any styles at all, so a project whose entire
+  stylesheet lives in templates' own `<style>` blocks got the CDN-style "no local CSS
+  was found" benefit of the doubt everywhere - masking every real unresolved class
+  behind an excuse that was never true. Surfacing this correctly then exposed that
+  `wired_by_markup` (the exemption for `<a href="#x">`/`id="x"` in-page navigation
+  targets) only ever read one of the two parameters the template scanner's evidence
+  actually arrives through - real since the matcher was first written, hidden until the
+  line above stopped excusing it.
+
+**Measured on leanos-app** (private, not in the corpus - `tools/labels/leanos-app.json`):
+connected 5,116→5,349, uncertain 1,012→891, unused 15→22 (+7 genuine, in newly-readable
+CSS), unresolved 0→6 (2 genuine `next/font` gaps + 4 copies of one genuine unstyled
+class). Precision on the original 15-finding hand-graded sample, 33%→71%.
+
+**Corpus (34/34 cloned repos), before/after by stashing this diff:** no repo's gate1/
+gate2 changed, no CRASH, no repo lost its routes; corpus-wide `by_status` totals
+identical (uncertain share **4.987%** both times) - flat, not improved, since none of
+the 34 public repos happen to exercise these particular shapes; leanos-app itself isn't
+in the corpus. Recall **6/6**, unchanged.
+
 ## 0.15.0 - 2026-09-14
 
 **See what you're about to commit before you commit it.** A new question the map and the
