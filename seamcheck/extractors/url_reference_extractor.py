@@ -53,6 +53,17 @@ UNREFERENCED_NOTE = (
     "client."
 )
 
+# N1: a template literal that truncates right where a route's required dynamic segment
+# begins - `href={`/kaizen/${locale}`}` - names the route by its literal prefix and
+# nothing more. That is real evidence the route is reached, but not evidence of which
+# COMPLETE value was requested, so it is carried on the reference rather than folded
+# silently into the same note-less evidence a full literal match gets.
+_PREFIX_MATCH_NOTE = (
+    "Only a literal PREFIX of this reference is known - it stops exactly where a "
+    "required dynamic route segment begins, and the segment's value (e.g. a locale) is "
+    "filled in at runtime. The complete path was never known, only the route it reaches."
+)
+
 _KIND = "url_reference"
 
 
@@ -71,7 +82,7 @@ def _read(paths: list[str]) -> list[tuple[str, str]]:
 
 
 def _reference(
-    handle: str, sub: str, file_path: str, line: int, snippet: str
+    handle: str, sub: str, file_path: str, line: int, snippet: str, note: str = ""
 ) -> Symbol:
     return Symbol(
         # Keyed by handle AND site: the same route referenced from twelve templates is
@@ -86,7 +97,7 @@ def _reference(
         status=Status.UNCERTAIN,
         snippet=snippet,
         chain=[pathlib.Path(file_path).name, handle],
-        note="",
+        note=note,
     )
 
 
@@ -156,19 +167,45 @@ _NAV_FUNCTIONS = frozenset({"redirect", "permanentRedirect", "navigate", "revali
 _NAV_RECEIVERS = frozenset({"router", "history", "navigation", "nav", "$router"})
 # Cheap text gate before parsing: most files in a repository contain none of this, and
 # parsing every one of them is the difference between a scan and a coffee break.
-_NAV_NEEDLES = ("href", "to=", "router.", "redirect(", "navigate(", "action=")
+_NAV_NEEDLES = ("href", "to=", "router.", "redirect(", "navigate(", "action=", "location")
+# `window.location.assign(...)` / `.replace(...)` and `location.href = "..."` - a full-page
+# navigation, deliberately used to bypass the client router (an admin shell mounted
+# separately, a hard reload after sign-out, breaking out of an iframe). N2 in
+# docs/seamcheck-findings-from-leanos.md: `_NAV_RECEIVERS` only ever matched a bare
+# Identifier, so `window.location` - whose own `object` is itself a MemberExpression -
+# matched no receiver at all, and the property-assignment form (`location.href = ...`) is
+# an AssignmentExpression, a node shape this reader never walked.
+_LOCATION_METHODS = frozenset({"assign", "replace"})
 
 
-def _js_nav_targets(ast: dict) -> list[tuple[str, int, str]]:
-    """(path, line, how) for every route this module points at.
+def _is_location(node: dict) -> bool:
+    """`window.location` or bare `location` - never the client router."""
+    if node.get("type") == "Identifier":
+        return node.get("name") == "location"
+    if node.get("type") == "MemberExpression":
+        obj = node.get("object") or {}
+        prop = (node.get("property") or {}).get("name")
+        return (prop == "location" and obj.get("type") == "Identifier"
+                and obj.get("name") == "window")
+    return False
+
+
+def _js_nav_targets(ast: dict) -> list[tuple[str, int, str, bool]]:
+    """(path, line, how, exact) for every route this module points at.
 
     Only STATIC paths, and only ones beginning with `/`. A route assembled from a variable
     is exactly the case the four statuses exist for, and it is left to the fetch reader
     which already records it as a sighting rather than a claim.
+
+    `exact` is `_static_url`'s own flag, carried through rather than discarded: False
+    means the literal text is only a known PREFIX (a template literal truncated at an
+    interpolation) - not a complete path, so `resolve()` alone cannot be trusted to find
+    the route it reaches. `_read_js_references` is where that prefix still gets credited,
+    against a parameterised route's own literal lead-in.
     """
     from seamcheck.extractors.js_extractor import _static_url, _walk
 
-    found: list[tuple[str, int, str]] = []
+    found: list[tuple[str, int, str, bool]] = []
 
     def _line(node: dict) -> int:
         return node_line(node) or 0
@@ -183,9 +220,27 @@ def _js_nav_targets(ast: dict) -> list[tuple[str, int, str]]:
             value = node.get("value") or {}
             if value.get("type") == "JSXExpressionContainer":
                 value = value.get("expression") or {}
-            path, _exact = _static_url(value)
+            path, exact = _static_url(value)
             if path and path.startswith("/"):
-                found.append((path, _line(node), f'{name}="{path}"'))
+                found.append((path, _line(node), f'{name}="{path}"', exact))
+            continue
+
+        if node_type == "AssignmentExpression":
+            left = node.get("left") or {}
+            how = ""
+            if _is_location(left):
+                # `window.location = "/x"` / `location = "/x"` - the whole receiver
+                # reassigned, not one of its properties.
+                how = "location="
+            else:
+                prop = (left.get("property") or {}).get("name")
+                obj = left.get("object") or {}
+                if prop == "href" and _is_location(obj):
+                    how = "location.href="
+            if how:
+                path, exact = _static_url(node.get("right"))
+                if path and path.startswith("/"):
+                    found.append((path, _line(node), f'{how}"{path}"', exact))
             continue
 
         if node_type != "CallExpression":
@@ -202,11 +257,13 @@ def _js_nav_targets(ast: dict) -> list[tuple[str, int, str]]:
             receiver = obj.get("name") if obj.get("type") == "Identifier" else ""
             if prop in _NAV_METHODS and receiver in _NAV_RECEIVERS:
                 how = f"{receiver}.{prop}()"
+            elif prop in _LOCATION_METHODS and _is_location(obj):
+                how = f"location.{prop}()"
         if not how:
             continue
-        path, _exact = _static_url(first)
+        path, exact = _static_url(first)
         if path and path.startswith("/"):
-            found.append((path, _line(node), f"{how[:-1]}'{path}')"))
+            found.append((path, _line(node), f"{how[:-1]}'{path}')", exact))
     return found
 
 
@@ -363,8 +420,15 @@ def _read_js_references(js_files: list[str], index, _add) -> None:
             candidates.append(path)
 
     for path, parsed in iter_parsed(candidates):
-        for target_path, line, snippet in _js_nav_targets(parsed):
+        for target_path, line, snippet, exact in _js_nav_targets(parsed):
             resolved = index.resolve(target_path)
+            note = ""
+            if resolved is None and not exact:
+                # The complete path was never known - only ask the weaker question a
+                # prefix can still answer: which route does this literal lead-in belong
+                # to. Guarded inside resolve_prefix itself against a partial word.
+                resolved = index.resolve_prefix(target_path)
+                note = _PREFIX_MATCH_NOTE if resolved is not None else ""
             if resolved is None:
                 continue
-            _add(_reference(target_path, "link", path, line, snippet[:80]), resolved)
+            _add(_reference(target_path, "link", path, line, snippet[:80], note), resolved)

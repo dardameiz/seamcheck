@@ -141,6 +141,115 @@ class ReferenceMatchingTests(SimpleTestCase):
         self.assertEqual(len({s.line for s in symbols}), 2)
 
 
+class JsNavReferenceTests(SimpleTestCase):
+    """N1 (docs/seamcheck-findings-from-leanos.md): `href={`/kaizen/${locale}`}` is THE
+    idiom for linking to a Next.js `[param]` route from JSX, and it used to resolve to
+    nothing at all - the truncated prefix it produces ends exactly where the route's
+    required dynamic segment begins, which `resolve()` can never match.
+    """
+
+    def _run_js(self, source, urls):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp, "nav.jsx")
+            path.write_text(source)
+            return extract_url_references([], [], {}, urls, js_files=[str(path)])
+
+    def test_a_template_literal_href_truncated_at_a_dynamic_segment_reaches_the_route(self):
+        _symbols, edges = self._run_js(
+            'export const Nav = ({ locale }) => <a href={`/kaizen/${locale}`}>go</a>;',
+            urls=[_url("/kaizen/[locale]")],
+        )
+
+        self.assertEqual(len(edges), 1)
+        self.assertEqual(edges[0].status, Status.CONNECTED)
+        self.assertEqual(edges[0].to_id, "url:/kaizen/[locale]")
+
+    def test_the_reference_says_the_match_was_a_prefix_not_a_complete_value(self):
+        symbols, _edges = self._run_js(
+            'export const Nav = ({ locale }) => <a href={`/kaizen/${locale}`}>go</a>;',
+            urls=[_url("/kaizen/[locale]")],
+        )
+
+        self.assertEqual(len(symbols), 1)
+        self.assertIn("prefix", symbols[0].note.lower())
+
+    def test_a_complete_literal_href_still_resolves_exactly_with_no_prefix_note(self):
+        symbols, edges = self._run_js(
+            'export const Nav = () => <a href="/kaizen/en">go</a>;',
+            urls=[_url("/kaizen/[locale]")],
+        )
+
+        self.assertEqual(edges[0].status, Status.CONNECTED)
+        self.assertEqual(symbols[0].note, "")
+
+    def test_a_prefix_that_stops_mid_word_is_not_credited(self):
+        # A guard against the risk the finding itself names: a real partial word must
+        # never be credited against a route it merely starts with.
+        _symbols, edges = self._run_js(
+            'export const Nav = ({ x }) => <a href={"/kaiz" + x}>go</a>;',
+            urls=[_url("/kaizen/[locale]")],
+        )
+
+        self.assertEqual(edges, [])
+
+
+class JsLocationNavigationTests(SimpleTestCase):
+    """N2 (docs/seamcheck-findings-from-leanos.md): `window.location.assign(...)` /
+    `.replace(...)` / `.href = ...` is a full-page navigation, used on purpose to bypass
+    the client router - and it used to be recognised as navigation by neither its
+    receiver (`window.location`'s own object is a MemberExpression, not a bare
+    Identifier) nor, for the assignment form, its node shape (an AssignmentExpression,
+    which this reader never walked at all).
+    """
+
+    def _run_js(self, source, urls):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp, "nav.jsx")
+            path.write_text(source)
+            return extract_url_references([], [], {}, urls, js_files=[str(path)])
+
+    def test_window_location_assign_is_navigation(self):
+        _symbols, edges = self._run_js(
+            'function go() { window.location.assign("/admin"); }',
+            urls=[_url("/admin")],
+        )
+
+        self.assertEqual(len(edges), 1)
+        self.assertEqual(edges[0].status, Status.CONNECTED)
+        self.assertEqual(edges[0].to_id, "url:/admin")
+
+    def test_bare_location_replace_is_navigation(self):
+        _symbols, edges = self._run_js(
+            'function go() { location.replace("/admin"); }', urls=[_url("/admin")],
+        )
+
+        self.assertEqual(edges[0].status, Status.CONNECTED)
+
+    def test_window_location_href_assignment_is_navigation(self):
+        _symbols, edges = self._run_js(
+            'function go() { window.location.href = "/admin"; }', urls=[_url("/admin")],
+        )
+
+        self.assertEqual(edges[0].status, Status.CONNECTED)
+
+    def test_bare_location_href_assignment_is_navigation(self):
+        _symbols, edges = self._run_js(
+            'function go() { location.href = "/admin"; }', urls=[_url("/admin")],
+        )
+
+        self.assertEqual(edges[0].status, Status.CONNECTED)
+
+    def test_object_dot_assign_is_not_navigation(self):
+        # `.assign()`/`.replace()` are real methods on plenty of receivers that are not
+        # `location` - Object.assign() above all, ubiquitous in modern JS. The guard is
+        # the receiver check, not the method name alone.
+        _symbols, edges = self._run_js(
+            'function go() { Object.assign("/admin", {}); }', urls=[_url("/admin")],
+        )
+
+        self.assertEqual(edges, [])
+
+
 class FindJsFilesTests(SimpleTestCase):
     """F43: a gitignored one-off (`OTHER/`, by project convention) is not the product."""
 

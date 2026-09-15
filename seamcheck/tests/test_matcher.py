@@ -5,7 +5,7 @@ from django.test import SimpleTestCase
 from seamcheck.extractors.django_extractor import extract_django_urls_views
 from seamcheck.extractors.js_extractor import extract_js
 from seamcheck.graph import Status, Symbol
-from seamcheck.matcher import match_js_to_django, match_static_assets
+from seamcheck.matcher import UrlIndex, match_js_to_django, match_static_assets
 
 URLCONF = "seamcheck.tests.fixtures.fixture_urls"
 FIXTURES_DIR = str(Path(__file__).parent / "fixtures")
@@ -100,6 +100,51 @@ class ParameterisedRouteTests(SimpleTestCase):
         )
 
         self.assertEqual(edges[0].status, Status.UNRESOLVED)
+
+
+class ResolvePrefixTests(SimpleTestCase):
+    """`href={`/kaizen/${locale}`}` truncates to a prefix that ends exactly where a
+    required dynamic segment begins - `resolve()` can never match that (see N1 in
+    docs/seamcheck-findings-from-leanos.md), so `resolve_prefix()` exists to credit it
+    against the route it can only partially name, without loosening `resolve()` itself
+    for every other caller that expects a complete path.
+    """
+
+    def _url(self, path):
+        return Symbol(id=f"url:{path}", kind="url", label=path, sub="GET",
+                      file="app/kaizen/[locale]/page.tsx", line=1, status=Status.UNCERTAIN,
+                      snippet="", chain=[path], note="")
+
+    def test_a_prefix_ending_right_before_a_required_segment_matches_the_route(self):
+        index = UrlIndex([self._url("/kaizen/[locale]")])
+
+        self.assertIsNotNone(index.resolve_prefix("/kaizen/"))
+        self.assertEqual(index.resolve_prefix("/kaizen/").id, "url:/kaizen/[locale]")
+
+    def test_a_partial_word_is_not_credited_against_the_next_segment(self):
+        # /kaiz is a real partial word, not a complete segment - crediting it would let
+        # any short prefix match any route that happens to start the same way.
+        index = UrlIndex([self._url("/kaizen/[locale]")])
+
+        self.assertIsNone(index.resolve_prefix("/kaiz"))
+
+    def test_a_prefix_with_no_matching_route_is_none(self):
+        index = UrlIndex([self._url("/kaizen/[locale]")])
+
+        self.assertIsNone(index.resolve_prefix("/formacion/"))
+
+    def test_resolve_itself_is_unaffected_by_prefix_matching(self):
+        # resolve_prefix is additive - resolve() must keep failing on an incomplete path,
+        # because every other caller (fetch matching, {% url %} tags) relies on it meaning
+        # "this is the complete route", not "this could be the start of one".
+        index = UrlIndex([self._url("/kaizen/[locale]")])
+
+        self.assertIsNone(index.resolve("/kaizen/"))
+
+    def test_a_route_with_no_dynamic_segment_is_never_matched_by_prefix(self):
+        index = UrlIndex([self._url("/kaizen/")])
+
+        self.assertIsNone(index.resolve_prefix("/kaizen/"))
 
 
 class StaticAssetTests(SimpleTestCase):

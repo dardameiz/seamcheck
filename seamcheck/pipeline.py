@@ -612,7 +612,14 @@ def run_scan(
         symbols += [attr for attr in js_dom_attrs if attr.id in resolved]
         # Whether this project HAS stylesheets of its own. With none, every class in
         # every template is unstyled as far as the scan can see, and saying so would be a
-        # claim about a file that is not here.
+        # claim about a file that is not here. `selectors`, not `css_files`: a project
+        # whose entire stylesheet lives in templates' own <style> blocks - zero
+        # standalone .css files, leanos-app's public/*.html deck pages among them, ~1,000
+        # selectors and not one freestanding file - answered `bool(css_files)` with False
+        # and got the CDN-style benefit of the doubt everywhere, masking every real
+        # unresolved class in the project behind "no local CSS was found at all", which
+        # was never true. `selectors` already merges the template-derived rules in (see
+        # `css_symbols` above), so it is the question this line has always meant to ask.
         # Sass sources say which classes ARE defined; they cannot say which are not, so
         # they join the build-time evidence and are deliberately kept OUT of the oracle
         # test below. NetBox is the case that settles it: its own .scss defines 103
@@ -627,7 +634,7 @@ def run_scan(
             selectors + [v for v in vendor_rules if v.kind == "css_selector"],
             (tailwind_build_classes or set()) | scss_classes | scss_stems,
             usage_only=js_dom_attrs,
-            styles_are_local=bool(css_files) or bool(tailwind_build_classes),
+            styles_are_local=bool(selectors) or bool(tailwind_build_classes),
         )
         # Tokens JavaScript sets at runtime are real definitions; without them half of
         # this project's "undefined var()" findings were false.

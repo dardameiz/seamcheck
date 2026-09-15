@@ -311,6 +311,17 @@ _TEMPLATE_DIRS = ("templates", "views", "public", "src/views", "app/views", "src
                   "pages", "app", "src")
 _STATIC_DIRS = ("public", "static", "assets", "src/assets", "src/static", "www", "dist",
                 "src", "client", "frontend")
+# Extra directories worth checking for CSS specifically, beyond _STATIC_DIRS: a Next.js
+# App Router keeps its global stylesheet (`app/globals.css`) and any CSS Modules directly
+# under `app/`, `components/` or `pages/` - imported straight into a layout or component,
+# never linked with `<link>` and never served from a public/-style static directory. A
+# project shaped this way, with a `public/` that holds no .css at all (the deck pages
+# under leanos-app/public/ are inline <style> inside .html, not .css files) got NO
+# css_source_root whatsoever, and every class, token and attribute-selector rule outside
+# a template's own <style> block was invisible to the scan - not merely unread, absent as
+# a symbol. Checked in ADDITION to _STATIC_DIRS, never instead of it, so a project with a
+# real static css root keeps picking it by count exactly as before.
+_CSS_EXTRA_DIRS = ("app", "components", "pages")
 
 
 def _detect_without_django(root, put, config, why):
@@ -326,10 +337,14 @@ def _detect_without_django(root, put, config, why):
         best = _densest(statics, "*", root)
         if best:
             put("static_root", _rel(best[0][1], root), "found in the repo")
-        css = _densest(statics, "*.css", root)
-        if css:
-            put("css_source_root", _rel(css[0][1], root),
-                f"found in the repo ({css[0][0]} stylesheets)")
+    css_dirs = statics + [
+        root / d for d in _CSS_EXTRA_DIRS
+        if (root / d).is_dir() and root / d not in statics
+    ]
+    css = _densest(css_dirs, "*.css", root)
+    if css:
+        put("css_source_root", _rel(css[0][1], root),
+            f"found in the repo ({css[0][0]} stylesheets)")
 
     vite = _find_file(root, _VITE_NAMES)
     if vite:

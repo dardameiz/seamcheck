@@ -1,0 +1,63 @@
+{
+  "_root": "/Users/balazssimon/dev/leanos/leanos-app",
+  "dom_attr:data:tip:components/Vsm.tsx:2144": {
+    "verdict": "false",
+    "why": "read via CSS: app/globals.css:14 `.lc-tip:hover::after { content: attr(data-tip); }`. The extractor's attr-read check does not see attr() inside a CSS content: declaration."
+  },
+  "css_selector:class:h5l": {
+    "verdict": "true",
+    "why": "public/formacion/plantillas.html declares .writebox.h1l..h5l but only h1l/h2l/h3l ever appear on a `class=` attribute in that file (grepped); h4l and h5l are dead."
+  },
+  "dom_attr:data:tip:components/Vsm.tsx:1995": {
+    "verdict": "false",
+    "why": "same cause as components/Vsm.tsx:2144 - read via app/globals.css:14 attr(data-tip), one shared rule, two writer sites."
+  },
+  "css_token_def:token:--accent": {
+    "verdict": "false",
+    "why": "public/comercial/leanos-comercial.html:387 `el.style.setProperty(\"--accent\", s.accent)` is a runtime override of a token that IS read: the same file defines `--accent` at :root (line 14) and reads it via var(--accent) in 9+ rules. The runtime write should be credited as a definition of the SAME token name, not judged as its own unread token."
+  },
+  "css_selector:class:dark": {
+    "verdict": "false",
+    "why": "applied at runtime: public/comercial/leanos-comercial.html:386 `el.className = \"slide\" + (s.kind === \"cover\" ? \" dark\" : \"\")`. String-concatenated className, invisible to a template-only scan - same class of bug as the tool's own documented F11/F4 (built-at-runtime), here via vanilla-JS innerHTML slide building rather than a template tag."
+  },
+  "css_selector:class:num": {
+    "verdict": "true",
+    "why": "public/formacion/guia-formador.html declares `ol.num` (lines 91-93, 236) but no `<ol>` in the file carries class=\"num\" (every <ol> is either bare or class=\"instr\") - confirmed dead."
+  },
+  "dom_attr:data:label:app/landing/LandingClient.tsx:468": {
+    "verdict": "false",
+    "why": "read via CSS: app/globals.css:353-354 `.lc-compare-table td[data-label]::before { content: attr(data-label); }` - same attr() blind spot as the data-tip pair."
+  },
+  "css_selector:class:three": {
+    "verdict": "true",
+    "why": "public/formacion/plantillas.html:51 defines .three (3-col grid utility) but nothing in the file has class=\"three\"; sibling utilities in the same media-query list (.two, .bones, .vsm-tot) ARE used elsewhere in the file, so this isn't a scanner miss on the whole family - .three specifically is dead."
+  },
+  "css_selector:class:risk": {
+    "verdict": "false",
+    "why": "applied at runtime: public/comercial/leanos-comercial.html:338 `<span class=\"hp ${p[4]}\">` inside a JS template-literal string later assigned via innerHTML. p[4] is data-driven (health status) and resolves to \"ok\" or \"risk\"."
+  },
+  "css_selector:class:ok": {
+    "verdict": "false",
+    "why": "same site and cause as css_selector:class:risk - one dynamic slot (`class=\"hp ${p[4]}\"`) produces both selectors depending on runtime data."
+  },
+  "dom_attr:data:retry:components/EssentialCookieGate.tsx:87": {
+    "verdict": "true",
+    "why": "genuinely unread - grepped the whole repo for data-retry/dataset.retry/[data-retry]/attr(data-retry): only the write site exists. The value only matters as a React state key to force a re-render; the DOM attribute itself has no consumer."
+  },
+  "css_selector:class:h4l": {
+    "verdict": "true",
+    "why": "same file/check as h5l - public/formacion/plantillas.html only ever applies h1l/h2l/h3l."
+  },
+  "dom_attr:data:label:app/landing/LandingClient.tsx:475": {
+    "verdict": "false",
+    "why": "same cause as app/landing/LandingClient.tsx:468 - one shared CSS rule (globals.css:353-354), three writer sites (468/475/481)."
+  },
+  "dom_attr:data:label:app/landing/LandingClient.tsx:481": {
+    "verdict": "false",
+    "why": "same cause as app/landing/LandingClient.tsx:468."
+  },
+  "css_selector:class:g": {
+    "verdict": "false",
+    "why": "applied at runtime: public/comercial/leanos-comercial.html:337-ish `class=\"kpi ${k[2]?'g':''}\"` inside a JS template-literal string assigned via innerHTML, same pattern as ok/risk/dark."
+  }
+}

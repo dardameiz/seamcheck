@@ -175,6 +175,63 @@ class DetectionTests(SimpleTestCase):
             self.assertEqual(config["js_vite_root"], "app/static")
 
 
+class NonDjangoCssRootTests(SimpleTestCase):
+    """`_detect_without_django`'s css_source_root guess, off the filesystem alone.
+
+    Verified against a real gap: a Next.js App Router project keeps its global
+    stylesheet at `app/globals.css` (imported directly into the root layout, never
+    linked with `<link>` and never sitting under a `public/`-style static directory),
+    and `_STATIC_DIRS` - the only place `css_source_root` was ever guessed from - has no
+    entry for `app`. On `leanos-app`, `public/` existed (so detection did not fail
+    outright) but held zero .css files, so `css_source_root` came back `None` and EVERY
+    class, token and attribute-selector in `app/globals.css` was invisible to the scan -
+    not merely unread, absent as a symbol - including the very `content: attr(data-x)`
+    reads this coverage push added a reader for.
+    """
+
+    def _detect(self, root: pathlib.Path) -> dict:
+        from seamcheck.autoconfig import _detect_without_django
+
+        config: dict = {}
+        why: dict[str, str] = {}
+
+        def put(key, value, source):
+            if value not in (None, "", [], {}):
+                config[key] = value
+                why[key] = source
+
+        _detect_without_django(root, put, config, why)
+        return config
+
+    def test_a_global_stylesheet_under_app_is_found_even_with_an_empty_public_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "public").mkdir()
+            (root / "app").mkdir()
+            (root / "app" / "globals.css").write_text(":root { --accent: blue; }")
+
+            config = self._detect(root)
+
+        self.assertEqual(config.get("css_source_root"), "app")
+
+    def test_the_denser_css_root_still_wins_when_a_project_has_both(self):
+        # The fix must not stop preferring the DOMINANT root when a project actually has
+        # a conventional one - only fill in for the projects that have none at all. Two
+        # stylesheets under `static/` against one under `app/` should still pick `static`
+        # on count, same rule `_densest` already applies everywhere else.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "static").mkdir()
+            (root / "static" / "site.css").write_text(".a{color:red}")
+            (root / "static" / "theme.css").write_text(".b{color:blue}")
+            (root / "app").mkdir()
+            (root / "app" / "globals.css").write_text(":root { --accent: blue; }")
+
+            config = self._detect(root)
+
+        self.assertEqual(config.get("css_source_root"), "static")
+
+
 class PrecedenceTests(SimpleTestCase):
     def test_written_config_wins_key_by_key(self):
         # Adding detection must not be able to change the answer for a project that had

@@ -56,6 +56,19 @@ def _normalize(path: str) -> str:
     return path.strip("/")
 
 
+def _literal_prefix(path: str) -> str | None:
+    """The literal text before a route's FIRST dynamic segment, trailing separator
+    stripped - or None if the route (already `_normalize`d) has no dynamic segment.
+
+    `_as_pattern` escapes this same substring before it starts building the segment's
+    own pattern; this reuses `_PARAMETER`'s segmentation rather than re-deriving it.
+    """
+    match = _PARAMETER.search(path)
+    if match is None:
+        return None
+    return path[:match.start()].rstrip("/")
+
+
 def _as_pattern(path: str) -> re.Pattern | None:
     """A route with dynamic segments, compiled. None for a route that has none."""
     if not any(character in path for character in "<[{:"):
@@ -114,6 +127,33 @@ class UrlIndex:
         """Routes whose path ends with `path` - for a reference with no leading slash."""
         normalised = _normalize(path)
         return [s for s in self.urls if _normalize(s.label).endswith("/" + normalised)]
+
+    def resolve_prefix(self, prefix: str) -> Symbol | None:
+        """A parameterised route whose literal lead-in matches `prefix`, dynamic tail
+        and all - for a reference that names a route by its known prefix and nothing
+        more (`href={`/kaizen/${locale}`}`, truncated by `_static_url` exactly where the
+        required `[locale]` segment begins).
+
+        Deliberately separate from `resolve()`, not a change to it: `resolve()` is asked
+        by fetch matching and `{% url %}`/`<a href>` literal matching to mean "this is
+        the complete path", and every one of those callers would start crediting a
+        partial word against a route it merely starts with if this were folded in there.
+        This is reached from exactly one place - the JS nav-reference reader - which
+        already knows its path is a prefix, not a literal.
+
+        `prefix` must end at a complete segment boundary (a trailing "/"), never inside
+        a word: `/kaiz` must never be credited against `/kaizen/...`. Every real
+        `href={`/x/${y}`}` site truncates at a full segment, never mid-word, so this
+        guard costs nothing real and rules out the one case that would.
+        """
+        if not prefix.endswith("/"):
+            return None
+        normalised = _normalize(prefix)
+        for _pattern, symbol in self.parameterised:
+            literal = _literal_prefix(_normalize(symbol.label))
+            if literal is not None and literal == normalised:
+                return symbol
+        return None
 
 
 # A static asset is not a route, and asking the route table about one produces an answer

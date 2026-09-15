@@ -440,11 +440,21 @@ def match_css_selectors(
         css_by_key[(symbol.sub.removeprefix("vendor:"), symbol.label)] = symbol
     used_keys: set[tuple[str, str]] = set()
     # What the markup wires up on its own: `<label for>`, `aria-controls`, `headers`,
-    # `list`, `form`, `popovertarget`. The template scanner records each as evidence; this
-    # is the one place that has to know an element can be in use without any code at all.
+    # `list`, `form`, `popovertarget`, `<a href="#x">`. The template scanner records each
+    # as evidence; this is the one place that has to know an element can be in use
+    # without any code at all.
+    #
+    # Read from BOTH parameters, not just `dom_selectors`: `scan_templates()` returns one
+    # mixed list - dom_attr declarations and these dom_selector-kind `id:evidence`
+    # references, found in the same pass - and the caller (`pipeline.py`) assigns the
+    # WHOLE thing to its `dom_attrs` variable without splitting the two kinds apart. So
+    # on a real scan this evidence sits in `dom_attrs`, and reading only `dom_selectors`
+    # here never saw it: every fragment-anchor target with no CSS rule of its own - a
+    # table-of-contents jump target, never meant to be styled - was reported
+    # `unresolved`, a question the id was never trying to answer.
     wired_by_markup = {
         (_base_sub(selector), selector.label)
-        for selector in dom_selectors
+        for selector in list(dom_selectors) + list(dom_attrs)
         if selector.sub.endswith(":evidence") and _base_sub(selector) == "id"
     }
 

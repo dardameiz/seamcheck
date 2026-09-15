@@ -132,7 +132,10 @@ def _partial_attr_names(node: dict) -> list[str]:
             ((q.get("value") or {}).get("cooked") or "") for q in (node.get("quasis") or [])
         )
     elif node.get("type") == "BinaryExpression":
-        text = "".join(_concat_shape(node))
+        # _concat_shape now returns every static COMBINATION a ternary inside the chain
+        # could produce (list[list[str]]), not one flat list of fragments - joined here
+        # via _literal_strings, which already does exactly that per combination.
+        text = " ".join(_literal_strings(node))
     return sorted(set(_PARTIAL_ATTR_RE.findall(text)))
 
 
@@ -636,37 +639,76 @@ def _class_tokens(raw: str) -> list[str]:
 _STEM_RE = re.compile(r"(?:^|\s)([A-Za-z_][\w-]*[-_])(?:\$\{\}|$)")
 
 
+# A pathological chain of nested ternaries could otherwise expand combinatorially; real
+# code never branches this many times inside one class name, so the cap costs nothing
+# real and exists only to bound the pathological case.
+_MAX_LITERAL_ALTERNATIVES = 16
+
+
 def _literal_strings(node: dict) -> list[str]:
-    """String content a node contributes statically.
+    """Every string this node could statically contribute - possibly more than one.
 
     A template literal's quasis are static text; its `${...}` holes are not, so the
-    static neighbours are kept and the holes contribute nothing rather than a guess.
+    static neighbours are kept and a hole with no static alternative of its own
+    contributes nothing but "${}" rather than a guess.
+
+    A ternary between two branches that are THEMSELVES static is not a runtime unknown -
+    `cond ? 'a' : 'b'` is exactly as knowable as 'a' and 'b' are, just two of them
+    instead of one. So this can return more than one string: every combination the
+    node's static branches and holes could produce, capped so a pathological chain of
+    nested ternaries cannot blow up combinatorially.
 
     A `+` concatenation is treated the same way, with the same "${}" stand-in for whatever
     is not a literal. It used to contribute NOTHING, so `'badge ' + kind` gave up the whole
     token `badge` as well as the dynamic part - and `'pb-badge-' + kind` left no trace that
-    a pb-badge- family exists at all.
+    a pb-badge- family exists at all. And a literal glued directly to a ternary with no
+    separating space - `"slide" + (cond ? " dark" : "")` - used to be swallowed whole into
+    one rejected fragment, "slide${}", losing "slide" as collateral damage even though the
+    ternary's own branches were never looked at either.
     """
     node_type = node.get("type")
     if node_type == "Literal" and isinstance(node.get("value"), str):
         return [node["value"]]
+    if node_type == "ConditionalExpression":
+        alternatives = (
+            _literal_strings(node.get("consequent") or {})
+            + _literal_strings(node.get("alternate") or {})
+        )
+        return alternatives[:_MAX_LITERAL_ALTERNATIVES]
     if node_type == "TemplateLiteral":
-        # Join the static chunks with a literal "${}" so any token touching an
-        # interpolation keeps the marker and is rejected as a name. `bb-spark-${i}`
-        # must not yield the fragment "bb-spark-"; `ab-star ${x}` must still yield
-        # "ab-star", because that token is whole.
-        return ["${}".join((quasi.get("value") or {}).get("raw", "") for quasi in node.get("quasis") or [])]
+        # Every static chunk, joined with every combination its interpolations could
+        # statically be - "${}" standing in for one that cannot be known, so any token
+        # touching a genuinely dynamic hole still keeps the marker and is rejected as a
+        # name. `bb-spark-${i}` must not yield the fragment "bb-spark-"; `ab-star ${x}`
+        # must still yield "ab-star", because that token is whole.
+        expressions = node.get("expressions") or []
+        texts = [""]
+        for index, quasi in enumerate(node.get("quasis") or []):
+            texts = [text + (quasi.get("value") or {}).get("raw", "") for text in texts]
+            if index >= len(expressions):
+                continue
+            alternatives = _literal_strings(expressions[index]) or ["${}"]
+            texts = [text + alt for text in texts for alt in alternatives]
+            texts = texts[:_MAX_LITERAL_ALTERNATIVES]
+        return texts
     if node_type == "BinaryExpression" and node.get("operator") == "+":
-        return ["".join(_concat_shape(node))]
+        combinations = _concat_shape(node)
+        return ["".join(fragments) for fragments in combinations][:_MAX_LITERAL_ALTERNATIVES]
     return []
 
 
-def _concat_shape(node: dict) -> list[str]:
-    """A `+` chain flattened to its static text, with "${}" where an operand is dynamic."""
+def _concat_shape(node: dict) -> list[list[str]]:
+    """A `+` chain's every static combination, each as the chain's own fragments -
+    joined by the caller rather than here, so a real space between two operands stays a
+    real space instead of every combination being pre-flattened before it can be told
+    apart from one glued directly against an interpolation.
+    """
     if node.get("type") == "BinaryExpression" and node.get("operator") == "+":
-        return _concat_shape(node.get("left") or {}) + _concat_shape(node.get("right") or {})
+        left = _concat_shape(node.get("left") or {})
+        right = _concat_shape(node.get("right") or {})
+        return [a + b for a in left for b in right][:_MAX_LITERAL_ALTERNATIVES]
     static = _literal_strings(node)
-    return [static[0]] if static else ["${}"]
+    return [[s] for s in static] if static else [["${}"]]
 
 
 def _class_stems(node: dict) -> list[str]:

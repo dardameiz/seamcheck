@@ -174,3 +174,94 @@ class TemplateStyleBlockTests(SimpleTestCase):
 
     def test_an_empty_style_block_is_skipped(self):
         self.assertEqual(self._selectors("<style>\n\n</style>"), [])
+
+    def test_a_token_defined_in_a_style_block_is_found(self):
+        # B3 (docs/seamcheck-findings-from-leanos.md): extract_template_css read only
+        # `selectors` out of a parsed block, never `tokenDefs`/`tokenUses` - so a
+        # `:root { --accent: ... }` living in a template's own <style> block, and every
+        # `var(--accent)` reading it, were both invisible. A JS-only definition
+        # (`element.style.setProperty('--accent', ...)`) was the only kind that could
+        # ever surface, and looked unused because its CSS-side reads did not exist as
+        # symbols at all to link it to.
+        found = self._selectors("<style>:root { --accent: #2551d6; }</style>")
+
+        self.assertEqual([(s.kind, s.label) for s in found], [("css_token_def", "--accent")])
+
+    def test_a_token_used_in_a_style_block_is_found(self):
+        found = self._selectors("<style>.eyebrow { color: var(--accent); }</style>")
+
+        self.assertIn(("css_token_use", "--accent"), [(s.kind, s.label) for s in found])
+
+    def test_a_token_uses_line_points_at_the_template_not_into_the_block(self):
+        found = self._selectors(
+            "<html>\n<body>\n<style>\n.eyebrow { color: var(--accent); }\n</style>"
+        )
+        uses = [s for s in found if s.kind == "css_token_use"]
+
+        self.assertEqual(uses[0].line, 4)
+
+    def test_a_token_use_with_a_fallback_is_marked_distinctly(self):
+        found = self._selectors("<style>.x { margin: var(--gap, .08em); }</style>")
+
+        self.assertEqual([s.sub for s in found if s.kind == "css_token_use"],
+                         ["token-fallback"])
+
+
+class AttributeSelectorTests(SimpleTestCase):
+    """`[data-x]` styles an element BY that attribute - a read of it, same as JS's
+    `getAttribute`/`dataset`."""
+
+    def _selectors(self, css):
+        import tempfile
+
+        from seamcheck.extractors.css_extractor import extract_css_attribute_selectors
+
+        with tempfile.NamedTemporaryFile("w", suffix=".css", delete=False) as handle:
+            handle.write(css)
+        return extract_css_attribute_selectors([handle.name])
+
+    def test_an_attribute_selector_is_a_read_of_the_attribute(self):
+        found = self._selectors('[data-state="open"] { display: block; }')
+
+        self.assertEqual([(s.label, s.sub) for s in found], [("state", "data:css")])
+
+
+class ContentAttrReadTests(SimpleTestCase):
+    """B1 (docs/seamcheck-findings-from-leanos.md): `content: attr(data-x)` renders the
+    attribute's value through generated content - a read, exactly as much as a `[data-x]`
+    attribute SELECTOR is, and one this reader never looked for at all. A `data-tip`
+    attribute set purely so a shared stylesheet could show it via `content: attr(data-tip)`
+    - nothing reads it back through `getAttribute`/`dataset`/a selector - looked unread.
+    """
+
+    def _selectors(self, css):
+        import tempfile
+
+        from seamcheck.extractors.css_extractor import extract_css_attribute_selectors
+
+        with tempfile.NamedTemporaryFile("w", suffix=".css", delete=False) as handle:
+            handle.write(css)
+        return extract_css_attribute_selectors([handle.name])
+
+    def test_content_attr_of_a_data_attribute_is_a_read(self):
+        found = self._selectors(
+            '.lc-tip:hover::after { content: attr(data-tip); color: red; }'
+        )
+
+        self.assertEqual([(s.label, s.sub) for s in found], [("tip", "data:css")])
+
+    def test_an_attribute_selector_and_a_content_attr_read_of_different_names_are_both_kept(self):
+        found = self._selectors(
+            "td[data-label]::before { content: attr(data-label); }\n"
+            ".lc-tip:hover::after { content: attr(data-tip); }\n"
+        )
+
+        self.assertEqual(sorted((s.label, s.sub) for s in found),
+                         [("label", "data:css"), ("tip", "data:css")])
+
+    def test_a_non_data_attr_read_is_not_read_as_a_data_attribute(self):
+        # attr(href) and friends are real CSS, just not the data-* lens this tool has.
+        self.assertEqual(self._selectors('a::after { content: attr(href); }'), [])
+
+    def test_a_plain_content_string_is_not_mistaken_for_an_attr_read(self):
+        self.assertEqual(self._selectors('.x::after { content: "data-tip"; }'), [])

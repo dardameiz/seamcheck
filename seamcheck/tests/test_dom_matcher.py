@@ -419,3 +419,21 @@ class WiredByMarkupTests(SimpleTestCase):
                                     [self._element("thing", sub="class")], [], set())
         mine = [e for e in edges if e.from_id.endswith("thing:page.html")]
         self.assertEqual([e.status for e in mine], [Status.UNRESOLVED])
+
+    def test_the_reference_still_wires_up_when_it_arrives_through_dom_attrs(self):
+        # `scan_templates()` returns ONE mixed list - dom_attr declarations AND the
+        # dom_selector-kind `id:evidence` references it finds in the same pass
+        # (`<a href="#m0">` pointing at `id="m0"`) - and `pipeline.py` assigns the WHOLE
+        # thing to its `dom_attrs` variable, never splitting the two kinds apart. So on
+        # a real scan the evidence symbol sits in `dom_attrs`, not `dom_selectors`, and
+        # `wired_by_markup` - built from `dom_selectors` alone - never saw it: every
+        # fragment-anchor target with no CSS rule (a table of contents jump target, never
+        # meant to be styled) was reported `unresolved`, "nothing styles this id", a
+        # question that id was never trying to answer. 13 ids across 4 near-identical
+        # guide pages on `leanos-app`, surfaced once `styles_are_local` (a separate fix)
+        # stopped giving every such id the CDN-style benefit of the doubt instead.
+        edges = match_css_selectors([], [self._markup_reference("m0"), self._element("m0")],
+                                    [], set())
+        mine = [e for e in edges if e.from_id.endswith(":m0:page.html")]
+        self.assertEqual([e.status for e in mine], [Status.CONNECTED])
+        self.assertIn("markup itself", mine[0].note)

@@ -102,6 +102,100 @@ class DomCssRegressionGateTests(SimpleTestCase):
         self.assertEqual(claimed, [])
 
 
+class TemplateStyleBlockTokenRegressionTests(SimpleTestCase):
+    """B3 (docs/seamcheck-findings-from-leanos.md), end to end: a design token declared
+    AND read only inside a template's own <style> block, with a JavaScript runtime
+    override of the same token - the exact shape
+    `public/comercial/leanos-comercial.html` has. `extract_template_css` used to read
+    only `selectors` out of a parsed block, so neither the `:root` definition nor any
+    `var()` read of it ever became a symbol - and the token's only visible definition
+    (the JS `setProperty`) looked unused, because nothing on the graph could prove it
+    was ever read.
+    """
+
+    def setUp(self):
+        import tempfile
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        root = Path(self.tmp.name)
+        (root / "slide.html").write_text(
+            "<style>\n"
+            "  :root { --accent: #2551d6; }\n"
+            "  .eyebrow { color: var(--accent); }\n"
+            "</style>\n"
+        )
+        (root / "slide.js").write_text(
+            "function build(el, s) {\n"
+            '  if (s.accent) el.style.setProperty("--accent", s.accent);\n'
+            "}\n"
+        )
+        self.graph = run_scan(
+            urlconf_module="seamcheck.tests.fixtures.fixture_urls",
+            js_entry_files=[str(root / "slide.js")],
+            js_project_root=str(root),
+            template_files=[str(root / "slide.html")],
+            css_files=[],
+        )
+
+    def test_the_token_is_connected_not_unused(self):
+        defs = [s for s in self.graph.symbols
+                if s.kind == "css_token_def" and s.label == "--accent"]
+
+        self.assertTrue(defs)
+        self.assertTrue(all(s.status is Status.CONNECTED for s in defs),
+                        [(s.file, s.status) for s in defs])
+
+
+class StylesAreLocalFromTemplateOnlyCssTests(SimpleTestCase):
+    """`styles_are_local` used to ask only `bool(css_files)` - the STANDALONE .css list -
+    so a project whose entire stylesheet lives in templates' own <style> blocks, with no
+    freestanding .css file anywhere (leanos-app's public/*.html deck pages: ~1,000
+    selectors, zero standalone .css), was judged to have NO local styles at all. Every
+    class with no matching rule then got the CDN-style benefit of the doubt (`uncertain`,
+    "no local CSS was found at all") instead of the accurate, evidence-backed
+    `unresolved` its own comment already promises: "Whether this project HAS stylesheets
+    of its own... with none, every class... is unstyled as far as the scan can see" -
+    `selectors` (css_symbols filtered to css_selector, template blocks merged in already)
+    is what answers that question; `css_files` alone never did for a project shaped this
+    way.
+    """
+
+    def setUp(self):
+        import tempfile
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        root = Path(self.tmp.name)
+        (root / "page.html").write_text(
+            "<style>.styled { color: red; }</style>\n"
+            '<div class="styled">a</div>\n'
+            '<div class="totally-unstyled-orphan">b</div>\n'
+        )
+        self.graph = run_scan(
+            urlconf_module="seamcheck.tests.fixtures.fixture_urls",
+            js_entry_files=[],
+            js_project_root=str(root),
+            template_files=[str(root / "page.html")],
+            css_files=[],
+        )
+
+    def test_a_class_with_no_matching_rule_is_unresolved_not_uncertain(self):
+        orphan = [s for s in self.graph.symbols
+                  if s.kind == "dom_attr" and s.label == "totally-unstyled-orphan"]
+
+        self.assertTrue(orphan)
+        self.assertTrue(all(s.status is Status.UNRESOLVED for s in orphan),
+                        [(s.status, s.note) for s in orphan])
+
+    def test_a_class_with_a_matching_template_rule_is_still_connected(self):
+        styled = [s for s in self.graph.symbols
+                  if s.kind == "dom_attr" and s.label == "styled"]
+
+        self.assertTrue(styled)
+        self.assertTrue(all(s.status is Status.CONNECTED for s in styled))
+
+
 class OneRowPerSymbolTests(SimpleTestCase):
     """A symbol id names one symbol, or every count that walks the list is wrong.
 

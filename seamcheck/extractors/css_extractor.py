@@ -26,6 +26,12 @@ _CSS_ESCAPE_RE = re.compile(r"\\(.)")
 # The selector reader only ever matched # and . tokens, so 27 attribute selectors on the
 # project measured were invisible and the attributes they style looked unread.
 _ATTRIBUTE_SELECTOR_RE = re.compile(r"\[\s*data-([\w-]+)")
+# `content: attr(data-x)` RENDERS the attribute's value through generated content - a read,
+# same class of evidence as an attribute selector, and one this reader never looked for at
+# all: B1 (docs/seamcheck-findings-from-leanos.md). Scoped to a `content:` declaration
+# specifically (stopping at `;`/`{`/`}`) so a `content: "data-tip"` STRING - the literal
+# text, not the function call - is never mistaken for a read of the attribute.
+_CONTENT_ATTR_RE = re.compile(r"content\s*:[^;{}]*?\battr\(\s*data-([\w-]+)\s*\)", re.I)
 
 
 def parse_css_files(css_files: list[str], *, report_failures: bool = True) -> list[dict]:
@@ -57,43 +63,64 @@ def _symbol(kind: str, label: str, sub: str, path: str, line, snippet: str) -> S
     )
 
 
+def _record_symbols(
+    record: dict, path: str, seen: set[str], *, line_offset: int = 0
+) -> list[Symbol]:
+    """Selectors, token definitions and token uses out of one parsed stylesheet record.
+
+    Shared between a standalone .css file and a template's inline <style> block: a
+    `:root { --accent: ... }` or a `var(--accent)` means exactly the same thing in
+    either place, and reading only `selectors` out of a template's block - as
+    `extract_template_css` used to - left every token DEFINED or READ there invisible.
+    B3 (docs/seamcheck-findings-from-leanos.md): a token set only from JavaScript
+    (`element.style.setProperty(...)`) then looked unused, because its CSS-side reads,
+    sitting in a template's <style> block, were never symbols to link it to at all.
+    """
+    symbols: list[Symbol] = []
+
+    def _line(raw) -> int | None:
+        return (raw + line_offset) if raw else raw
+
+    for rule in record.get("selectors", []):
+        for marker, raw_name in _SELECTOR_TOKEN_RE.findall(rule["selector"]):
+            name = _CSS_ESCAPE_RE.sub(r"\1", raw_name)
+            sub = "id" if marker == "#" else "class"
+            symbol = _symbol("css_selector", name, sub, path, _line(rule["line"]), rule["selector"])
+            if symbol.id not in seen:
+                seen.add(symbol.id)
+                symbols.append(symbol)
+    for definition in record.get("tokenDefs", []):
+        symbol = _symbol(
+            "css_token_def", definition["name"], "token", path, _line(definition["line"]),
+            f"{definition['name']}: ...",
+        )
+        if symbol.id not in seen:
+            seen.add(symbol.id)
+            symbols.append(symbol)
+    for use in record.get("tokenUses", []):
+        # A use that carries its own fallback is a different symbol from one that
+        # demands a definition, and must not share an id with it: 53 of this
+        # project's 63 "undefined token" findings were the fallback form.
+        fallback = bool(use.get("fallback"))
+        symbol = _symbol(
+            "css_token_use", use["name"],
+            "token-fallback" if fallback else "token", path, _line(use["line"]),
+            f"var({use['name']}, ...)" if fallback else f"var({use['name']})",
+        )
+        if fallback:
+            symbol = replace(symbol, note=_FALLBACK_NOTE)
+        if symbol.id not in seen:
+            seen.add(symbol.id)
+            symbols.append(symbol)
+    return symbols
+
+
 def extract_css(css_files: list[str]) -> list[Symbol]:
     symbols: list[Symbol] = []
     seen: set[str] = set()
 
     for record in parse_css_files(css_files):
-        path = record["path"]
-        for rule in record.get("selectors", []):
-            for marker, raw_name in _SELECTOR_TOKEN_RE.findall(rule["selector"]):
-                name = _CSS_ESCAPE_RE.sub(r"\1", raw_name)
-                sub = "id" if marker == "#" else "class"
-                symbol = _symbol("css_selector", name, sub, path, rule["line"], rule["selector"])
-                if symbol.id not in seen:
-                    seen.add(symbol.id)
-                    symbols.append(symbol)
-        for definition in record.get("tokenDefs", []):
-            symbol = _symbol(
-                "css_token_def", definition["name"], "token", path, definition["line"],
-                f"{definition['name']}: ...",
-            )
-            if symbol.id not in seen:
-                seen.add(symbol.id)
-                symbols.append(symbol)
-        for use in record.get("tokenUses", []):
-            # A use that carries its own fallback is a different symbol from one that
-            # demands a definition, and must not share an id with it: 53 of this
-            # project's 63 "undefined token" findings were the fallback form.
-            fallback = bool(use.get("fallback"))
-            symbol = _symbol(
-                "css_token_use", use["name"],
-                "token-fallback" if fallback else "token", path, use["line"],
-                f"var({use['name']}, ...)" if fallback else f"var({use['name']})",
-            )
-            if fallback:
-                symbol = replace(symbol, note=_FALLBACK_NOTE)
-            if symbol.id not in seen:
-                seen.add(symbol.id)
-                symbols.append(symbol)
+        symbols += _record_symbols(record, record["path"], seen)
     return symbols
 
 
@@ -122,11 +149,18 @@ def _neutralise_css(block: str) -> str:
 
 
 def extract_template_css(template_files: list[str]) -> list[Symbol]:
-    """CSS written inside a template's own <style> block.
+    """CSS written inside a template's own <style> block: selectors, and now tokens too.
 
     Reading only .css files made every element styled that way look like one nothing
     reaches. This project keeps 1,016 class and id selectors in 29 templates' <style>
     blocks - the same order as the whole "nothing reaches it" backlog.
+
+    Token definitions and uses go through the same record now (B3,
+    docs/seamcheck-findings-from-leanos.md): this used to read only `selectors` out of
+    each parsed block, so a `:root { --token: ... }` or a `var(--token)` living in a
+    template's own styles was invisible - the one place a token is set at runtime
+    (`element.style.setProperty(...)`) then looked unused, because none of its CSS-side
+    reads existed as symbols to link it to.
 
     The blocks go through the same postcss parse as a stylesheet, so a selector mentioned
     in a comment is still not a selector, and line numbers are mapped back to the
@@ -136,6 +170,7 @@ def extract_template_css(template_files: list[str]) -> list[Symbol]:
     import tempfile
 
     symbols: list[Symbol] = []
+    seen: set[str] = set()
     with tempfile.TemporaryDirectory() as scratch:
         origins: dict[str, tuple[str, int]] = {}
         for index, template in enumerate(sorted(template_files)):
@@ -168,16 +203,11 @@ def extract_template_css(template_files: list[str]) -> list[Symbol]:
             )
         for record in records:
             template, offset = origins[record["path"]]
-            for rule in record.get("selectors", []):
-                line = (rule["line"] + offset) if rule["line"] else None
-                for marker, raw_name in _SELECTOR_TOKEN_RE.findall(rule["selector"]):
-                    name = _CSS_ESCAPE_RE.sub(r"\1", raw_name)
-                    symbols.append(_symbol(
-                        "css_selector", name, "id" if marker == "#" else "class",
-                        template, line, rule["selector"],
-                    ))
-    # One symbol per selector name: the id carries no line, so duplicates would collide.
-    return list({symbol.id: symbol for symbol in symbols}.values())
+            symbols += _record_symbols(record, template, seen, line_offset=offset)
+    # One symbol per name: none of the three kinds' ids carry a line, so duplicates -
+    # the same selector or token appearing in more than one block - would collide.
+    # _record_symbols already keeps only the first; nothing further to dedupe here.
+    return symbols
 
 
 def css_imports(css_files: list[str]) -> dict[str, list[str]]:
@@ -189,11 +219,16 @@ def css_imports(css_files: list[str]) -> dict[str, list[str]]:
 
 
 def extract_css_attribute_selectors(css_files: list[str]) -> list[Symbol]:
-    """`[data-x]` selectors, as reaches-for-an-element rather than as style rules.
+    """`[data-x]` selectors and `content: attr(data-x)`, as reaches-for-an-element rather
+    than as style rules.
 
     Emitted as dom_selectors so they match template data attributes through the same
     matcher a `querySelector('[data-x]')` goes through - a stylesheet and a script asking
-    for the same attribute are the same claim, and deserve the same answer.
+    for the same attribute are the same claim, and deserve the same answer. `attr()`
+    inside `content:` is the same claim again, just rendered rather than matched on: two
+    components set a data attribute purely so a shared stylesheet could show it this way,
+    with nothing reading it back through `getAttribute`/`dataset`/a selector, and both
+    looked unread (B1, docs/seamcheck-findings-from-leanos.md).
     """
     symbols: list[Symbol] = []
     seen: set[str] = set()
@@ -202,20 +237,30 @@ def extract_css_attribute_selectors(css_files: list[str]) -> list[Symbol]:
             text = pathlib.Path(path).read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        for match in _ATTRIBUTE_SELECTOR_RE.finditer(text):
-            name = match.group(1)
-            line = text.count("\n", 0, match.start()) + 1
+        basename = os.path.basename(path)
+
+        def _add(name: str, line: int, snippet: str, note: str, *, path=path, basename=basename) -> None:
             symbol_id = f"dom_selector:data:{name}:{path}:{line}"
             if symbol_id in seen:
-                continue
+                return
             seen.add(symbol_id)
             symbols.append(
                 Symbol(
                     id=symbol_id, kind="dom_selector", label=name, sub="data:css",
                     file=path, line=line, status=Status.UNCERTAIN,
-                    snippet=f"[data-{name}]", chain=[os.path.basename(path)],
-                    note="A stylesheet selects on this attribute. Evidence that it is used; "
-                         "the verdict belongs to the attribute, not to this rule.",
+                    snippet=snippet, chain=[basename], note=note,
                 )
             )
+
+        for match in _ATTRIBUTE_SELECTOR_RE.finditer(text):
+            name = match.group(1)
+            _add(name, text.count("\n", 0, match.start()) + 1, f"[data-{name}]",
+                 "A stylesheet selects on this attribute. Evidence that it is used; the "
+                 "verdict belongs to the attribute, not to this rule.")
+        for match in _CONTENT_ATTR_RE.finditer(text):
+            name = match.group(1)
+            _add(name, text.count("\n", 0, match.start()) + 1, f"content: attr(data-{name})",
+                 "A stylesheet renders this attribute's value through generated content. "
+                 "Evidence that it is used; the verdict belongs to the attribute, not to "
+                 "this rule.")
     return symbols

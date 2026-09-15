@@ -126,6 +126,40 @@ class InterpolationFragmentTests(SimpleTestCase):
         self.assertEqual(_labels("el.className = `ab-star ${extra}`;"), {"ab-star"})
 
 
+class TernaryBranchTests(SimpleTestCase):
+    """B2 (docs/seamcheck-findings-from-leanos.md): a ternary between two literal
+    strings is not a runtime unknown - it is exactly two statically known possible
+    values, `cond ? 'a' : 'b'` no less knowable than 'a' and 'b' on their own. Neither
+    branch was ever looked at before, so a class applied only this way read as unused,
+    and - worse - a literal token concatenated right next to the ternary (no separating
+    space) was swallowed into the same rejected fragment as the interpolation.
+    """
+
+    def test_a_concatenated_ternarys_true_branch_is_kept(self):
+        # el.className = "slide" + (s.kind === "cover" ? " dark" : "");
+        self.assertEqual(
+            _labels('el.className = "slide" + (cond ? " dark" : "");'), {"slide", "dark"},
+        )
+
+    def test_a_concatenated_ternarys_false_branch_is_kept_too(self):
+        self.assertEqual(
+            _labels('el.className = "slide" + (cond ? "" : " night");'), {"slide", "night"},
+        )
+
+    def test_a_ternary_inside_a_class_attribute_in_generated_markup_is_kept(self):
+        # `<div class="kpi ${k[2]?'g':''}">` - the true branch of a ternary sitting
+        # directly in a class="..." position inside an innerHTML template literal.
+        self.assertEqual(
+            _labels("""el.innerHTML = `<div class="kpi ${k[2]?'g':''}"></div>`;"""),
+            {"kpi", "g"},
+        )
+
+    def test_a_ternary_with_no_literal_branch_still_yields_no_fragment(self):
+        # Neither branch is a literal - this stays exactly as unprovable as any other
+        # runtime value, and must not be guessed at.
+        self.assertEqual(_labels("el.className = cond ? a : b;"), set())
+
+
 class AppliedClassIsNeverAFindingTests(SimpleTestCase):
     def test_an_applied_class_with_no_css_rule_produces_no_finding(self):
         # `balance-counter` is applied in markup and then queried with
