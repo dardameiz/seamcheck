@@ -9,9 +9,11 @@ import re
 import shutil
 import tempfile
 from collections.abc import Iterator
+from dataclasses import dataclass
 
 from seamcheck.graph import Edge, Status, Symbol
 from seamcheck.nodetools import node_line, parser_path, report, run_parser
+from seamcheck.resolve import Resolver
 
 _JS_TOOLS = os.path.join(os.path.dirname(__file__), os.pardir, "js_tools")
 # .js first, deliberately: where a project ships `foo.js` beside `foo.ts` the .js is
@@ -313,21 +315,14 @@ def _imported_paths(ast: dict) -> list[str]:
     return [path for path, _is_dynamic in _imported_paths_with_kind(ast)]
 
 
-def _resolve_import(current_file: str, import_path: str) -> str | None:
-    # Bare specifiers ('gsap') are node_modules, not first-party source.
-    if not import_path.startswith("."):
-        return None
-    base = os.path.normpath(os.path.join(os.path.dirname(current_file), import_path))
-    if os.path.isfile(base):
-        return base
-    for extension in _JS_EXTENSIONS:
-        if os.path.isfile(base + extension):
-            return base + extension
-    for index_name in ("index.js", "index.mjs", "index.ts", "index.tsx", "index.jsx"):
-        candidate = os.path.join(base, index_name)
-        if os.path.isfile(candidate):
-            return candidate
-    return None
+def _resolved_file(resolver: Resolver, current_file: str, import_path: str) -> str | None:
+    """The script file an import names, or None: a package, an asset, or nothing on disk.
+
+    Through `Resolver`, so `@/components/x` is followed like `./x`. Anything not starting
+    with "." used to be treated as node_modules, and a Next.js page importing through its
+    tsconfig alias reached 1 of the 83 files it uses (leanos-app).
+    """
+    return resolver.resolve(current_file, import_path).file
 
 
 def _receiver_name(callee: dict) -> str:
@@ -398,6 +393,7 @@ def discover_js_files(entry_files: list[str], project_root: str) -> list[str]:
     points hides every write made by an imported module.
     """
     visited: set[str] = set()
+    resolver = Resolver(project_root)
     to_visit = [os.path.join(project_root, name) for name in entry_files]
     while to_visit:
         batch = [
@@ -411,7 +407,7 @@ def discover_js_files(entry_files: list[str], project_root: str) -> list[str]:
         visited.update(batch)
         for path, ast in iter_parsed(batch):
             for import_path in _imported_paths(ast):
-                resolved = _resolve_import(path, import_path)
+                resolved = _resolved_file(resolver, path, import_path)
                 if resolved and resolved not in visited:
                     to_visit.append(resolved)
     return sorted(visited)
@@ -431,6 +427,7 @@ def discover_dynamic_import_targets(entry_files: list[str], project_root: str) -
     """
     visited: set[str] = set()
     dynamic_targets: set[str] = set()
+    resolver = Resolver(project_root)
     to_visit = [os.path.join(project_root, name) for name in entry_files]
     while to_visit:
         batch = [
@@ -444,7 +441,7 @@ def discover_dynamic_import_targets(entry_files: list[str], project_root: str) -
         visited.update(batch)
         for path, ast in iter_parsed(batch):
             for import_path, is_dynamic in _imported_paths_with_kind(ast):
-                resolved = _resolve_import(path, import_path)
+                resolved = _resolved_file(resolver, path, import_path)
                 if not resolved:
                     continue
                 if is_dynamic:
@@ -452,6 +449,73 @@ def discover_dynamic_import_targets(entry_files: list[str], project_root: str) -
                 if resolved not in visited:
                     to_visit.append(resolved)
     return dynamic_targets
+
+
+@dataclass
+class ModuleGraph:
+    """The first-party import graph reachable from a set of roots, parsed once.
+
+    `edges` holds each file's first-party script imports; `assets` its non-script ones
+    (CSS, JSON, images), recorded so a page's reach includes the stylesheet it imports
+    without walking into it.
+    """
+
+    edges: dict[str, frozenset[str]]
+    assets: dict[str, frozenset[str]]
+
+    def reachable_files(self, roots) -> set[str]:
+        seen: set[str] = set()
+        stack = [root for root in roots if root]
+        while stack:
+            current = stack.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            stack.extend(target for target in self.edges.get(current, ()) if target not in seen)
+        return seen
+
+    def reachable_assets(self, roots) -> set[str]:
+        found: set[str] = set()
+        for path in self.reachable_files(roots):
+            found |= self.assets.get(path, frozenset())
+        return found
+
+
+def build_module_graph(project_root: str, roots: list[str]) -> ModuleGraph:
+    """Walk outward from every root at once, parsing each reachable file one time.
+
+    Handed every page's roots together, one graph answers every page's reach: pages share
+    most of their imports, and walking them once per root is what `page_files` spent ~13 s
+    on for the reference project.
+    """
+    resolver = Resolver(project_root)
+    edges: dict[str, frozenset[str]] = {}
+    assets: dict[str, frozenset[str]] = {}
+    to_visit = [os.path.abspath(root) for root in roots]
+    while to_visit:
+        batch = [
+            path for path in dict.fromkeys(to_visit)
+            if path not in edges and path.endswith(_JS_EXTENSIONS) and os.path.isfile(path)
+        ]
+        to_visit = []
+        if not batch:
+            break
+        for path in batch:
+            edges[path] = frozenset()  # claimed before parsing, so an import cycle stops here
+        for path, ast in iter_parsed(batch):
+            scripts: set[str] = set()
+            others: set[str] = set()
+            for import_path in _imported_paths(ast):
+                resolved = resolver.resolve(path, import_path)
+                if resolved.file:
+                    scripts.add(resolved.file)
+                    if resolved.file not in edges:
+                        to_visit.append(resolved.file)
+                elif resolved.asset:
+                    others.add(resolved.asset)
+            edges[path] = frozenset(scripts)
+            assets[path] = frozenset(others)
+    return ModuleGraph(edges=edges, assets=assets)
 
 
 # A path-shaped string: leading slash, no whitespace, at least one more segment.
@@ -620,6 +684,7 @@ def extract_js(
     literal_ids: set[str] = set()
     pending_literals: list[Symbol] = []
 
+    resolver = Resolver(project_root)
     to_visit = [os.path.join(project_root, name) for name in entry_files]
     visited: set[str] = set()
 
@@ -636,7 +701,7 @@ def extract_js(
 
         for path, ast in iter_parsed(batch):
             for import_path in _imported_paths(ast):
-                resolved = _resolve_import(path, import_path)
+                resolved = _resolved_file(resolver, path, import_path)
                 if resolved and resolved not in visited:
                     to_visit.append(resolved)
 
