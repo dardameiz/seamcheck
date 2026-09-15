@@ -151,6 +151,15 @@ _SKIP_TREES = frozenset({"node_modules", "venv", ".venv", "dist", "build", "stat
                          "recall_fixtures"})
 
 
+def _entry_roots(config: dict, repo_root: str) -> list[str]:
+    """The declared entry points alone: `js_entry_files` when the config has one, otherwise
+    a Vite config's entries and the scripts templates load. `_js_roots` adds the rest of
+    the first-party tree for the JS extractor; a page list wants only these."""
+    if "js_entry_files" in config:
+        return list(config["js_entry_files"])
+    return _discover_roots(config, repo_root)
+
+
 def _js_roots(config: dict, repo_root: str) -> tuple[list[str], str, list[str]]:
     """The JavaScript to read: the declared entry points UNION the first-party tree.
 
@@ -173,11 +182,9 @@ def _js_roots(config: dict, repo_root: str) -> tuple[list[str], str, list[str]]:
     """
     from seamcheck.extractors.url_reference_extractor import find_js_files
 
-    if "js_entry_files" in config:
-        entries = list(config["js_entry_files"])
-        project_root = config.get("js_project_root", repo_root)
-    else:
-        entries, project_root = _discover_roots(config, repo_root), repo_root
+    entries = _entry_roots(config, repo_root)
+    project_root = (config.get("js_project_root", repo_root)
+                    if "js_entry_files" in config else repo_root)
 
     # ABSOLUTE, because discover_js_files() joins each entry onto the project root, and a
     # root-prefixed relative path joins to itself twice - a directory that cannot exist,
