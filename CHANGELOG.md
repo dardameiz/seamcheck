@@ -17,6 +17,73 @@ Coverage and precision have **different denominators** and neither is meaningful
 backend that answered `uncertain` everywhere would score 100% precision and be useless.
 `uncertain` is not counted as a claim in precision, because it is not a claim.
 
+## 0.16.0 - 2026-09-16
+
+**The map finds pages beyond Vite and Django.** A page used to be a Vite entry or a script
+a Django template loads, and nothing else. On leanos-app, a Next.js 16 project, that meant
+**0** pages and every one of its 6,268 symbols in "Not reached from any page" - while the
+Next.js adapter had read all 27 of its routes. Pages now come from *entry sources*, a
+second layer beside the backend adapters: each detects with a confidence, and every
+confident one runs, so a monorepo gets all of them. Phase 1 of 4 in
+`docs/plans/2026-09-15-entry-sources-design.md`.
+
+- **Added** - Next.js pages. Every App Router `page.*`, rooted with the `layout.*` and
+  `template.*` files around it, and every Pages Router file except `_app`, `_document` and
+  `api/`. Addresses come from the Next.js adapter itself, so route groups and slots are
+  read in one place; a monorepo holding more than one app qualifies each page by its app.
+- **Added** - server entries, from any backend. Every file holding a route handler or a
+  view is an entry in its own picker group below the pages, titled by the URLs it serves,
+  and draws its own routes and handlers. A project with no pages at all
+  (fastapi-realworld) now has something to open.
+- **Added** - the `entry_sources` config key forces which sources run, the way
+  `server_adapter` does for backends. `seamcheck config` prints each source with its
+  confidence, and names a source that does not exist rather than raising.
+- **Fixed** - an import through a `tsconfig`/`jsconfig` alias (`@/components/X`) or a
+  workspace package was taken for `node_modules` and never followed, in every import
+  walk: a leanos-app page reached **1** of the 83 files it imports. One resolver now
+  handles relative paths, `paths`/`baseUrl` through `extends`, workspace packages through
+  their manifests, and non-script imports (a stylesheet, JSON) as assets that are reached
+  but not walked.
+- **Changed** - a symbol is on a page when an entry reaches its *file*. Drawing still starts
+  only from seeds and stays bounded, and the seeds now include every kind of touch: store
+  uses, env reads, Stripe, URL references, JSX attributes. What a page's files hold but no
+  page draws - class applications, rules in an imported stylesheet - goes to a new bucket,
+  "On a page, nothing to draw", instead of "Not reached". This moves bucket counts on
+  projects whose page lists do not change.
+- **Changed** - an entry with nothing to draw stays in the picker, and its canvas says how
+  many symbols its files hold; a page with a single node used to vanish. The map opens on
+  the first page that draws something.
+- **Changed** - on a Next.js project, autoconfig's sweep of loose `.js` files no longer
+  becomes pages (cal.com and dub lose 22 and 5 of them: `jest.config`, `next.config`, ...).
+  Only when `js_entry_files` was detected, never when it was configured. Vite entries and
+  scripts a template loads are never dropped.
+- **Fixed** - a not-reached bucket's blurb carried its count, and the picker appended it
+  again ("- 3 - 3 nodes"). Blurbs are now worded from the detected backends and the
+  languages actually in the bucket, not in Django's vocabulary.
+- **Fixed** - a project whose workspace lists its own root (`packages: ["."]` in
+  `pnpm-workspace.yaml`, as saleor-dashboard's does) crashed `seamcheck share` and the
+  `seamcheck_services` MCP tool on Python 3.12, and its map silently lost its service
+  labels: `Path.glob(".")` raises `IndexError` there (3.13 and 3.14 raise a `ValueError`
+  that was already caught). The root is now read as that package - by the new import
+  resolver too, which walks the same globs and crashed every map of such a project before
+  this release shipped.
+
+**Measured, 0.15.1 against this release.** Symbols on a page, across the 20 corpus
+repositories `tools/corpus.py entries` measures: **1.2% → 49.0%**. The six with Next.js
+gain their pages - dub +194, cal.com +83, commerce +5, nextjs-subscription-payments +4,
+platforms +3, documenso +2 - and the page lists of the 14 without it are identical.
+
+**On leanos-app** (private, not in the corpus - `tools/labels/leanos-app.json`): 0 pages →
+20 Next.js pages and 10 route handlers, every page and route file on disk; on a page 0 →
+1,215 of 6,316 symbols; "Everything else" 898 → 50. Precision on its hand-labelled sample
+unchanged, 5 true / 2 false.
+
+**Corpus (34/34 cloned repos):** `tools/corpus.py scan` identical before and after - no
+CRASH, no repo lost its routes, uncertain share **4.982%** both times. That gate runs the
+adapters and never builds a map, so it is flat by construction. Recall **6/6**, unchanged.
+Render **46/46**: every cloned repository builds a map whose emitted scripts parse and
+whose payload matches its graph - the gate that caught the workspace crash above.
+
 ## 0.15.1 - 2026-09-15
 
 **Next.js App Router coverage, found by dogfooding against a real Next.js 16/React
