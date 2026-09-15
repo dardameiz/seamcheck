@@ -144,6 +144,7 @@ class MapRunsInABrowser(SimpleTestCase):
                 pages: document.querySelectorAll('#pg option').length,
                 hits: document.getElementById('qn').textContent.trim(),
                 leftovers: document.querySelectorAll('script[src*="data/"]').length,
+                opened: current,
             })""")
             browser.close()
         state["errors"] = errors
@@ -160,10 +161,12 @@ class MapRunsInABrowser(SimpleTestCase):
         self.assertEqual(bundle["errors"], [])
         self.assertEqual(single["errors"], [])
         self.assertGreater(bundle["nodes"], 0, "the bundle drew nothing")
-        self.assertEqual((bundle["nodes"], bundle["pages"], bundle["hits"]),
-                         (single["nodes"], single["pages"], single["hits"]))
+        self.assertEqual((bundle["nodes"], bundle["pages"], bundle["hits"], bundle["opened"]),
+                         (single["nodes"], single["pages"], single["hits"], single["opened"]))
         self.assertEqual(single["fetched"], [], "the single file went to the network")
-        self.assertIn("p0.js", bundle["fetched"])
+        # The chunk of the page it OPENED, which is the first page that draws something -
+        # not page 0 by number, which an entry with nothing to draw can occupy.
+        self.assertIn(f"p{bundle['opened']}.js", bundle["fetched"])
         self.assertIn("search.js", bundle["fetched"])
         self.assertEqual(bundle["leftovers"], 0, "loader script tags were not removed")
 
@@ -1130,7 +1133,10 @@ class PageThenSection(SimpleTestCase):
         self.assertEqual([p.split(" — ")[0] for p in first["pages"]][:2],
                          ["Home · /", "Orders · /orders/"],
                          "one row per page a person recognises, not per bundle")
-        self.assertEqual(len(first["pages"]), 2 + 4, "then the not-reached buckets, as before")
+        # Every symbol's file is on one of these pages, so nothing is unreached: after the
+        # entries comes the one bucket for what the pages hold but do not draw. It was four
+        # not-reached buckets before a page came to own the symbols of the files it reaches.
+        self.assertEqual(len(first["pages"]), 2 + 1, "then the bucket for what nothing draws")
         # The map opens on the first page: Home, which has one bundle and so no sections.
         self.assertEqual(first["current"], "home-main")
         self.assertFalse(first["sectionShown"])
@@ -1150,6 +1156,64 @@ class PageThenSection(SimpleTestCase):
         # it starts after them now, and the right corner's buttons end it.
         for shot in (first, third, section):
             self.assertTrue(shot["clear"], "the readout sits under a corner's controls")
+
+
+class OpensOnAPageThatDraws(SimpleTestCase):
+    """Every entry stays in the picker, even one with nothing to draw - but the map opens
+    on the first page that draws something.
+
+    When an entry with nothing to draw was dropped, page 0 always drew, and the map opened
+    on page 0. Keeping such entries (a Next.js page whose code only renders) made page 0 an
+    empty canvas on first sight, which reads as a broken map rather than as a quiet page.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        try:
+            from playwright.sync_api import sync_playwright  # noqa: F401
+        except ImportError:  # pragma: no cover - depends on the optional extra
+            raise unittest.SkipTest("playwright is not installed (the observe extra)") from None
+
+    def test_an_entry_with_nothing_to_draw_is_listed_but_not_opened_on(self):
+        from playwright.sync_api import sync_playwright
+
+        from seamcheck.mapdata import build_map
+        from seamcheck.pagenames import PageName
+        from seamcheck.renderers.map_html import render_document
+
+        graph = _fixture_graph()
+        pages = {"quiet": {"nothing-here.tsx"}, "orders": {s.file for s in graph.symbols}}
+        names = {"quiet": PageName("About", "/about", "quiet"),
+                 "orders": PageName("Orders", "/orders/", "orders")}
+        document = render_document(build_map(graph, pages, git_sha="0" * 12, names=names),
+                                   console=_console_for(graph))
+        path = pathlib.Path(tempfile.mkdtemp()) / "map.html"
+        path.write_text(document.single_file(), encoding="utf-8")
+
+        errors: list[str] = []
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch()
+            except Exception as error:  # pragma: no cover - no browser downloaded
+                raise unittest.SkipTest(f"no chromium: {error}") from None
+            page = browser.new_page()
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.goto(path.as_uri(), wait_until="load")
+            page.wait_for_timeout(250)
+            state = page.evaluate("""() => ({
+                current: PAGES[current].page,
+                picked: PAGES[Number(document.getElementById('pg').value)].page,
+                listed: PAGES.map(p => p.page),
+                drawn: document.querySelectorAll('#cv g[data-id]').length,
+            })""")
+            browser.close()
+
+        self.assertEqual(errors, [])
+        self.assertIn("quiet", state["listed"], "an entry with nothing to draw left the picker")
+        self.assertEqual(state["current"], "orders", "the map opened on a page with nothing to draw")
+        self.assertEqual(state["picked"], "orders", "the picker shows a different page than the canvas")
+        self.assertGreater(state["drawn"], 0)
 
 
 class StoreLayerInTheBrowser(SimpleTestCase):

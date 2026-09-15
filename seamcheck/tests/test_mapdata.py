@@ -1,19 +1,24 @@
 from django.test import SimpleTestCase
 
 from seamcheck.graph import Edge, Graph, Status, Symbol
-from seamcheck.mapdata import UNREACHED_PAGE, build_map
+from seamcheck.mapdata import BUCKET_PREFIXES, UNDRAWN_PAGE, UNREACHED_PAGE, build_map
+from seamcheck.pagenames import PageName
 
 
-def _symbol(id_, kind, label=None, status=Status.CONNECTED, file="a.js"):
+def _symbol(id_, kind, label=None, status=Status.CONNECTED, file="a.js", sub=""):
     return Symbol(
-        id=id_, kind=kind, label=label or id_, sub="", file=file, line=1,
+        id=id_, kind=kind, label=label or id_, sub=sub, file=file, line=1,
         status=status, snippet=id_, chain=[id_], note="",
     )
 
 
 def _entries(built):
-    """The pages rooted at an entry point, without the not-reached buckets."""
-    return [page for page in built.pages if not page.page.startswith(UNREACHED_PAGE + ":")]
+    """The pages rooted at an entry, without the buckets."""
+    return [page for page in built.pages if not page.page.startswith(BUCKET_PREFIXES)]
+
+
+def _bucket_ids(built, prefix):
+    return {n.id for p in built.pages if p.page.startswith(prefix + ":") for n in p.nodes}
 
 
 def _graph():
@@ -64,10 +69,12 @@ class PageScopingTests(SimpleTestCase):
 
         self.assertNotIn("jscall:z.js:1", ids)
 
-    def test_a_page_with_no_symbols_is_dropped(self):
+    def test_a_page_with_nothing_to_draw_stays_in_the_picker(self):
+        # Dropping it is how every Next.js page vanished: a page that disappears is the
+        # failure, not a page with an empty canvas.
         built = build_map(_graph(), {"empty": {"nothing.js"}}, git_sha="abc", now="t")
 
-        self.assertEqual(_entries(built), [])
+        self.assertEqual([(p.page, p.reached) for p in _entries(built)], [("empty", 0)])
 
     def test_edges_carry_their_status(self):
         statuses = {e.status for e in self.map.pages[0].edges}
@@ -165,21 +172,21 @@ class UnreachedTests(SimpleTestCase):
         graph = _graph()
         built = build_map(graph, {"home": {"a.js"}}, git_sha="abc", now="t")
 
-        covered = {n.id for p in _entries(built) for n in p.nodes}
-        unreached = {n.id for p in built.pages
-                     if p.page.startswith(UNREACHED_PAGE + ":") for n in p.nodes}
+        drawn = {n.id for p in _entries(built) for n in p.nodes}
+        in_buckets = _bucket_ids(built, UNREACHED_PAGE) | _bucket_ids(built, UNDRAWN_PAGE)
         every = {s.id for s in graph.symbols}
 
-        self.assertEqual(every - covered, unreached)
+        self.assertEqual(every - drawn, in_buckets)
 
     def test_nothing_is_counted_on_both_sides(self):
         built = build_map(_graph(), {"home": {"a.js"}}, git_sha="abc", now="t")
 
-        covered = {n.id for p in _entries(built) for n in p.nodes}
-        unreached = {n.id for p in built.pages
-                     if p.page.startswith(UNREACHED_PAGE + ":") for n in p.nodes}
+        drawn = {n.id for p in _entries(built) for n in p.nodes}
+        unreached = _bucket_ids(built, UNREACHED_PAGE)
+        undrawn = _bucket_ids(built, UNDRAWN_PAGE)
 
-        self.assertEqual(covered & unreached, set())
+        self.assertEqual((drawn & unreached, drawn & undrawn, unreached & undrawn),
+                         (set(), set(), set()))
 
     def test_the_buckets_say_why_rather_than_naming_a_verdict(self):
         # Being unreached is not a finding: Django reaches a model, a webhook reaches a
@@ -190,7 +197,8 @@ class UnreachedTests(SimpleTestCase):
         self.assertTrue(buckets)
         for bucket in buckets:
             self.assertEqual(bucket.title, "Not reached from any page")
-            self.assertIn("—", bucket.where)
+            # The picker appends the count; a count in `where` showed it twice ("— 3 — 3 nodes").
+            self.assertNotRegex(bucket.where, r"\d")
 
     def test_a_fully_reached_graph_produces_no_buckets(self):
         graph = _graph()
@@ -204,6 +212,94 @@ class UnreachedTests(SimpleTestCase):
         )
         again = build_map(trimmed, {"home": {"a.js"}}, git_sha="abc", now="t")
 
-        self.assertEqual(
-            [p for p in again.pages if p.page.startswith(UNREACHED_PAGE + ":")], []
-        )
+        self.assertEqual([p for p in again.pages if p.page.startswith(BUCKET_PREFIXES)], [])
+
+
+class MembershipByFileTests(SimpleTestCase):
+    def test_a_store_use_on_a_page_file_is_drawn(self):
+        graph = Graph(symbols=[_symbol("db:orders:a.ts:1", "db_table_use", "orders", file="a.ts")], edges=[])
+        built = build_map(graph, {"home": {"a.ts"}}, git_sha="abc", now="t")
+
+        self.assertIn("db:orders:a.ts:1", {n.id for n in _entries(built)[0].nodes})
+
+    def test_a_symbol_on_a_reached_file_that_nothing_draws_is_on_the_page_not_unreached(self):
+        graph = Graph(symbols=[_symbol("apply:a.tsx:1", "dom_attr", "x", file="a.tsx", sub="class:apply")],
+                      edges=[])
+        built = build_map(graph, {"home": {"a.tsx"}}, git_sha="abc", now="t")
+
+        self.assertNotIn("apply:a.tsx:1", {n.id for n in _entries(built)[0].nodes})
+        self.assertEqual(_bucket_ids(built, UNREACHED_PAGE), set())
+        self.assertEqual(_bucket_ids(built, UNDRAWN_PAGE), {"apply:a.tsx:1"})
+        self.assertEqual(_entries(built)[0].reached, 1)
+
+    def test_the_undrawn_bucket_sits_after_the_entries_and_before_the_not_reached_ones(self):
+        graph = Graph(symbols=[
+            _symbol("call:a.js:1", "js_call", file="a.js"),
+            _symbol("apply:a.js:2", "dom_attr", "x", file="a.js", sub="class:apply"),
+            _symbol("call:z.js:1", "js_call", file="z.js"),
+        ], edges=[])
+        built = build_map(graph, {"home": {"a.js"}}, git_sha="abc", now="t")
+
+        places = [p.page.split(":", 1)[0] if p.page.startswith(BUCKET_PREFIXES) else "entry"
+                  for p in built.pages]
+        self.assertEqual(places, ["entry", UNDRAWN_PAGE, UNREACHED_PAGE])
+
+    def test_the_undrawn_bucket_says_why_without_a_count(self):
+        graph = Graph(symbols=[_symbol("apply:a.tsx:1", "dom_attr", "x", file="a.tsx", sub="class:apply")],
+                      edges=[])
+        built = build_map(graph, {"home": {"a.tsx"}}, git_sha="abc", now="t")
+        [bucket] = [p for p in built.pages if p.page.startswith(UNDRAWN_PAGE + ":")]
+
+        self.assertEqual(bucket.title, "On a page, nothing to draw")
+        self.assertTrue(bucket.where)
+        self.assertNotRegex(bucket.where, r"\d")
+
+    def test_a_page_that_draws_everything_on_its_files_has_no_undrawn_bucket(self):
+        built = build_map(_graph(), {"home": {"a.js"}}, git_sha="abc", now="t")
+
+        self.assertEqual(_bucket_ids(built, UNDRAWN_PAGE), set())
+
+
+class EntryOrderAndEvidenceTests(SimpleTestCase):
+    def test_pages_come_before_server_entries_whatever_their_titles(self):
+        names = {"a": PageName(title="Zebra", where="", entry="a", kind="page"),
+                 "b": PageName(title="Alpha", where="", entry="b", kind="server")}
+        built = build_map(_graph(), {"a": {"a.js"}, "b": {"views.py"}}, git_sha="abc", now="t",
+                          names=names)
+
+        self.assertEqual([p.page for p in _entries(built)], ["a", "b"])
+
+    def test_the_page_node_carries_the_entrys_evidence_and_note(self):
+        names = {"home": PageName(title="Home", where="/", entry="home",
+                                  evidence="a page file, routed by the filesystem",
+                                  note="by convention, not declared")}
+        built = build_map(_graph(), {"home": {"a.js"}}, git_sha="abc", now="t", names=names)
+        root = _entries(built)[0].nodes[0]
+
+        self.assertEqual((root.kind, root.note),
+                         ("page", "a page file, routed by the filesystem · by convention, not declared"))
+
+
+class BucketWordingTests(SimpleTestCase):
+    def _where(self, key, graph, **kwargs):
+        built = build_map(graph, {"home": {"nothing.js"}}, git_sha="abc", now="t", **kwargs)
+        return next(p.where for p in built.pages if p.page == f"{UNREACHED_PAGE}:{key}")
+
+    def test_with_no_backend_detected_the_backend_bucket_reads_as_today(self):
+        self.assertEqual(self._where("backend", _graph()),
+                         "Reached by the framework, never by a browser page — "
+                         "routes, handlers, models, signal receivers")
+
+    def test_nextjs_is_described_in_its_own_terms(self):
+        self.assertIn("route handlers and pages no entry reaches",
+                      self._where("backend", _graph(), detected_backends=frozenset({"nextjs"})))
+
+    def test_two_backends_are_both_named(self):
+        where = self._where("backend", _graph(), detected_backends=frozenset({"django", "nextjs"}))
+        self.assertIn("URLs, views, admin actions, signal receivers", where)
+        self.assertIn("route handlers and pages no entry reaches", where)
+
+    def test_the_script_bucket_names_the_languages_actually_in_it(self):
+        graph = Graph(symbols=[_symbol("c1", "js_call", file="a.ts"), _symbol("c2", "js_call", file="b.js")],
+                      edges=[])
+        self.assertEqual(self._where("js", graph), "TypeScript and JavaScript no entry imports")

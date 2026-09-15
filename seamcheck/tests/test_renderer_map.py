@@ -1106,7 +1106,9 @@ class InitialPageFocusTests(SimpleTestCase):
         out = map_html.render(_map())
 
         self.assertIn('const OPENS_ON = "overview";', out)
-        self.assertNotIn("PAGES.findIndex", out)
+        # `var target=` is the focus script's own line. `PAGES.findIndex` is not a marker:
+        # the main script calls it too, to open on the first page that draws something.
+        self.assertNotIn("var target=", out)
 
     def test_an_initial_page_appends_a_focus_script_naming_it(self):
         out = map_html.render(_map(), initial_page="home")
@@ -1118,8 +1120,8 @@ class InitialPageFocusTests(SimpleTestCase):
         self.assertIn("switchTo('map')", out)
         self.assertIn("pickPage(idx)", out)
         # Appears once, after the main script - not injected into the middle of it.
-        self.assertEqual(out.count("PAGES.findIndex"), 1)
-        self.assertLess(out.rindex("const OPENS_ON"), out.index("PAGES.findIndex"))
+        self.assertEqual(out.count("var target="), 1)
+        self.assertLess(out.rindex("const OPENS_ON"), out.index("var target="))
 
     def test_a_page_name_that_does_not_exist_is_embedded_safely(self):
         # No exception, and the JSON-escaped value cannot break out of the script.

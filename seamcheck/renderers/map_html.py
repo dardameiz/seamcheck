@@ -14,7 +14,7 @@ import html as html_lib
 import json
 
 from seamcheck import editors, meaning
-from seamcheck.mapdata import UNREACHED_PAGE, ConnectivityMap
+from seamcheck.mapdata import BUCKET_PREFIXES, ConnectivityMap
 
 # Column order is the story: browser on the left, database on the right.
 _COLUMNS = [
@@ -1620,7 +1620,11 @@ const ORDER = new Map(COLS.map((c, i) => [c[0], i]));
 // blank box. Everything interpolated into innerHTML goes through this.
 const esc = v => String(v == null ? "" : v).replace(/[&<>"']/g,
   c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-let current = 0, focus = null, view = {x:0, y:0, k:1}, query = "";
+// The map opens on the first page that draws something. Every entry stays in the picker,
+// including one with nothing to draw, and page 0 is often exactly that - a page whose code
+// only renders would otherwise greet the reader with an empty canvas. PAGES is declared
+// above, so this reads no name before its declaration.
+let current = Math.max(0, PAGES.findIndex(p => (p.n || 0) > 1)), focus = null, view = {x:0, y:0, k:1}, query = "";
 // The node a reader clicked, and whether the canvas should show only its chain. A page
 // draws 1,366 symbols; the one question a click asks is "what is this joined to", and
 // answering it by colour beats answering it by making the reader trace a line by eye.
@@ -3660,11 +3664,18 @@ function reportEmpty(count) {
   if (layer) bits.push((LAYERS.find(([k]) => k === layer) || [, layer])[1]);
   if (statusFilter.size) bits.push([...statusFilter].join(" or "));
   if (fileFilter) bits.push("in " + fileFilter.split("/").pop());
+  // A page with nothing to draw still holds files. Saying how much they hold keeps an entry
+  // whose code only renders - no request, no query, no selector - from reading as empty.
+  const held = PAGES[current] && PAGES[current].rf;
   box.innerHTML = bits.length
     ? `<b>Nothing is both ${bits.map(esc).join(" and ")}.</b>
        <span>The filters are fine; this combination is empty. Take one off, or pick
        another page.</span>`
-    : "<b>Nothing to draw here.</b><span>Try another page.</span>";
+    : held
+      ? `<b>Nothing on this page starts a chain to draw.</b>
+         <span>Its files hold ${held.toLocaleString()} symbol${held === 1 ? "" : "s"};
+         none of them is a request, a query or an element it selects.</span>`
+      : "<b>Nothing to draw here.</b><span>Try another page.</span>";
 }
 
 // The layout is nine trial placements over every node on the page - the single most
@@ -6216,11 +6227,15 @@ def _grouped(pages) -> list[tuple[int, list]]:
     reference project's arena is 77 of them, listed 77 times under one name. The name and
     the address are what a reader picks by; the entries are sections inside it. Grouped
     in the order the entries come, which is already by title.
+
+    An entry that names its group - the screens of one page - is grouped by that alone. Its
+    key has an empty first half, which a titled key never has, so the two cannot collide.
     """
     groups: dict[tuple[str, str], list] = {}
     for page in pages:
-        where = (page.where or "").split(" - ")[0].strip()
-        groups.setdefault((page.title or page.page, where), []).append(page)
+        key = (("", page.group) if page.group
+               else (page.title or page.page, (page.where or "").split(" - ")[0].strip()))
+        groups.setdefault(key, []).append(page)
     return list(enumerate(groups.values()))
 
 
@@ -6319,7 +6334,7 @@ def _payload(connectivity_map: ConnectivityMap) -> tuple[str, list[Chunk], dict[
     on_pages: dict[str, list[int]] = {}
     group_of: dict[int, int] = {}
     for index, (name, _t, _w, layer, nodes, _e, group, union) in enumerate(pages):
-        if layer or union or name.startswith(f"{UNREACHED_PAGE}:"):
+        if layer or union or name.startswith(BUCKET_PREFIXES):
             continue
         group_of[index] = group
         for node in nodes:
@@ -6345,6 +6360,9 @@ def _payload(connectivity_map: ConnectivityMap) -> tuple[str, list[Chunk], dict[
         pages.append(("layer:shared", "Shared across pages", "", "shared",
                       list(seen.values()), edges, None, False))
 
+    # Symbols each entry's files hold, drawn or not - what its canvas says when nothing on
+    # it starts a chain to draw.
+    reached_by_page = {page.page: page.reached for page in connectivity_map.pages}
     meta_pages, chunks = [], []
     file_best: dict[str, tuple[int, int]] = {}
     # Per function: the file it is in, how many symbols it owns, and which page draws most
@@ -6410,6 +6428,8 @@ def _payload(connectivity_map: ConnectivityMap) -> tuple[str, list[Chunk], dict[
             meta["g"] = group
         if union:
             meta["union"] = True
+        if reached_by_page.get(name):
+            meta["rf"] = reached_by_page[name]
         meta_pages.append(meta)
         rows_chunk = {
             "nodes": rows,

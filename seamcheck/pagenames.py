@@ -31,6 +31,10 @@ class PageName:
     title: str          # "Push Arena"
     where: str          # "/push_arena/ - push_arena.html"
     entry: str          # "push-arena-main", the root's own filename
+    group: str = ""     # entries sharing a group are sections of one page
+    evidence: str = ""  # why this is an entry at all: "a page file, routed by the filesystem"
+    note: str = ""      # what a reader should know: "by convention, not declared"
+    kind: str = "page"  # "page" | "server" | "entry_file" - decides picker order
 
 
 def _titleise(stem: str) -> str:

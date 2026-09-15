@@ -86,8 +86,18 @@ def _context(path: str | None, line: int | None) -> str:
     return "\n".join(f"{n + 1:5d}  {lines[n][:160]}" for n in range(start, min(end, len(lines))))
 
 
-# Symbols that belong to a JS module and start a chain outward.
-_SEED_KINDS = frozenset({"js_call", "fetch_target", "dom_selector", "multi_writer_element"})
+# Symbols that belong to a module and start a chain outward: the calls and queries a page
+# makes, the elements it selects - every "touch". A page that talks through a data client
+# or a <Link> held none of the first four, so it had nothing to draw and was dropped.
+_SEED_KINDS = frozenset({
+    "js_call", "fetch_target", "dom_selector", "multi_writer_element",
+    "db_table_use", "db_column_use", "db_function_use", "url_reference", "env_read",
+    "stripe_event", "stripe_webhook", "storage_bucket", "firestore_collection",
+    "graphql_selection", "job_enqueue", "redis_key_use", "edge_function_use", "dom_attr",
+})
+# Pages, then server entries, then scripts no framework claims: a reader looks for the
+# page first.
+_KIND_ORDER = {"page": 0, "server": 1, "static_page": 2, "entry_file": 3}
 # A class application is evidence that a rule is live, not a thing to navigate to.
 # Seeding from all 5,355 of them produced 82,000 nodes - as unreadable as the raw graph.
 _SEED_EXCLUDED_SUBS = ("class:apply",)
@@ -148,6 +158,12 @@ class PageMap:
     # without name resolution still renders rather than showing blanks.
     title: str = ""
     where: str = ""
+    # Entries sharing a group are sections of one page; see map_html._grouped.
+    group: str = ""
+    kind: str = "page"
+    # Symbols in the files this entry reaches, drawn or not - what an empty canvas says
+    # instead of saying nothing.
+    reached: int = 0
 
 
 @dataclass
@@ -312,63 +328,102 @@ def build_page_map(page: str, files: set[str], graph: Graph, adjacency: dict[str
 # in. What the bucket answers is "where did the rest go", and each symbol keeps its own
 # status so the reds inside it are still the reds.
 UNREACHED_PAGE = "unreached"
-UNREACHED_GROUPS: tuple[tuple[str, str, frozenset[str]], ...] = (
-    ("backend", "Reached by the framework, never by a browser page — routes, handlers, "
-                "models, signal receivers",
-     frozenset({"url", "view", "admin_action", "signal_receiver",
-                "template_tag", "management_command"})),
-    ("js", "JavaScript that no page's bundle imports",
-     frozenset({"js_call", "fetch_target", "dom_selector", "multi_writer_element", "module"})),
-    ("css", "Stylesheet rules and design tokens that nothing on a page matched",
-     frozenset({"css_selector", "css_token_def", "css_token_use"})),
-    ("template", "Template elements that no page's JavaScript selects",
-     frozenset({"dom_attr"})),
+# Symbols in files a page reaches that nothing on it draws: class applications, rules in
+# an imported stylesheet, declarations. They are on a page, so they are not unreached;
+# they start no chain, so no canvas shows them; and the map's search is built from what
+# pages hold, so without a bucket of their own they could be found nowhere.
+UNDRAWN_PAGE = "undrawn"
+BUCKET_PREFIXES = (f"{UNREACHED_PAGE}:", f"{UNDRAWN_PAGE}:")
+_GROUP_KINDS: tuple[tuple[str, frozenset[str]], ...] = (
+    ("backend", frozenset({"url", "view", "admin_action", "signal_receiver",
+                           "template_tag", "management_command"})),
+    ("js", frozenset({"js_call", "fetch_target", "dom_selector", "multi_writer_element", "module"})),
+    ("css", frozenset({"css_selector", "css_token_def", "css_token_use"})),
+    ("template", frozenset({"dom_attr"})),
 )
 UNREACHED_OTHER = ("other", "Everything else the scan found off the page graph")
 
+# What each backend calls the things a browser never reaches, in its own vocabulary: a
+# message phrased in one framework's words was shown to people using another.
+_BACKEND_WORDS = {
+    "django": "URLs, views, admin actions, signal receivers",
+    "nextjs": "route handlers and pages no entry reaches",
+    "express": "routes and middleware",
+    "fastapi": "routes and their handlers",
+}
+_BACKEND_DEFAULT = "routes, handlers, models, signal receivers"
+_TEMPLATE_BACKENDS = frozenset({"django", "flask"})
 
-def _unreached_group(kind: str) -> tuple[str, str]:
-    for key, blurb, kinds in UNREACHED_GROUPS:
+
+def unreached_groups(detected: frozenset[str] = frozenset(),
+                     script_symbols=()) -> tuple[tuple[str, str, frozenset[str]], ...]:
+    """The not-reached buckets as (key, blurb, kinds), worded from what the scan found."""
+    words = "; ".join(_BACKEND_WORDS[name] for name in sorted(detected) if name in _BACKEND_WORDS)
+    languages = sorted({language_of(s.file) for s in script_symbols} & {"TypeScript", "JavaScript"},
+                       reverse=True)
+    markup = "Template elements" if detected & _TEMPLATE_BACKENDS else "HTML elements"
+    blurbs = {
+        "backend": f"Reached by the framework, never by a browser page — {words or _BACKEND_DEFAULT}",
+        "js": f"{' and '.join(languages) or 'JavaScript'} no entry imports",
+        "css": "Stylesheet rules and design tokens that nothing on a page matched",
+        "template": f"{markup} that no page's JavaScript selects",
+    }
+    return tuple((key, blurbs[key], kinds) for key, kinds in _GROUP_KINDS)
+
+
+def _unreached_key(kind: str) -> str:
+    for key, kinds in _GROUP_KINDS:
         if kind in kinds:
-            return key, blurb
-    return UNREACHED_OTHER
+            return key
+    return UNREACHED_OTHER[0]
 
 
-def build_unreached_pages(graph: Graph, covered: set[str], services=None) -> list[PageMap]:
+def _bucket_page(page: str, title: str, where: str, symbols: list[Symbol], graph: Graph,
+                 services=None) -> PageMap:
+    ids = {symbol.id for symbol in symbols}
+    # No source context and a short snippet: these buckets are large by nature, they
+    # sit on no chain (there is no path to read them along), and the full text of
+    # 32,301 source lines is megabytes nobody opens. The label, the file and the line
+    # are what a reader needs here, and file:line opens the real thing.
+    nodes = [_node(symbol, context=False, snippet_limit=120, services=services)
+             for symbol in symbols]
+    edges = [
+        MapEdge(edge.from_id, edge.to_id, edge.status.value)
+        for edge in graph.edges
+        if edge.from_id in ids and edge.to_id in ids
+    ]
+    # No count in `where`: the picker appends one, and both showed ("— 3 — 3 nodes").
+    return PageMap(page=page, nodes=nodes, edges=edges, title=title, where=where)
+
+
+def build_unreached_pages(graph: Graph, covered: set[str], services=None,
+                          detected_backends: frozenset[str] = frozenset()) -> list[PageMap]:
     """One page per family of symbols that no page entry reaches."""
     buckets: dict[str, list[Symbol]] = {}
-    blurbs: dict[str, str] = {}
     for symbol in graph.symbols:
-        if symbol.id in covered:
-            continue
-        key, blurb = _unreached_group(symbol.kind)
-        buckets.setdefault(key, []).append(symbol)
-        blurbs[key] = blurb
+        if symbol.id not in covered:
+            buckets.setdefault(_unreached_key(symbol.kind), []).append(symbol)
+    groups = unreached_groups(detected_backends, buckets.get("js", ()))
+    blurbs = {key: blurb for key, blurb, _ in groups}
+    blurbs[UNREACHED_OTHER[0]] = UNREACHED_OTHER[1]
+    order = [key for key, _, _ in groups] + [UNREACHED_OTHER[0]]
+    return [
+        _bucket_page(f"{UNREACHED_PAGE}:{key}", "Not reached from any page", blurbs[key],
+                     buckets[key], graph, services)
+        for key in order if buckets.get(key)
+    ]
 
-    order = [key for key, _, _ in UNREACHED_GROUPS] + [UNREACHED_OTHER[0]]
-    pages = []
-    for key in order:
-        symbols = buckets.get(key)
-        if not symbols:
-            continue
-        ids = {symbol.id for symbol in symbols}
-        # No source context and a short snippet: these buckets are large by nature, they
-        # sit on no chain (there is no path to read them along), and the full text of
-        # 32,301 source lines is megabytes nobody opens. The label, the file and the line
-        # are what a reader needs here, and file:line opens the real thing.
-        nodes = [_node(symbol, context=False, snippet_limit=120, services=services)
-                 for symbol in symbols]
-        edges = [
-            MapEdge(edge.from_id, edge.to_id, edge.status.value)
-            for edge in graph.edges
-            if edge.from_id in ids and edge.to_id in ids
-        ]
-        pages.append(PageMap(
-            page=f"{UNREACHED_PAGE}:{key}", nodes=nodes, edges=edges,
-            title="Not reached from any page",
-            where=f"{blurbs[key]} — {len(nodes):,}",
-        ))
-    return pages
+
+def build_undrawn_page(graph: Graph, drawn: set[str], reached_files: set[str],
+                       services=None) -> PageMap | None:
+    """The bucket for symbols a page's files hold that no page draws, or None."""
+    symbols = [s for s in graph.symbols if s.file in reached_files and s.id not in drawn]
+    if not symbols:
+        return None
+    return _bucket_page(f"{UNDRAWN_PAGE}:onpage", "On a page, nothing to draw",
+                        "In files a page reaches, but not a request, a query or an element "
+                        "it selects, so nothing starts a chain from them",
+                        symbols, graph, services)
 
 
 def build_adjacency(graph: Graph) -> dict[str, list]:
@@ -391,23 +446,43 @@ def build_map(
     services=None,
     calls: dict[str, list[str]] | None = None,
     defined: dict[str, str] | None = None,
+    detected_backends: frozenset[str] = frozenset(),
 ) -> ConnectivityMap:
     adjacency = build_adjacency(graph)
+    per_file: dict[str, int] = {}
+    for symbol in graph.symbols:
+        if symbol.file:
+            per_file[symbol.file] = per_file.get(symbol.file, 0) + 1
     page_maps = []
     for page, files in sorted(pages.items()):
         page_map = build_page_map(page, files, graph, adjacency, services=services)
         name = (names or {}).get(page)
         page_map.title = name.title if name else page
         page_map.where = name.where if name else ""
+        page_map.group = name.group if name else ""
+        page_map.kind = name.kind if name else "page"
+        page_map.reached = sum(per_file.get(path, 0) for path in files)
+        if name:
+            # nodes[0] is the page itself (build_page_map makes it first). `note` travels
+            # in the detail chunk, so the sheet says why this is an entry.
+            page_map.nodes[0].note = " · ".join(part for part in (name.evidence, name.note) if part)
         page_maps.append(page_map)
-    page_maps = [page_map for page_map in page_maps if len(page_map.nodes) > 1]
-    # Grouped by the page a reader recognises, then by bundle inside it, so the sidebar
-    # reads as a site rather than as a build manifest.
-    page_maps.sort(key=lambda page_map: (page_map.title.lower(), page_map.page))
-    # ...and last, everything the page graph does not reach, so "where did the other 90%
-    # go" has an answer on the same picker rather than being absent from the map.
-    covered = {node.id for page_map in page_maps for node in page_map.nodes}
-    page_maps += build_unreached_pages(graph, covered, services=services)
+    # No page is dropped for having nothing to draw: dropping them is how every Next.js
+    # page vanished. Pages, then server entries; inside each, by the name a reader
+    # recognises, then by bundle, so the sidebar reads as a site rather than a manifest.
+    page_maps.sort(key=lambda page_map: (_KIND_ORDER.get(page_map.kind, 9),
+                                         page_map.title.lower(), page_map.page))
+    # ...then what the pages hold but do not draw, and last what no page reaches, so
+    # "where did the rest go" has an answer on the same picker. A symbol is on a page when
+    # an entry reaches its FILE, drawn or not.
+    drawn = {node.id for page_map in page_maps for node in page_map.nodes}
+    reached_files = set().union(*pages.values()) if pages else set()
+    undrawn = build_undrawn_page(graph, drawn, reached_files, services=services)
+    if undrawn is not None:
+        page_maps.append(undrawn)
+    covered = drawn | {symbol.id for symbol in graph.symbols if symbol.file in reached_files}
+    page_maps += build_unreached_pages(graph, covered, services=services,
+                                       detected_backends=detected_backends)
 
     changed: dict[str, str] = {}
     if baseline is not None:

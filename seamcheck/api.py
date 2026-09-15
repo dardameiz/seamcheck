@@ -584,7 +584,7 @@ def scoped_findings(repo_root: str = ".", scope: str = "commit", graph: Graph | 
 
         graph, _how = cached_scan(repo_root)
 
-    pages_map = page_files(repo_root)
+    pages_map = _page_files_for(repo_root, graph)
     hits = pages_touched(changed, pages_map)
 
     result_pages: dict[str, dict] = {}
@@ -618,7 +618,6 @@ def scoped_map_document(repo_root: str, page: str, graph: Graph | None = None):
     touched page (a "push" spanning three pages costs three of these, not three full maps).
     """
     from seamcheck.mapdata import build_map
-    from seamcheck.pagenames import page_names
     from seamcheck.renderers import map_html
 
     _CONFIG_ROOT[0] = repo_root
@@ -631,9 +630,10 @@ def scoped_map_document(repo_root: str, page: str, graph: Graph | None = None):
     except Exception:  # noqa: BLE001 - a snapshot-less checkout still gets a map
         sha = "unknown"
 
+    entries = page_entries(repo_root, graph)
     connectivity_map = build_map(
-        graph, page_files(repo_root), git_sha=sha,
-        names=page_names(repo_root, _config(), graph),
+        graph, _page_files_for(repo_root, graph, entries), git_sha=sha,
+        names=_names_from_entries(entries), detected_backends=_detected_backends(),
     )
     # Same bookkeeping `_map_document` does for the full map, and for the same reason:
     # `serve_addresses(..., sources=set(LAST_MAP_FILES))` is how the served document's
@@ -937,28 +937,70 @@ def write_map(graph: Graph, repo_root: str = ".") -> str:
     return str(path)
 
 
-def page_files(repo_root: str) -> dict[str, set[str]]:
-    """Which JS files each page entry reaches. Costs ~13s (the import walk); computed on
-    demand rather than during every `scan`, which has no use for page attribution.
+def page_entries(repo_root: str, graph: Graph | None = None) -> list:
+    """Every entry every matching source found - pages, server entries and, when no source
+    found anything, first-party scripts nothing imports. See seamcheck/entries/.
 
-    Goes through `_js_roots`, which is the one function that knows how a project's entry
-    points are resolved. Re-deriving them here meant a config that names `js_entry_files`
-    explicitly - the documented way to skip discovery - still had `templates_root` read
-    out of it, and `map` died on a KeyError while `scan` was fine.
+    A caller holding a scanned graph passes it; otherwise the cached scan answers."""
+    from seamcheck.entries import all_entries
+
+    _CONFIG_ROOT[0] = repo_root
+    if graph is None:
+        from seamcheck.scancache import cached_scan
+
+        graph, _how = cached_scan(repo_root)
+    return all_entries(repo_root, _config(), graph)
+
+
+def _page_files_for(repo_root: str, graph: Graph, entries=None) -> dict[str, set[str]]:
+    """Which files each entry reaches: its roots, what they import, and the assets they pull in."""
+    from seamcheck.extractors.js_extractor import build_module_graph
+
+    if entries is None:
+        entries = page_entries(repo_root, graph)
+    root = os.path.abspath(repo_root)
+    starts = {entry.key: [os.path.join(root, path) for path in entry.roots] for entry in entries}
+    # One walk for every entry together: pages share most of their imports, and walking
+    # them once per root is what this used to spend ~13 s on for the reference project.
+    modules = build_module_graph(root, sorted({p for paths in starts.values() for p in paths}))
+    return {
+        key: {_norm(path, repo_root)
+              for path in modules.reachable_files(paths) | modules.reachable_assets(paths)}
+        for key, paths in starts.items()
+    }
+
+
+def _names_from_entries(entries) -> dict:
+    """What the map calls each entry. Titles travel on entries; pagenames is read only by
+    LegacySource."""
+    from seamcheck.pagenames import PageName
+
+    return {entry.key: PageName(title=entry.title, where=entry.where, entry=entry.key,
+                                group=entry.group, evidence=entry.evidence,
+                                note=entry.note, kind=entry.kind)
+            for entry in entries}
+
+
+def _detected_backends() -> frozenset[str]:
+    from seamcheck.pipeline import LAST_ADAPTERS
+
+    return frozenset(adapter["name"] for adapter in LAST_ADAPTERS)
+
+
+def page_files(repo_root: str) -> dict[str, set[str]]:
+    """Which files each page entry reaches, by entry key.
 
     Public: `changescope.py` reuses this exact mapping so "seamcheck thinks this commit
     touched Push Arena" can never disagree with what a generated map actually shows for
     the same repo state - one function, not two definitions of "page" to keep in sync.
+    Entries come from seamcheck/entries/; a caller already holding a graph uses
+    `_page_files_for` and skips the cache lookup.
     """
-    from seamcheck.extractors.js_extractor import discover_js_files
+    from seamcheck.scancache import cached_scan
 
-    roots, _, _extra = _js_roots(_config(), repo_root)
-    return {
-        os.path.splitext(os.path.basename(root))[0]: {
-            _norm(path, repo_root) for path in discover_js_files([root], repo_root)
-        }
-        for root in roots
-    }
+    _CONFIG_ROOT[0] = repo_root
+    graph, _how = cached_scan(repo_root)
+    return _page_files_for(repo_root, graph)
 
 
 def _norm(path: str, repo_root: str) -> str:
@@ -1090,7 +1132,6 @@ def _map_document(repo_root: str, ref: str, progress: Progress | None = None):
     from seamcheck.filetree import build_file_tree
     from seamcheck.history import commit_series
     from seamcheck.mapdata import build_map
-    from seamcheck.pagenames import page_names
     from seamcheck.renderers import map_html
     from seamcheck.report import build_report
 
@@ -1116,7 +1157,8 @@ def _map_document(repo_root: str, ref: str, progress: Progress | None = None):
         baseline_sha=baseline_message_sha, baseline_message=message,
     ))
     progress.step("page attribution")
-    page_files_map = page_files(repo_root)
+    entries = page_entries(repo_root, graph)
+    page_files_map = _page_files_for(repo_root, graph, entries)
     progress.step("commit history")
     commits = commit_series(repo_root)
     # One row per scan, appended. This is the only place a series can be built from - a
@@ -1150,7 +1192,7 @@ def _map_document(repo_root: str, ref: str, progress: Progress | None = None):
         build_map(graph, page_files_map, git_sha=sha, services=_service_map(repo_root),
                   calls=calls, defined=defined,
                   baseline=baseline, baseline_sha=baseline_sha if baseline else None,
-                  names=page_names(repo_root, _config(), graph),
+                  names=_names_from_entries(entries), detected_backends=_detected_backends(),
                   commits=[
                       {"sha": entry.sha, "subject": entry.subject, "date": entry.date,
                        "symbols": entry.symbols, "changed": entry.changed,
