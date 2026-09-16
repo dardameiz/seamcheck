@@ -10,11 +10,34 @@ from __future__ import annotations
 import pathlib
 import re
 
-# The key may be quoted or bare - `main: resolve(...)` is valid JS, and requiring
-# quotes silently skipped this project's largest entry point.
-_VITE_ENTRY_RE = re.compile(
-    r"(?:['\"]([\w-]+)['\"]|([A-Za-z_$][\w$]*))\s*:\s*\w+\(\s*__dirname\s*,\s*['\"]([^'\"]+)['\"]"
+# An entry is declared in an entry POSITION. That, and not its shape, is what separates it
+# from an alias or from another plugin's options: all three are written
+# `key: path.resolve(__dirname, ...)`, so no amount of looking at the path can tell them
+# apart. Reading the shape alone turned documenso's `resolve.alias` stub
+# (`canvas: ./app/types/empty-module.ts`) and its Hono adapter's
+# `serverAdapter({ entry: 'server/router.ts' })` into two pages - "empty-module" and
+# "router" - in a config that declares no entry whatsoever. Only `build.rollupOptions.input`
+# and `vite-plugin-html`'s createHtmlPlugin name a page.
+_INPUT_BLOCK_RE = re.compile(r"\binput\s*:\s*\{")
+_INPUT_STRING_RE = re.compile(r"\binput\s*:\s*['\"]([^'\"]+)['\"]")
+_HTML_PLUGIN_RE = re.compile(r"\bcreateHtmlPlugin\s*\(")
+
+# A key - quoted or bare, since `main: resolve(...)` is valid JS and requiring quotes
+# silently skipped the reference project's largest entry point - then the file. The value
+# is either a `resolve(__dirname, ...)` call, whose callee may be dotted (`path.resolve`,
+# which a pattern demanding `\w+(` after the colon never matched, so saleor-dashboard read
+# as having no entry at all) and whose path may be split across arguments that join with
+# "/" exactly as path.resolve does, or a plain string.
+_ENTRY_PAIR_RE = re.compile(
+    r"(?:['\"]([\w.$-]+)['\"]|([A-Za-z_$][\w$]*))\s*:\s*"
+    r"(?:(?:[\w$]+\s*\.\s*)*[\w$]+\(\s*__dirname\s*((?:,\s*['\"][^'\"]+['\"]\s*)+)"
+    r"|['\"]([^'\"]+)['\"])"
 )
+_QUOTED_RE = re.compile(r"['\"]([^'\"]+)['\"]")
+
+# An entry is any script-family file, not only `.js`. A `.ts`/`.tsx` entry was dropped
+# even on a Django+Vite project (design doc, roots.py:93).
+_ENTRY_EXTENSIONS = (".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts")
 # Three ways a template loads a script, not one. Only the project's own `static_js` tag
 # was read, so every file pulled in with a plain `{% static %}` - which is what Django's
 # own admin templates and anything not using the custom tag do - was never scanned at all.
@@ -77,6 +100,63 @@ def framework_stylesheets(templates_root: str | None) -> list[str]:
     return sorted(str(p) for p in base.glob("*.css")) if base.is_dir() else []
 
 
+def _joined_path(segments: str) -> str:
+    """The path a `resolve(__dirname, "src", "index.tsx")` call names, as one relative path.
+
+    `path.resolve` joins its arguments, so the entry is every string after `__dirname`
+    joined with "/" - reading only the first gave `src`, a directory.
+    """
+    return _relative_path("/".join(_QUOTED_RE.findall(segments)))
+
+
+def _relative_path(path: str) -> str:
+    return "/".join(part for part in path.replace("\\", "/").split("/") if part not in ("", "."))
+
+
+def _is_entry_file(path: str) -> bool:
+    """Whether this path could be a page's entry script at all.
+
+    Defence in depth behind the position check, which is what actually separates an entry
+    from an alias: a directory (`./src`) has no script extension, and a path into
+    `node_modules` names somebody else's bundle rather than this project's entry point.
+    """
+    if not path.endswith(_ENTRY_EXTENSIONS) or path.endswith((".d.ts", ".min.js")):
+        return False
+    return "node_modules" not in path.split("/")
+
+
+def _balanced(source: str, start: int, opener: str = "{", closer: str = "}") -> str:
+    """The text between the bracket at `start` and the one that closes it.
+
+    Brackets inside strings and comments are not tracked. A parser would be exact, but a
+    miscounted region can only ever offer paths that still have to pass `_is_entry_file`,
+    and this stays a reader of source rather than an evaluator of it.
+    """
+    depth = 0
+    for index in range(start, len(source)):
+        if source[index] == opener:
+            depth += 1
+        elif source[index] == closer:
+            depth -= 1
+            if depth == 0:
+                return source[start + 1:index]
+    return source[start + 1:]
+
+
+def _entry_regions(source: str) -> list[tuple[str, str]]:
+    """(region, the only key that names an entry in it - "" when any key does).
+
+    `build.rollupOptions.input` names its entries under whatever keys it likes. A
+    createHtmlPlugin call names exactly one, under `entry`, beside options that are not
+    entries at all - `template`, `inject`.
+    """
+    regions = [(_balanced(source, match.end() - 1), "")
+               for match in _INPUT_BLOCK_RE.finditer(source)]
+    regions += [(_balanced(source, match.end() - 1, "(", ")"), "entry")
+                for match in _HTML_PLUGIN_RE.finditer(source)]
+    return regions
+
+
 def vite_entry_map(vite_config: str) -> dict[str, str]:
     """Entry name -> file. The name is what a template asks for by `{% vite_asset %}`,
     so it is the only handle that connects a bundle back to the page that loads it."""
@@ -87,11 +167,21 @@ def vite_entry_map(vite_config: str) -> dict[str, str]:
         source = pathlib.Path(vite_config).read_text(encoding="utf-8")
     except OSError:
         return {}
-    return {
-        quoted or bare: path
-        for quoted, bare, path in _VITE_ENTRY_RE.findall(source)
-        if path.endswith(".js")
-    }
+    found: dict[str, str] = {}
+    for region, only in _entry_regions(source):
+        for quoted, bare, segments, literal in _ENTRY_PAIR_RE.findall(region):
+            name = quoted or bare
+            if only and name != only:
+                continue
+            path = _joined_path(segments) if segments else _relative_path(literal)
+            if _is_entry_file(path):
+                found.setdefault(name, path)
+    # A single entry needs no object around it: `input: 'src/main.tsx'`.
+    for match in _INPUT_STRING_RE.finditer(source):
+        path = _relative_path(match.group(1))
+        if _is_entry_file(path):
+            found.setdefault("input", path)
+    return found
 
 
 def vite_entries(vite_config: str) -> list[str]:
@@ -117,7 +207,16 @@ def static_js_references(templates_root: str) -> set[str]:
 
 
 def discover_js_roots(vite_config: str, templates_root: str, static_root: str) -> list[str]:
-    roots = list(vite_entries(vite_config))
+    # A Vite entry is written relative to `__dirname` - the directory holding the config -
+    # and this used to test the literal string with is_file(), which resolves against the
+    # PROCESS's working directory instead. The two agree only when the command runs from
+    # the repository root, so scanning a project seamcheck was not sitting inside dropped
+    # every Vite entry it had just read: `--repo-root`, an editor plugin, the corpus
+    # harness. saleor-dashboard lost its only entry that way and fell through to the
+    # last-resort fallback, which is what listed 1,240 unimported scripts as its pages.
+    # Absolute from here, which is what the template-loaded half below already returned.
+    config_dir = pathlib.Path(vite_config).parent
+    roots = [str(config_dir / entry) for entry in vite_entries(vite_config)]
     static_base = pathlib.Path(static_root)
     for reference in sorted(static_js_references(templates_root)):
         candidate = static_base / reference

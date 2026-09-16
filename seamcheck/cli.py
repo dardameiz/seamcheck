@@ -927,6 +927,17 @@ def _map_plain(document, root: str, options: dict) -> int:
     if options["serve"]:
         index, assets = document.bundle()
         return _serve_plain(index, root, options, assets=assets)
+    # Printed, there is nowhere for a folder's chunks to go, so a map too large for one
+    # file has no stdout form at all - and printing one anyway is how saleor-dashboard's
+    # 43,516,011-byte map ended up dumped into a terminal. Say where it can go instead.
+    if document.prefers_bundle():
+        from seamcheck.exitcodes import EXIT_USAGE
+
+        size = document.single_file_size / 1_048_576
+        print(f"seamcheck: this map is {size:.0f} MB, too large to print. Write it with "
+              f"--out DIR, which gives a folder whose index.html stays small, or open it "
+              f"with --serve.", file=sys.stderr)
+        return EXIT_USAGE
     print(document.single_file())
     return 0
 

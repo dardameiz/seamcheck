@@ -67,6 +67,43 @@ confident one runs, so a monorepo gets all of them. Phase 1 of 4 in
   that was already caught). The root is now read as that package - by the new import
   resolver too, which walks the same globs and crashed every map of such a project before
   this release shipped.
+- **Fixed** - a Vite entry written the ordinary Node way was not read at all.
+  `path.resolve(__dirname, "src", "index.tsx")` failed three times over: the pattern
+  demanded a bare `resolve(`, so a dotted `path.resolve` never matched; only the first
+  string after `__dirname` was captured, so a path split across arguments read as `src`, a
+  directory; and anything not ending in `.js` was dropped, so a `.ts`/`.tsx` entry never
+  survived. A single-string `build.rollupOptions.input` and `vite-plugin-html`'s
+  `createHtmlPlugin({ entry })` are read too, and a `resolve.alias` pointing at a directory
+  or into `node_modules` is no longer mistaken for an entry.
+- **Fixed** - every Vite entry vanished when the scan ran from anywhere but the repository
+  root. An entry is written relative to `__dirname`, the directory holding the config, and
+  was tested with `is_file()` on the literal string - which resolves against the PROCESS's
+  working directory. The two agree only when the command runs from the repository root, so
+  `--repo-root`, an editor plugin and the corpus harness all silently found no entries.
+- **Changed** - the last-resort fallback, which lists every first-party script no other
+  first-party file imports, no longer offers tests, stories, `__tests__`/`e2e` files or a
+  tool's `*.config.*` as pages; it caps the list at 200, nearest the repository root first;
+  and each entry says so when a bundler config it could not read is what really declares
+  where the project starts. It was never meant to be a project's page list, and on
+  saleor-dashboard it had become one.
+- **Changed** - a map too large for one file is no longer printed to stdout. `seamcheck
+  map` with neither `--out` nor `--serve` says which to use and exits 3, rather than
+  writing a 43 MB document into a terminal. The single-file threshold drops 50 MB → 10 MiB:
+  at 50 MB it had never once fired on real output, because the largest map the corpus had
+  ever produced still sat under it.
+
+**On saleor-dashboard** (corpus; Vite + TypeScript, no framework page convention), measured
+against fa8b438b4: its one real entry `src/index.tsx` is read, so the page list is **1 page**
+where it was **1,240 `entry_file` entries** - 902 of them tests and stories, 6 tool configs,
+leaving 332 the new filters would still have offered. The map falls from **43,516,011 bytes
+over 415,844 nodes to 1,837,956 over 8,125**, and both render sound. Symbols on a page fall
+with it, **4,144/5,637 → 1,452/5,844**: the 4,144 came from 1,240 fabricated pages each
+dragging its own reach set, and what leaves them lands in the not-reached buckets, where it
+is visible as unreached instead of hidden inside a page that was never real.
+
+Across the 20 repositories `tools/corpus.py entries` measures, every page list is identical
+before and after these four fixes, and the share of symbols on a page is unmoved at 49.0%:
+saleor-dashboard is not one of the 20, and no repository there gained a page or lost one.
 
 **Measured, 0.15.1 against this release.** Symbols on a page, across the 20 corpus
 repositories `tools/corpus.py entries` measures: **1.2% → 49.0%**. The six with Next.js

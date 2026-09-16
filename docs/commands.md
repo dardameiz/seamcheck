@@ -93,5 +93,7 @@ pull-request workflow that consumes them.
 A map is one HTML file by default. `seamcheck map --out map/` (a folder, or `--bundle`)
 writes a small `index.html` plus `data/*.js`, and each page's rows - and each review
 list and the file tree - are fetched only when looked at; the form a very large
-repository needs. A map that would pass 50 MB as one
-file is written this way on its own, and the command says so.
+repository needs. A map that would pass 10 MiB as one file is written this way on its
+own, and the command says so. Printed - `map` with neither `--out` nor `--serve` - there
+is nowhere for a folder's chunks to go, so a map past that size is not dumped into the
+terminal: the command names the two flags that can take it and exits 3.

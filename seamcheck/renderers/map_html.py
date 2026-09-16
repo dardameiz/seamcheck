@@ -6183,7 +6183,14 @@ def _asset(chunk: Chunk) -> bytes:
 # A single file above this is written as a bundle instead: the browser has to hold the
 # whole file as text before the first page can draw, and past this the wait is a page
 # that looks hung. A bundle's index.html is ~1 MB whatever the repository's size.
-SINGLE_FILE_LIMIT = 50 * 1024 * 1024
+#
+# 10 MiB, not the 50 MB this started at. 50 MB was never calibrated against real output
+# and had never once fired: the largest map the corpus had produced was saleor-dashboard's,
+# 43,516,011 bytes over 415,844 nodes (measured 2026-09-16), which sailed under the
+# threshold and was written as one 41 MiB file. The map itself is not bloated - 105 bytes
+# per node against a corpus median of 149 - so a graph that size has always needed the
+# folder form. dub, the largest single-file map left, is 9.0 MiB and still fits.
+SINGLE_FILE_LIMIT = 10 * 1024 * 1024
 
 BUNDLE_DATA_DIR = "data"
 

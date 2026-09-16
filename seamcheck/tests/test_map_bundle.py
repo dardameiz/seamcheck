@@ -83,6 +83,54 @@ class DocumentShape(SimpleTestCase):
         self.assertLess(len(index), len(document.single_file()))
 
 
+class TheSingleFileThresholdTests(SimpleTestCase):
+    """Where "too big for one file" sits.
+
+    Measured 2026-09-16: at fa8b438b4 saleor-dashboard rendered a 43,516,011-byte map over
+    415,844 nodes, and a 50 MB threshold let every byte of it through as a single file.
+    Nothing in the corpus had ever come near 50 MB, so the guard had never once fired on
+    real output - it was never calibrated against any. dub, the largest single-file map
+    that remains, is 9.0 MiB and still fits under this.
+    """
+
+    def test_the_threshold_would_have_foldered_the_largest_map_ever_measured(self):
+        self.assertLess(map_html.SINGLE_FILE_LIMIT, 43_516_011)
+
+
+class TheStdoutMapTests(SimpleTestCase):
+    """`seamcheck map` with no --out and no --serve prints the single file, and did so at
+    any size - a 43 MB dump into a terminal. The folder form cannot be printed, so the
+    honest answer is to say where it can go instead of producing it."""
+
+    def _map_plain(self, document):
+        import contextlib
+        from io import StringIO
+
+        from seamcheck import cli
+
+        out, err = StringIO(), StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = cli._map_plain(document, ".", {"out": None, "serve": False, "bundle": False})
+        return code, out.getvalue(), err.getvalue()
+
+    def test_a_map_too_big_for_one_file_is_not_dumped_to_the_terminal(self):
+        from seamcheck.exitcodes import EXIT_USAGE
+
+        document = map_html.render_document(_map(2))
+        with mock.patch.object(map_html, "SINGLE_FILE_LIMIT", 10):
+            code, out, err = self._map_plain(document)
+
+        self.assertEqual(code, EXIT_USAGE)
+        self.assertEqual(out, "")
+        self.assertIn("--out", err)
+
+    def test_a_map_that_fits_is_still_printed(self):
+        code, out, _err = self._map_plain(map_html.render_document(_map(2)))
+
+        self.assertEqual(code, 0)
+        self.assertIn("const BUNDLE=null;", out)
+
+
 class WritingTheMap(SimpleTestCase):
     def setUp(self):
         self.root = pathlib.Path(tempfile.mkdtemp())
