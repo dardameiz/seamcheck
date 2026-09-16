@@ -6189,7 +6189,10 @@ def _asset(chunk: Chunk) -> bytes:
 # 43,516,011 bytes over 415,844 nodes (measured 2026-09-16), which sailed under the
 # threshold and was written as one 41 MiB file. The map itself is not bloated - 105 bytes
 # per node against a corpus median of 149 - so a graph that size has always needed the
-# folder form. dub, the largest single-file map left, is 9.0 MiB and still fits.
+# folder form. dub, the largest map left, is 11,633,487 bytes (11.09 MiB) and becomes a
+# folder under this - the guard firing on real output for the first time. Measure a repo
+# from INSIDE its own directory: scanned from outside, dub reads as 9.0 MiB, and choosing
+# the threshold against that number would have been calibrating against an artefact.
 SINGLE_FILE_LIMIT = 10 * 1024 * 1024
 
 BUNDLE_DATA_DIR = "data"

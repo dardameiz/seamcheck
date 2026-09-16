@@ -121,6 +121,24 @@ adapters and never builds a map, so it is flat by construction. Recall **6/6**, 
 Render **46/46**: every cloned repository builds a map whose emitted scripts parse and
 whose payload matches its graph - the gate that caught the workspace crash above.
 
+**Measured:** coverage **91%** across 48 projects and 368,052 symbols (Django 93%, Flask
+93%, Next.js 72%, Express 69%, FastAPI 58%, NestJS 49%) · recall **6/6** · render **46/46**
+· corpus 34/34 scanned with no crash and no lost routes.
+
+Coverage was last published at 0.11.0 - 89% across 47 projects and 358,845 symbols - so
+89% → 91% spans 0.12.0 through this release, not this one alone. **Next.js 46% → 72%** is
+this line of work: an import through a `tsconfig`/`jsconfig` alias is now followed, so a
+page reaches the files it imports rather than one of the eighty-three. The four backends
+with no entry-source work in this release - Flask, Express, FastAPI, NestJS - are
+unchanged to the point, which is what a targeted change should look like.
+
+Precision is deliberately not quoted. At 78 true of 140 hand-labelled claims it is where
+0.15.1 left it, and a figure that has not moved is not a result. It is also the number most
+easily flattered here: removing a wrong claim drops it out of the denominator, so a release
+that deletes false findings can report a rise it did not earn. On saleor-dashboard 22 of
+its labelled false claims became `connected` and 3 became `uncertain`, while **12 wrong
+claims remain** and only 7 of its 97 live claims have ever been judged by hand.
+
 ## 0.15.1 - 2026-09-15
 
 **Next.js App Router coverage, found by dogfooding against a real Next.js 16/React

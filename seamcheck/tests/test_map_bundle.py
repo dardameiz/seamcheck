@@ -89,8 +89,9 @@ class TheSingleFileThresholdTests(SimpleTestCase):
     Measured 2026-09-16: at fa8b438b4 saleor-dashboard rendered a 43,516,011-byte map over
     415,844 nodes, and a 50 MB threshold let every byte of it through as a single file.
     Nothing in the corpus had ever come near 50 MB, so the guard had never once fired on
-    real output - it was never calibrated against any. dub, the largest single-file map
-    that remains, is 9.0 MiB and still fits under this.
+    real output - it was never calibrated against any. dub, the largest map that remains,
+    is 11,633,487 bytes and now becomes a folder instead, which is the guard doing its job
+    on a real repository rather than in principle.
     """
 
     def test_the_threshold_would_have_foldered_the_largest_map_ever_measured(self):
