@@ -50,7 +50,7 @@ jobs:
           printf '.a{color:var(--x,1px)}' > s.css
           echo /tmp/s.css | node "$(/tmp/smoke/bin/python -c 'import seamcheck,os;print(os.path.join(os.path.dirname(seamcheck.__file__),"css_tools","parse_css.bundle.mjs"))')"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
